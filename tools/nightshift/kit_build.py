@@ -13,7 +13,7 @@ import argparse, json, os, re, shutil, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
 NS_DIRS = ['ns', 'audio', 'cards', 'skills', 'claude-plugin', 'templates', 'knowledge']
-NS_FILES = ['connect.py', 'sentinel.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
+NS_FILES = ['connect.py', 'kit_update.py', 'sentinel.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
             'restartworker.py', 'workerlog.py', 'lab_repros.json', 'SECURITY.md', 'kit_build.py', 'joinpack.py']
 BOARD_FILES = ['index.html', 'pr.html', 'card.html', 'audio.html', 'connect.html', 'firestore.rules', 'firestore.indexes.json', 'README.md']
 STRESS_KEEP = re.compile(r'^(zesty\.py|scenarios\.py|anrsan_findings\.py|repro_slideshow_recreate\.py|screen_map\.json|README\.md)$')
@@ -98,11 +98,12 @@ def main():
     dbg = os.path.join(REPO, 'app', 'src', 'debug')    # the lab's remote control inside debug builds (LabControl)
     if os.path.isdir(dbg):
         copytree(dbg, os.path.join(out, 'app-overlay', 'app', 'src', 'debug'))
-    for f in ('README.md', 'SOP.md', 'setup.sh', '.gitignore', '.gitattributes', 'requirements.txt'):   # the kit's own files
+    for f in ('README.md', 'SOP.md', 'setup.sh', 'update.sh', '.gitignore', '.gitattributes', 'requirements.txt'):   # the kit's own files
         if os.path.exists(os.path.join(HERE, 'kit', f)):
             put(os.path.join(HERE, 'kit', f), os.path.join(out, f))
-    if os.path.exists(os.path.join(out, 'setup.sh')):
-        os.chmod(os.path.join(out, 'setup.sh'), 0o755)
+    for sh in ('setup.sh', 'update.sh'):
+        if os.path.exists(os.path.join(out, sh)):
+            os.chmod(os.path.join(out, sh), 0o755)
     # files a teammate's setup made inside the kit (their yaml, board build, results) are theirs: ignored by .gitignore
     stale = sorted(os.path.relpath(p, out) for p in before - WRITTEN
                    if not re.match(r'tools/nightshift/(out|board/public|board/\.firebase|symbols)/|tools/nightshift/(nightshift\.yaml|runlog\.csv)$|tools/nightshift/board/(firebase\.json|\.firebaserc)$|.*__pycache__',

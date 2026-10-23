@@ -261,10 +261,13 @@ play-login` once.
 ## Update
 
 ```bash
-cd ~/nightshift && git pull && ./setup.sh ~/video_gles3jni
+cd ~/nightshift && ./update.sh
 ```
 
-The worker uses the new code from its next job. `setup.sh` only redoes what's missing.
+Use `./update.sh`, **not** `git pull`. Night Shift writes what it learns on your phone (screens, repro recipes,
+lessons) into a few files of this repo, so a plain `git pull` stops with "Your local changes would be overwritten".
+`update.sh` keeps a copy, updates, and merges your learning back with the new version. Nothing is lost: a copy is
+kept in `~/.nightshift_backup/`. Then it reruns `setup.sh`, which only does what's new.
 
 **Board owner, publishing a new version:**
 
@@ -313,6 +316,7 @@ Full day-to-day guide: [SOP.md](SOP.md).
 | "could not read it from Bitbucket" | Your token lacks a scope or access to that repo: make a new one with `read:repository` + `read:pullrequest` |
 | Reproduce fails at the first screen | Unlock the phone, keep the screen on, close dialogs. A different phone model may need its first recipe step adjusted |
 | `setup.sh: \r: command not found` | `git config --global core.autocrlf input`, then clone again |
+| `git pull` says "Your local changes would be overwritten" | Use `./update.sh` instead. On an old copy without it: `git fetch origin && git reset --hard origin/main && ./setup.sh` (keeps your settings, keys and results) |
 
 ---
 

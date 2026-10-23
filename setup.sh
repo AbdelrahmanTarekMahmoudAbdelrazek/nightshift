@@ -330,4 +330,4 @@ SV
 else warn "start it yourself: $RUN"; fi
 
 printf "\n\033[1mDone.\033[0m Board: \033[4mhttps://%s.web.app\033[0m  (sign in with %s). Jobs you queue run on THIS computer.\n" "$PROJ" "$ME"
-echo "Update later:  cd $KIT && git pull && ./setup.sh $REPO"
+echo "Update later:  cd $KIT && ./update.sh $REPO   (not git pull: it keeps what Night Shift learned on this computer)"
