@@ -112,3 +112,7 @@ pr_review:
 
 server_content:                    # card reviews: content the app downloads (read-only GETs; hosts allow-listed in ns/servercontent.py)
   endpoints: https://api-v2.myzesty.com/api/v2/resources/ve/effect?p=0,https://api-v2.myzesty.com/api/v2/resources/ve/transition?p=0      # comma-separated; add other resource lists here
+
+worker:                                   # shared board: whose jobs this worker runs
+  owner: a.tarek@msd-my.com
+  serve_others: true                      # lab host: also runs jobs of people whose own worker is offline

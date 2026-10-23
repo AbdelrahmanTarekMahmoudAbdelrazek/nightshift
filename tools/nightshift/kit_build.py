@@ -86,7 +86,7 @@ def main():
     dbg = os.path.join(REPO, 'app', 'src', 'debug')    # the lab's remote control inside debug builds (LabControl)
     if os.path.isdir(dbg):
         copytree(dbg, os.path.join(out, 'app-overlay', 'app', 'src', 'debug'))
-    for f in ('README.md', 'SOP.md', 'setup.sh', '.gitignore', 'requirements.txt'):   # the kit's own files
+    for f in ('README.md', 'SOP.md', 'setup.sh', '.gitignore', '.gitattributes', 'requirements.txt'):   # the kit's own files
         if os.path.exists(os.path.join(HERE, 'kit', f)):
             put(os.path.join(HERE, 'kit', f), os.path.join(out, f))
     if os.path.exists(os.path.join(out, 'setup.sh')):

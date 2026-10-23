@@ -1,0 +1,6 @@
+# Mac/Linux line endings for everyone, whatever their git core.autocrlf says (setup.sh breaks with CRLF)
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.mp4 binary
+*.png binary
