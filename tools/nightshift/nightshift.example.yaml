@@ -1,0 +1,114 @@
+# Night Shift settings. setup.sh copies this to nightshift.yaml and fills the board and phone lines.
+# Night Shift configuration. Everything a second team changes lives here.
+# No secrets in this file: tokens come from the runner keychain / environment (see SECURITY.md).
+
+profile:                                  # one project = one profile. A second team copies this file and changes these lines.
+  name: MyZesty
+  repos: video_gles3jni, android-video-editor-module, java-common, gallerypicker   # its Bitbucket repos; the FIRST is the main (native) repo
+  review_repos: video_gles3jni            # repos whose open PRs PR Review reviews (add android-video-editor-module etc. to review Kotlin PRs)
+  code_packages: com.video., com.common., com.myzesty.   # Java/Kotlin packages that count as "our code" in stacks
+  jira_keys: MZ                           # Jira project keys Card Issue accepts (comma-separated)
+
+app:
+  package: com.myzesty
+  engine_paths: app/src/main/cpp          # PRs touching these paths trigger Guard
+  native_lib: libMYJNILIB26.so            # frames in this lib count as "engine"
+  editor_screens: BaseVideoEditorActivity, PlayerActivity, VideoEditorActivity
+  release_version: auto            # auto = the highest real release in Crashlytics (x.y.z); or pin one, e.g. 1.25.1
+  release_builds: 3                # its newest 3 builds; older builds ignored
+  release_overlap_days: always     # keep the previous version too: always the last 2 releases (or a number of days)
+  release_overlap_builds: 3        # how many of the previous version's newest builds stay in scope
+  release_versions: auto           # (CSV triage scoping; auto = follow the board)
+  live_version: 1.25.1
+
+sources:
+  crashlytics_app_id: "1:195946953658:android:b7031c70ab2a3268dafb83"   # read-only pulls via your Firebase CLI login
+  crashlytics_days: 30
+  sync_root_causes: false     # daily/Sync now = gather only; Analyse/Reproduce on one problem writes its root cause
+  sync_time: "08:00"          # daily gathering, Egypt time (Africa/Cairo); the board also has a Sync now button
+  play_developer_id: "6814906479264823536"   # Play Console ids of MyZesty (for links back to vitals pages)
+  play_app_id: "4972750026945735597"
+  events_per_issue: 50
+  events_csv_dir: .                       # where Crashlytics event exports (CSV) land
+  bigquery_table: ""                      # e.g. firebase_crashlytics.com_myzesty_ANDROID (Phase 2)
+  symbol_store: ""                        # e.g. gs://myzesty-symbols/<build_id>/ (Phase 2)
+
+lab:
+  stress_runner: tools/stress/scenarios.py
+  findings_tool: tools/stress/anrsan_findings.py
+  results_dir: stress_results
+  separate_build: true                    # crash builds in their own folder (~/.nightshift_lab), never in the working copy
+  base_branch: CPP-1.25.2                 # the code crash builds start from (a job may name another branch)
+  phone_serial: ""          # the lab phone every adb command uses (realme RMX3263, Android 11); empty = the only phone
+  verify_known_other_ok: true   # fix check: a run that crashes with ANOTHER known card's bug (e.g. b0624779 QueueMessage 0x30) does not reject the fix if the field crash never appears
+  repro_install: ./gradlew installProductionInternalDebug -Pandroid.injected.build.abi=arm64-v8a || (adb uninstall com.myzesty; ./gradlew installProductionInternalDebug -Pandroid.injected.build.abi=arm64-v8a)   # debug build; a Play build on the phone blocks it (version downgrade), so remove it and retry; (has the fault hooks); proven on the lab phone
+  repros:                                 # escalation ladder per crash: most realistic trigger first, stop at the first
+                                          # level whose lab dump shows every `expect` frame (levels: 1 replay, 2 real
+                                          # stress, 3 environment, 4 timing, 5 fault hook, 6 unit test)
+    "VisualTimeLine::get_media_starting_time":
+      expect: ["VisualTimeLine::get_media_starting_time"]
+      ladder:
+        - {level: 2, name: "rotate while the slideshow template loads", natural: true,
+           cmd: "tools/stress/repro_slideshow_recreate.py --trigger rotate --tries 5 --offline"}
+        - {level: 2, name: "dark mode on/off while the template loads (rotation locked, production path)", natural: true,
+           cmd: "tools/stress/repro_slideshow_recreate.py --trigger uimode --tries 5 --offline"}
+    "MusicTracksRepository":
+      expect: ["MusicTracksRepository"]
+      ladder:
+        - {level: 2, name: "rotate while the template music downloads", natural: true,
+           cmd: "tools/stress/repro_slideshow_recreate.py --target music --trigger rotate --tries 5"}
+        - {level: 2, name: "dark mode on/off while the template music downloads", natural: true,
+           cmd: "tools/stress/repro_slideshow_recreate.py --target music --trigger uimode --tries 5"}
+    "eb0d37d2c7d146881b89d7a0b3859b0f":   # ANR: main in getMediaDuration behind abort_export join
+      expect: [JNI_getMediaDuration, PlayerActivity.getMediaDurationByID, MainMenuFragment$setClipTools,
+               "ExportManager::abort_export", pthread_join, "ExportManager::export_audio_thread"]
+      ladder:
+        - {level: 2, name: "export, background + memory pressure, cancel, Edit > Speed", natural: true,
+           scenario: export_bg_abort_clip_tool, repeat: 2}
+        - {level: 3, name: "same with camera open + critical memory pressure (codec competition)", natural: true,
+           scenario: export_bg_camera_abort_clip_tool, repeat: 2}
+        - {level: 5, name: "audio decoder freeze forced by debug hook", natural: false,
+           scenario: export_stuck_abort_clip_tool, repeat: 2}
+  anrsan_install: ./gradlew installProductionInternalDebug -PenableAnrsan=true
+
+audio_check:
+  capture: tap                            # tap = mixer tap patched into the engine (exact, MyZesty); export_file = pull the exported video and decode it (any app, no code hook; error limit -24 dB). Try once with NS_AUDIO_CAPTURE=export_file before switching
+
+integrations:
+  jira_project: MZ
+  jira_base_url: "https://msd-my.atlassian.net"
+  slack_channel: "#engine-health"
+  bitbucket_repo: ""                      # workspace/repo
+  crashlytics_alert_channel_id: ""        # Slack channel id where Crashlytics posts alerts (free integration)
+
+measurement:
+  runlog: tools/nightshift/runlog.csv
+  runs_per_month:                         # replace with the logged October counts
+    triage: 10
+    reproduce: 5
+    guard: 37
+
+firebase:                                 # the BOARD project (new, free Spark plan), not the production app project
+  apiKey: ""                      # filled by setup.sh
+  authDomain: ""                      # filled by setup.sh
+  projectId: ""                      # filled by setup.sh
+  appId: ""                      # filled by setup.sh
+  domain: msd-my.com                      # staff sign-in domain (email link)
+
+llm:
+  provider: claude-cli                    # company Claude account via `claude -p`; set to "none" to only write prompt packs
+  model: ""                               # leave empty for the account default
+  model_handover: sonnet                  # PR / Jira / Slack drafts (step 10)
+  model_thirdparty: sonnet                # root cause of crashes with no frame in our code (Facebook SDK, libc, ...)
+
+analysis:
+  parallel: 3                             # root causes at once
+  skip_pure_java: true                    # no root cause (no tokens) for crashes with no libMYJNILIB26 frame
+
+pr_review:
+  since: "2026-09-01"           # only open PRs created on/after this date are reviewed
+  feedback_notes: false         # earlier Decide answers ("not a problem") are NOT shown to reviews; every run starts clean
+  carry_forward: false          # re-review of the same code re-judges the previous run's problems. OFF for the stability test; set true after
+
+server_content:                    # card reviews: content the app downloads (read-only GETs; hosts allow-listed in ns/servercontent.py)
+  endpoints: https://api-v2.myzesty.com/api/v2/resources/ve/effect?p=0,https://api-v2.myzesty.com/api/v2/resources/ve/transition?p=0      # comma-separated; add other resource lists here

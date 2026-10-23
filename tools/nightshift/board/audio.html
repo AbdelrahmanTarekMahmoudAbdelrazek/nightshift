@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Audio Check</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* One Audio Check on its own page (opened from the Audio Check tab, like a PR review). Light only. */
+:root{
+  color-scheme:light;
+  --bg:#f4f6fb; --card:#ffffff; --ink:#0f172a; --muted:#5b6474; --line:#e3e8f0; --soft:#f8fafc;
+  --accent:#4f46e5; --accent-soft:#eef0ff; --accent-ink:#3730a3;
+  --good:#059669; --good-soft:#d1fae5; --good-ink:#064e3b; --bad:#dc2626; --bad-soft:#fee2e2; --bad-ink:#7f1d1d;
+  --warn:#b45309; --warn-soft:#fef3c7; --warn-ink:#78350f;
+  --sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+a{color:var(--accent)}
+.mono{font-family:var(--mono);font-size:12.5px}
+.wrap{max-width:1280px;margin:0 auto;padding:24px 16px 56px;display:flex;flex-direction:column;gap:16px}
+.back{font-weight:600;text-decoration:none}
+.top{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center}
+h1{margin:0;font-size:24px;font-weight:800;letter-spacing:-.01em;overflow-wrap:anywhere}
+.sub{margin:0;color:var(--muted)}
+.pill{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.pill.ok{background:var(--good-soft);color:var(--good-ink)}.pill.bad{background:var(--bad-soft);color:var(--bad-ink)}
+.pill.warn{background:var(--warn-soft);color:var(--warn-ink)}.pill.info{background:var(--accent-soft);color:var(--accent-ink)}
+.pill.mute{background:#eef1f6;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px}
+.card h2{margin:0;font-size:17px;font-weight:800}
+.lead{margin:0;color:var(--muted);max-width:820px}
+.banner{border-radius:12px;padding:14px 16px;font-weight:600}
+.banner.good{background:var(--good-soft);color:var(--good-ink)}.banner.bad{background:var(--bad-soft);color:var(--bad-ink)}
+.banner.warn{background:var(--warn-soft);color:var(--warn-ink)}.banner.info{background:var(--accent-soft);color:var(--accent-ink)}
+.banner p{margin:4px 0 0;font-weight:400}
+.score{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.sc{border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:4px;background:var(--soft)}
+.sc span{color:var(--muted);font-size:13px}.sc b{font-size:34px;font-variant-numeric:tabular-nums;line-height:1.1}.sc small{color:var(--muted);font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+.steps{list-style:none;margin:0;padding:0}
+.steps li{display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--line)}
+.steps li:first-child{border-top:0}
+.dot{flex:0 0 28px;height:28px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;background:#cbd2dc}
+.dot.done{background:var(--good)}.dot.run{background:var(--accent)}.dot.fail{background:var(--bad)}
+.note{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.note.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 10px;border-top:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.03em;border-top:0}
+td.p{font-weight:700;color:var(--good)}td.f{font-weight:700;color:var(--bad)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.runs{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start}
+@media (max-width:520px){.runs{grid-template-columns:1fr}}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.tile{border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.tile span{font-size:12.5px}.tile b{font-size:19px}.tile small{font-size:11.5px;font-family:var(--mono);overflow-wrap:anywhere}
+.tile.ok{background:var(--good-soft);color:var(--good-ink)}.tile.bad{background:var(--bad-soft);color:var(--bad-ink)}
+.graphs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.graphs figure{margin:0;border:1px solid var(--line);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.graphs img{width:100%;height:auto;border-radius:6px;background:#fff}
+.graphs figcaption{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px}
+.btn{min-height:36px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:13px;font-weight:700;display:inline-flex;align-items:center;text-decoration:none;cursor:pointer}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details summary{cursor:pointer;color:var(--muted);font-weight:600}
+.files{margin:8px 0 0;padding-left:18px;font-family:var(--mono);font-size:12.5px}
+.loading{padding:40px 0;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/#audio">← Audio Check</a>
+  <div id="loading" class="loading">Loading the check…</div>
+  <div id="app" hidden>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="top"><h1 id="h-title"></h1><span id="h-status" class="pill mute"></span></div>
+      <p class="sub" id="h-sub"></p>
+    </div>
+    <div id="verdict"></div>
+    <div class="card"><h2>Score</h2><div class="score" id="score"></div>
+      <p class="lead" style="font-size:13px">Five tests per export: exact zeros (holes), seam continuity, level across seams, seam residual vs the clean source, clicks near seams. Since 22 Oct: each build is exported 3 times and the <b>median</b> counts; tests marked <b>flaky</b> changed between exports. The tests judge what a listener hears at each cut (gaps, repeated/skipped audio, level dips, error vs the clean clip, clicks) with fixed limits; older checks used the PR #3132 rig's tests, which failed on clean audio too.</p></div>
+    <div class="card" id="cmp-card"><h2>Tests side by side</h2><div class="tbl"><table id="cmp"></table></div></div>
+    <div class="card"><h2>What was compared</h2><div id="what"></div></div>
+    <div class="card"><h2>Steps</h2><ol class="steps" id="steps"></ol></div>
+    <div class="runs" id="runs"></div>
+  </div>
+</div>
+<script>
+var FB = /*__NS_FIREBASE__*/null;
+</script>
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var ID = new URLSearchParams(location.search).get('id') || '';
+  var STEPS = ['Get the branch', 'Build the app', 'Export on the phone', 'Analyse the audio', 'Show the result'];
+  function when(iso){ if (!iso) return ''; var d = new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); }
+  function fail(msg){ $('loading').textContent = msg; $('loading').hidden = false; $('app').hidden = true; }
+  // a run is only meaningful when it exported the test clip (35 s) with its cuts (before 21 Oct evening it often did not)
+  function validity(r){
+    if (!r) return '';
+    if (r.dumpSeconds && r.sourceSeconds && Math.abs(r.dumpSeconds - r.sourceSeconds) > 2) return 'exported ' + r.dumpSeconds.toFixed(1) + ' s but the test clip is ' + r.sourceSeconds.toFixed(1) + ' s (wrong clip)';
+    if (!(r.seams || []).length) return 'no cuts reached the engine (the splits did not happen)';
+    if (r.rigError) return 'the analysis crashed: ' + r.rigError;
+    return '';
+  }
+  var c_fin = '', pid = 0;
+  function player(r){
+    if (!r.audio) return '';
+    var id = 'aud' + (++pid);
+    return '<div style="display:flex;flex-direction:column;gap:8px"><audio id="' + id + '" controls preload="none" src="' + esc(r.audio) + '?t=' + encodeURIComponent(c_fin) + '" style="width:100%"></audio>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px">' + (r.cuts || r.seams || []).map(function(x, i){ var t = typeof x === 'number' ? x : x.t;
+          return '<button type="button" class="btn" data-play="' + id + '" data-t="' + t + '" title="plays 1.5 s before to 1.5 s after the cut">▶ cut ' + (i + 1) + ' · ' + Number(t).toFixed(1) + ' s</button>'; }).join('') + '</div></div>';
+  }
+  function cutTable(r){
+    if (!(r.cuts || []).length) return '';
+    var f = function(v, u){ return v == null ? '—' : v + u; };
+    return '<div class="tbl"><table><thead><tr><th>Cut</th><th>Heard</th><th>Repeated / skipped</th><th>Gap</th><th>Level</th><th>Error</th><th>Click</th></tr></thead><tbody>'
+      + r.cuts.map(function(c, i){ return '<tr><td class="mono">' + (i + 1) + ' · ' + c.t.toFixed(2) + ' s</td><td class="' + (c.ok ? 'p' : 'f') + '">' + (c.ok ? 'Clean' : esc(c.problems.join(', '))) + '</td>'
+        + '<td class="mono">' + (c.jumpMs == null ? '—' : (c.jumpMs > 0 ? 'skipped ' : c.jumpMs < 0 ? 'repeated ' : '') + Math.abs(c.jumpMs).toFixed(1) + ' ms') + '</td>'
+        + '<td class="mono">' + f(c.gapMs, ' ms') + '</td><td class="mono">' + f(c.levelPct, '%') + '</td><td class="mono">' + f(c.residDb, ' dB') + '</td><td class="mono">' + (c.click == null ? '—' : '×' + c.click) + '</td></tr>'; }).join('')
+      + '</tbody></table></div>';
+  }
+  // ▶ cut buttons: play 1.5 s either side of the cut, then stop
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('[data-play]'); if (!b) return;
+    var a = document.getElementById(b.dataset.play), t = Number(b.dataset.t);
+    document.querySelectorAll('audio').forEach(function(x){ if (x !== a) x.pause(); });
+    // the whole file is fetched once into memory (about 0.8 MB) so jumping to a cut always works
+    var go = function(){
+      if (a._stopH) a.removeEventListener('timeupdate', a._stopH);
+      var stop = t + 1.5;
+      a._stopH = function(){ if (a.currentTime >= stop) { a.pause(); a.removeEventListener('timeupdate', a._stopH); } };
+      a.addEventListener('seeked', function(){ a.play(); a.addEventListener('timeupdate', a._stopH); }, {once: true});
+      a.currentTime = Math.max(0, t - 1.5);
+    };
+    if (a._blob) { go(); return; }
+    b.disabled = true; var old = b.textContent; b.textContent = 'loading…';
+    fetch(a.currentSrc || a.src).then(function(r){ if (!r.ok) throw new Error(r.status); return r.blob(); }).then(function(bl){
+      a._blob = URL.createObjectURL(bl); a.src = a._blob; a.preload = 'auto';
+      a.addEventListener('loadedmetadata', function(){ b.disabled = false; b.textContent = old; go(); }, {once: true}); a.load();
+    }).catch(function(err){ b.disabled = false; b.textContent = old; b.title = 'Could not load the audio: ' + err; });
+  });
+  function runCard(r, title){
+    if (!r) return '';
+    var rep = r.repeated || [], skp = r.skipped || [], holes = r.holes || [], st = r.stereo || {}, g = r.graphs || {};
+    var tile = function(l, v, s, bad){ return '<div class="tile ' + (bad ? 'bad' : 'ok') + '"><span>' + esc(l) + '</span><b>' + esc(v) + '</b><small>' + esc(s) + '</small></div>'; };
+    var bad = validity(r);
+    return '<div class="card"><div class="top"><h2>' + esc(title) + '</h2><span class="pill ' + (bad ? 'warn' : (r.passed >= 5 ? 'ok' : r.passed >= 3 ? 'info' : 'bad')) + '">' + (r.passed == null ? '?' : r.passed) + '/5 passed</span></div>'
+      + '<div class="note mono">' + esc(r.branch) + ' · built on ' + esc(r.commit || '') + (r.engineFrom ? ' · audio engine from ' + esc(r.engineFrom) : '') + ' · ' + (r.dumpSeconds ? r.dumpSeconds.toFixed(1) + ' s exported, ' : '') + (r.seams || []).length + ' cuts</div>'
+      + (bad ? '<div class="banner warn">Not a valid result: ' + esc(bad) + '</div>' : '')
+      + (r.exports && r.exports.length > 1 ? '<div class="note">' + r.exports.length + ' exports: ' + r.exports.map(function(e){ return e.passed + '/5'; }).join(', ') + ' → median ' + r.passed + '/5' + ((r.exportNotes || []).length ? ' · ' + r.exportNotes.length + ' discarded' : '') + '</div>' : '')
+      + player(r)
+      + cutTable(r)
+      + '<div class="tiles">'
+      + tile('Duplicated audio', rep.length ? rep.length + ' · ' + Math.abs(rep[0].ms).toFixed(1) + ' ms' : '0', rep.length ? 'at ' + rep.map(function(x){ return x.t.toFixed(2) + ' s'; }).join(', ') : 'no backward steps', rep.length)
+      + tile('Skipped audio', skp.length ? skp.length + ' · ' + Math.abs(skp[0].ms).toFixed(1) + ' ms' : '0', skp.length ? 'at ' + skp.map(function(x){ return x.t.toFixed(2) + ' s'; }).join(', ') : 'no forward steps', skp.length)
+      + tile('Holes (zero-fill)', holes.length ? holes.length + ' · ' + Number(holes[0].ms).toFixed(2) + ' ms' : '0', holes.length ? 'at ' + holes.map(function(x){ return Number(x.t).toFixed(3) + ' s'; }).join(', ') : 'no interior zeros', holes.length)
+      + tile('Clicks near seams', String(r.clicksNearSeams == null ? '?' : r.clicksNearSeams), 'of the top 12 impulses', r.clicksNearSeams > 0)
+      + tile('Stereo', r.maxLR === 0 ? 'Mono' : 'Stereo', 'max|L−R| = ' + (r.maxLR == null ? '?' : r.maxLR) + (st.clipped ? ' · ' + st.clipped + ' clipped' : ''), r.maxLR === 0)
+      + '</div>'
+      + '<div class="tbl"><table><thead><tr><th>Test</th><th>Result</th><th>Detail</th></tr></thead><tbody>'
+      + (r.tests || []).map(function(t){ return '<tr><td>' + esc(t.n) + ' · ' + esc(t.name) + '</td><td class="' + (t.pass ? 'p' : 'f') + '">' + (t.pass ? 'Pass' : 'Fail')
+          + (t.exports > 1 ? '<div class="note">' + t.passCount + '/' + t.exports + ' exports' + (t.stable ? '' : ' · <b style="color:var(--warn)">flaky</b>') + '</div>' : '') + '</td><td>' + esc(t.detail) + '</td></tr>'; }).join('')
+      + '</tbody></table></div>'
+      + ((r.silentClips || []).length ? '<div class="banner warn">' + r.silentClips.map(esc).join('<br>') + '</div>' : '')
+      + '<div class="graphs">' + (['offset', 'level', 'zoom', 'jumps'].filter(function(k){ return g[k]; }).map(function(k){
+          return '<figure><a href="' + esc(g[k]) + '" target="_blank" rel="noopener"><img src="' + esc(g[k]) + '?t=' + encodeURIComponent(c_fin) + '" alt="' + k + ' graph" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'note\',textContent:\'Graph not online yet: the board uploads it a minute after the check ends. Reload then.\'}))"></a><figcaption><b>' + k + '</b><a class="btn" href="' + esc(g[k]) + '" download>Download</a></figcaption></figure>'; }).join('') || '<div class="note">No graphs for this run.</div>') + '</div></div>';
+  }
+  function render(c){
+    $('loading').hidden = true; $('app').hidden = false;
+    c_fin = c.finishedAt || c.startedAt || '';
+    var runs = c.runs || {}, b = runs.branch, k = runs.base, v = c.verdict || {};
+    document.title = 'Audio Check · ' + (c.branch || ID);
+    $('h-title').textContent = c.branch + (c.base ? ' vs ' + c.base : '');
+    var stc = c.status === 'running' ? ['Running', 'info'] : c.status === 'failed' ? ['Failed', 'bad'] : c.status === 'done' ? ['Done', 'ok'] : [c.status || 'Queued', 'mute'];
+    $('h-status').textContent = stc[0]; $('h-status').className = 'pill ' + stc[1];
+    $('h-sub').textContent = (c.projectLabel || c.project || '') + ' · started ' + when(c.startedAt) + (c.finishedAt ? ' · finished ' + when(c.finishedAt) : '') + (c.requestedBy ? ' · by ' + c.requestedBy : '');
+    var invalid = [b, k].map(validity).filter(Boolean);
+    $('verdict').innerHTML = c.status === 'failed' ? '<div class="banner bad">The check stopped.<p>' + esc(c.error || '') + '</p></div>'
+      : c.status === 'running' ? '<div class="banner info">Running… this page updates by itself.</div>'
+      : invalid.length ? '<div class="banner warn">' + esc(v.headline || '') + '<p>Do not trust this result: ' + esc(invalid[0]) + '.</p></div>'
+      : '<div class="banner ' + (v.proven ? 'good' : 'info') + '">' + esc(v.headline || '') + '</div>';
+    if (c.golden && c.golden.note) $('verdict').innerHTML += '<div class="banner ' + (c.golden.state === 'drift' || c.golden.unstable ? 'bad' : 'good') + '" style="margin-top:8px;font-weight:600">' + esc(c.golden.note) + '</div>';
+    var eng = c.change && c.change.mode === 'engine';
+    var bt = eng ? 'Audio engine of ' + (b && b.engineFrom || c.branch) : 'Your branch';
+    var kt = eng ? "Today's code" : 'Control';
+    $('score').innerHTML = [[b, bt], [k, kt]].filter(function(x){ return x[0]; }).map(function(x){
+      return '<div class="sc"><span>' + esc(x[1]) + '</span><b>' + (x[0].passed == null ? '?' : x[0].passed) + '/5</b><small>' + esc(x[0].branch) + '</small></div>'; }).join('') || '<div class="note">No result yet.</div>';
+    var tb = (b && b.tests) || [], tk = (k && k.tests) || [];
+    $('cmp-card').hidden = !(tb.length || tk.length);
+    $('cmp').innerHTML = '<thead><tr><th>Test</th><th>' + esc(bt) + '</th>' + (k ? '<th>' + esc(kt) + '</th>' : '') + '</tr></thead><tbody>'
+      + (tb.length ? tb : tk).map(function(t, i){ var x = tb[i], y = tk[i];
+        var cell = function(z){ return z ? '<td class="' + (z.pass ? 'p' : 'f') + '">' + (z.pass ? 'Pass' : 'Fail') + '<div class="note">' + esc(z.detail) + '</div></td>' : '<td>—</td>'; };
+        return '<tr><td>' + esc(t.n) + ' · ' + esc(t.name) + '</td>' + cell(x) + (k ? cell(y) : '') + '</tr>'; }).join('') + '</tbody>';
+    var ch = c.change || {};
+    $('what').innerHTML = '<p class="lead">' + (eng
+        ? "Today's app with the <b>audio engine as it was at " + esc(b && b.engineFrom || c.branch) + '</b>, against today\'s code. Used for commits, before-pr-N and branches whose change does not fit today\'s code.'
+        : 'Today\'s lab code <b>with</b> the change of ' + esc(c.branch) + ', against the same code <b>without</b> it.') + '</p>'
+      + '<div class="note">' + esc(ch.how || '') + (ch.lab ? ' · lab code ' + esc(ch.lab) : '') + (ch.inLabCode ? ' · already inside today\'s lab code' : '') + '</div>'
+      + ((ch.files || []).length ? '<details><summary>' + (ch.nFiles || ch.files.length) + ' file(s)</summary><ul class="files">' + ch.files.map(function(f){ return '<li>' + esc(f) + '</li>'; }).join('') + '</ul></details>' : '');
+    $('steps').innerHTML = STEPS.map(function(name, i){ var s = (c.steps || [])[i] || {state: 'wait'};
+      var cls = s.state === 'done' ? 'done' : s.state === 'run' ? 'run' : s.state === 'failed' ? 'fail' : '';
+      var lbl = {wait: 'Waiting', run: 'Running…', done: 'Done', failed: 'Failed'}[s.state] || s.state;
+      return '<li><span class="dot ' + cls + '">' + (i + 1) + '</span><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><div><b>' + esc(name) + '</b> <span class="pill ' + (cls === 'done' ? 'ok' : cls === 'run' ? 'info' : cls === 'fail' ? 'bad' : 'mute') + '">' + esc(lbl) + '</span></div>'
+        + (s.note ? '<div class="note' + (s.state === 'failed' ? ' bad' : '') + '">' + esc(s.note) + '</div>' : '') + '</div></li>'; }).join('');
+    $('runs').innerHTML = runCard(b, bt) + runCard(k, kt);
+  }
+  // ---- compare mode: audio.html?ids=a,b,c (ticked on the Audio Check tab) ----
+  var IDS = (new URLSearchParams(location.search).get('ids') || '').split(',').filter(Boolean).slice(0, 4);
+  function renderCompare(docs){
+    $('loading').hidden = true; $('app').hidden = false;
+    document.title = 'Audio Check · compare ' + docs.length;
+    $('h-title').textContent = 'Compare ' + docs.length + ' checks'; $('h-status').hidden = true;
+    $('h-sub').textContent = docs.map(function(c){ return c.branch; }).join(' · ');
+    var cols = [];
+    docs.forEach(function(c){
+      var eng = c.change && c.change.mode === 'engine', r = c.runs || {};
+      if (r.branch) cols.push({c: c, r: r.branch, label: c.branch, sub: eng ? 'audio engine of ' + (r.branch.engineFrom || c.branch) : 'with its change'});
+      if (r.base) cols.push({c: c, r: r.base, label: c.branch, sub: eng ? "today's code (same job)" : 'control (same job)', ctl: true});
+    });
+    var row = function(name, f){ return '<tr><td><b>' + esc(name) + '</b></td>' + cols.map(f).join('') + '</tr>'; };
+    var pf = function(t){ return t ? '<td class="' + (t.pass ? 'p' : 'f') + '">' + (t.pass ? 'Pass' : 'Fail') + '<div class="note">' + esc(t.detail) + '</div></td>' : '<td>—</td>'; };
+    var cnt = function(a, unit){ a = a || []; return a.length ? a.length + ' · ' + Math.abs(Number(a[0][unit] || 0)).toFixed(unit === 'ms' ? 2 : 2) + ' ms' : '0'; };
+    var names = ((cols[0] || {}).r || {}).tests || [];
+    var html = '<thead><tr><th>Run</th>' + cols.map(function(x){ return '<th style="min-width:180px"><a href="audio.html?id=' + encodeURIComponent(x.c.id) + '" target="_blank" rel="noopener" class="mono" style="text-transform:none">' + esc(x.label) + '</a><div class="note" style="text-transform:none;font-weight:600">' + esc(x.sub) + '</div></th>'; }).join('') + '</tr></thead><tbody>'
+      + row('Tests passed', function(x){ var bad = validity(x.r); return '<td><b style="font-size:22px">' + (x.r.passed == null ? '?' : x.r.passed) + '/5</b>' + (bad ? '<div class="note bad">not valid: ' + esc(bad) + '</div>' : '') + '</td>'; })
+      + names.map(function(t, i){ return row(t.n + ' · ' + t.name, function(x){ return pf((x.r.tests || [])[i]); }); }).join('')
+      + row('Duplicated audio', function(x){ return '<td>' + esc(cnt(x.r.repeated, 'ms')) + '</td>'; })
+      + row('Skipped audio', function(x){ return '<td>' + esc(cnt(x.r.skipped, 'ms')) + '</td>'; })
+      + row('Holes (zero-fill)', function(x){ return '<td>' + esc(cnt(x.r.holes, 'ms')) + '</td>'; })
+      + row('Clicks near seams', function(x){ return '<td>' + esc(x.r.clicksNearSeams == null ? '?' : x.r.clicksNearSeams) + '</td>'; })
+      + row('Clean cuts', function(x){ return '<td><b>' + (x.r.cutsOk == null ? '—' : x.r.cutsOk + '/' + (x.r.cuts || []).length) + '</b></td>'; })
+      + row('Exported / cuts', function(x){ return '<td class="mono">' + (x.r.dumpSeconds ? x.r.dumpSeconds.toFixed(1) + ' s' : '?') + ' · ' + (x.r.seams || []).length + ' cuts</td>'; })
+      + row('Ran', function(x){ return '<td class="note">' + esc(when(x.c.finishedAt || x.c.startedAt)) + '</td>'; })
+      + '</tbody>';
+    $('verdict').innerHTML = '<div class="banner info">Same phone, same 35 s test project. Runs of the same code differ by about 1 test between exports; compare which tests fail, not only the totals.</div>';
+    $('score').parentNode.hidden = true; $('what').parentNode.hidden = true; $('steps').parentNode.hidden = true;
+    $('cmp-card').hidden = false; $('cmp-card').querySelector('h2').textContent = 'Tests side by side';
+    $('cmp').innerHTML = html;
+    var withAud = cols.filter(function(x){ return x.r.audio; });
+    var ab = '';
+    if (withAud.length) {
+      var ncut = Math.max.apply(null, withAud.map(function(x){ return (x.r.cuts || x.r.seams || []).length; }));
+      ab = '<div class="card"><h2>Listen cut by cut (A/B)</h2><p class="lead" style="font-size:13px">Each button plays 1.5 s before to 1.5 s after that cut in that run. Same cut, different builds: listen for the click, gap or stutter.</p>'
+        + withAud.map(function(x, j){ return '<audio id="ab' + j + '" preload="none" src="' + esc(x.r.audio) + '"></audio>'; }).join('')
+        + '<div class="tbl"><table><thead><tr><th>Cut</th>' + withAud.map(function(x){ return '<th>' + esc(x.label) + '<div class="note" style="text-transform:none">' + esc(x.sub) + '</div></th>'; }).join('') + '</tr></thead><tbody>';
+      for (var i = 0; i < ncut; i++) {
+        ab += '<tr><td class="mono">cut ' + (i + 1) + '</td>' + withAud.map(function(x, j){ var cc = (x.r.cuts || [])[i], t = cc ? cc.t : (x.r.seams || [])[i];
+          return t == null ? '<td>—</td>' : '<td><button type="button" class="btn" data-play="ab' + j + '" data-t="' + t + '">▶ ' + Number(t).toFixed(1) + ' s</button>'
+            + (cc ? '<div class="note ' + (cc.ok ? '' : 'bad') + '">' + (cc.ok ? 'clean' : esc(cc.problems.join(', '))) + '</div>' : '') + '</td>'; }).join('') + '</tr>';
+      }
+      ab += '</tbody></table></div></div>';
+    }
+    $('runs').innerHTML = ab + cols.map(function(x){ return runCard(x.r, x.label + ' · ' + x.sub); }).join('');
+  }
+  var loadScript = function(src){ return new Promise(function(ok, bad){ var t = document.createElement('script'); t.src = src; t.onload = ok; t.onerror = function(){ bad(new Error('failed ' + src)); }; document.head.appendChild(t); }); };
+  setTimeout(function(){ var l = document.getElementById('loading'); if (l && getComputedStyle(l).display !== 'none') l.textContent = 'Still loading after 15 s. Press Cmd+Shift+R to reload; if it stays, open the board tab, check you are signed in, then open this check again.'; }, 15000);
+  if (!ID && IDS.length < 2) { fail('No check id. Open a check from the Audio Check tab.'); return; }
+  if (!FB) { fail('This page needs the live board.'); return; }
+  var v = '10.12.2';
+  ['app', 'auth', 'firestore'].reduce(function(p, m){ return p.then(function(){ return loadScript('https://www.gstatic.com/firebasejs/' + v + '/firebase-' + m + '-compat.js'); }); }, Promise.resolve())
+    .then(function(){
+      firebase.initializeApp(FB);
+      firebase.auth().onAuthStateChanged(function(user){
+        var dom = (FB.domain || 'msd-my.com').toLowerCase();
+        if (!(user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + dom))) { fail('Sign in on the board first, then open this check again.'); return; }
+        if (IDS.length > 1) {
+          Promise.all(IDS.map(function(x){ return firebase.firestore().collection('audiochecks').doc(x).get(); })).then(function(ds){
+            var docs = ds.filter(function(d){ return d.exists; }).map(function(d){ var c = d.data(); c.id = d.id; return c; });
+            if (docs.length < 2) { fail('Could not find those checks.'); return; }
+            renderCompare(docs);
+          }, function(e){ fail('Could not read the checks: ' + (e.message || e)); });
+          return;
+        }
+        firebase.firestore().collection('audiochecks').doc(ID).onSnapshot(function(d){
+          if (!d.exists) { fail('This check is queued and has not started yet. This page updates by itself when the lab Mac picks it up.'); return; }
+          var c = d.data(); c.id = d.id; render(c);
+        }, function(e){ fail('Could not read the check: ' + (e.message || e)); });
+      });
+    }).catch(function(e){ fail('Could not start: ' + (e.message || e)); });
+})();
+</script>
+</body>
+</html>

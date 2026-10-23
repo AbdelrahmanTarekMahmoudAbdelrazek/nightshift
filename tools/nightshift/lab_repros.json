@@ -1,0 +1,219 @@
+{
+ "eb0d37d2c7d146881b89d7a0b3859b0f": {
+  "expect": [
+   "JNI_getMediaDuration",
+   "PlayerActivity.getMediaDurationByID",
+   "MainMenuFragment$setClipTools",
+   "ExportManager::abort_export",
+   "pthread_join",
+   "ExportManager::export_audio_thread"
+  ],
+  "ladder": [
+   {
+    "level": 2,
+    "name": "export, background + memory pressure, cancel, Edit > Speed",
+    "natural": true,
+    "scenario": "export_bg_abort_clip_tool",
+    "repeat": 2,
+    "stat_runs": 4,
+    "stat_hits": 0,
+    "stat_secs": 1110
+   },
+   {
+    "level": 3,
+    "name": "same with camera open + critical memory pressure (codec competition)",
+    "natural": true,
+    "scenario": "export_bg_camera_abort_clip_tool",
+    "repeat": 2,
+    "stat_runs": 4,
+    "stat_hits": 0,
+    "stat_secs": 1371
+   },
+   {
+    "level": 5,
+    "name": "audio decoder freeze forced by debug hook",
+    "natural": false,
+    "scenario": "export_stuck_abort_clip_tool",
+    "repeat": 2,
+    "hook_patch": "tools/nightshift/out/hooks/eb0d37d2_stall_audio_export.diff",
+    "stat_runs": 6,
+    "stat_hits": 6,
+    "stat_secs": 1781
+   }
+  ]
+ },
+ "MusicTracksRepository": {
+  "expect": [
+   "MusicTracksRepository"
+  ],
+  "ladder": [
+   {
+    "level": 2,
+    "name": "rotate while the template music downloads",
+    "natural": true,
+    "cmd": "tools/stress/repro_slideshow_recreate.py --target music --trigger rotate --tries 5"
+   },
+   {
+    "level": 2,
+    "name": "dark mode on/off while the template music downloads",
+    "natural": true,
+    "cmd": "tools/stress/repro_slideshow_recreate.py --target music --trigger uimode --tries 5"
+   }
+  ]
+ },
+ "ff832bfcc56293d50aff6f599afbdda8": {
+  "expect": [
+   "com.yalantis.ucrop.UCropActivity.setupAspectRatioWidget",
+   "java.lang.ClassCastException"
+  ],
+  "ladder": [
+   {
+    "level": 5,
+    "name": "ns_ff832bfc_l5_2_a: HUAWEI HRY-LX1T x4 (Crashlytics ff832bfc): cold start straight into UCropActivity with default options -> CCE in setupAspectRatioWidget.",
+    "scenario": "ns_ff832bfc_l5_2_a",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "hook_patch": "tools/nightshift/out/hooks/ff832bfc_l5_2.diff",
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "7200d24e35f7fea6f67064c99e27adeb": {
+  "expect": [
+   "com.common.myzesty.realm.RealmWrapper.getAllImageEditorResources",
+   "java.lang.NullPointerException"
+  ],
+  "ladder": [
+   {
+    "level": 5,
+    "name": "ns_7200d24e_l5_2_a: All 6 (HRY-LX1T x4, OnePlus8Pro x2), fresh launch: the screen's onCreate loads stickers with table=null (hook).",
+    "scenario": "ns_7200d24e_l5_2_a",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "hook_patch": "tools/nightshift/out/hooks/7200d24e_l5_2.diff",
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8": {
+  "expect": [
+   "VisualTimeLine::get_media_starting_time",
+   "MsgLooper::ProcessMessages"
+  ],
+  "ladder": [
+   {
+    "level": 3,
+    "name": "ns_2bc43cd6_live1: Reproduce the SIGSEGV in VisualTimeLine::get_media_starting_time on the MsgLooper thread through real use. Rotating QuickCutActivity with 2 or more cl",
+    "scenario": "ns_2bc43cd6_live1",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "b0624779923c1f52e97b73f75b8c5950": {
+  "expect": [
+   "MsgLooper::QueueMessage",
+   "MsgLooper::Set"
+  ],
+  "ladder": [
+   {
+    "level": 3,
+    "name": "ns_b0624779_live1: Reproduce the null-looper crash (MsgLooper::Set -> MsgLooper::QueueMessage, fault addr 0x30) the natural field way. On a low-RAM phone, opening the Co",
+    "scenario": "ns_b0624779_live1",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8~a78c36e6": {
+  "expect": [
+   "VisualTimeLine::get_frames_at",
+   "FramesHelper::run_renderer_thread"
+  ],
+  "ladder": [
+   {
+    "level": 3,
+    "name": "ns_ga78c36e_live1: Through the real UI, get the engine to run the replay order: pause, preview state 0, save the draft, and a speed curve put on clip 0. Then scrub and p",
+    "scenario": "ns_ga78c36e_live1",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 3,
+    "stat_hits": 3,
+    "stat_secs": 156
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8~e7a32fec": {
+  "expect": [
+   "Sticker::add_triggered_keyframe",
+   "GraphicEngine::add_triggered_keyframe_Sticker"
+  ],
+  "ladder": [
+   {
+    "level": 3,
+    "name": "ns_ge7a32fe_l3_1_a: Instance 2026-09-26 vivo V2321: sticker replaced, dragged, back, Keyframe 2.5 s later on a slowed (low-end) phone.",
+    "scenario": "ns_ge7a32fe_l3_1_a",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "501bb52658b63a6c0a32a5b8bbd06b8b": {
+  "expect": [
+   "MAIN:JNI_freezeProgrees|com.common.myzesty.videoPlayer.Player.freezeProgress",
+   "MAIN:com.video.myzesty.PlayerActivity.freezeLoader"
+  ],
+  "ladder": [
+   {
+    "level": 3,
+    "name": "ns_501bb526_focus: long clip + 5 freezes, small speed applies (slow freeze re-extraction blocks main)",
+    "scenario": "ns_501bb526_focus",
+    "repeat": 3,
+    "natural": true,
+    "author": false,
+    "phone_only": true,
+    "max_s": 1200,
+    "stat_runs": 6,
+    "stat_hits": 0,
+    "stat_secs": 1244
+   },
+   {
+    "level": 3,
+    "name": "ns_501bb526_live2: Block the main thread in PlayerActivity.freezeLoader() -> Player.freezeProgress() (JNI_freezeProgrees / MsgLooper::Get<double,int>) for more than 5 s ",
+    "scenario": "ns_501bb526_live2",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 7,
+    "stat_hits": 1,
+    "stat_secs": 775
+   },
+   {
+    "level": 5,
+    "name": "ns_501bb526_l5_2_b: Lab hit ns_live__1_1 + lab note 'speed 7.6 -> 0 freeze intervals': speed apply while the layer reports no freeze intervals, freezeProgress stays 0.0.",
+    "scenario": "ns_501bb526_l5_2_b",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 4,
+    "stat_hits": 1,
+    "hook_patch": "tools/nightshift/out/hooks/501bb526_l5_2.diff",
+    "stat_secs": 77
+   }
+  ]
+ }
+}

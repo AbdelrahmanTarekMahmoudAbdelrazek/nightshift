@@ -1,0 +1,19 @@
+# Personal, generated or secret: never pushed
+tools/nightshift/out/
+tools/nightshift/nightshift.yaml
+tools/nightshift/board/public/
+tools/nightshift/board/.firebase/
+tools/nightshift/board/.firebaserc
+tools/nightshift/board/firebase.json
+tools/nightshift/symbols/
+tools/nightshift/runlog.csv
+tools/stress/fixtures.json
+tools/stress/screen_map.json.fp
+stress_results/
+__pycache__/
+*.pyc
+.DS_Store
+service-account*.json
+bitbucket.json
+jira.json
+play-*.json

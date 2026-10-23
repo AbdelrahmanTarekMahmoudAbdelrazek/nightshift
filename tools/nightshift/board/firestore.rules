@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    // Staff = a verified @msd-my.com address (email-link sign-in verifies it), optionally also on the allowlist.
+    function staff() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower().matches('.*@msd-my[.]com$');
+    }
+    function allowlisted() {
+      return exists(/databases/$(db)/documents/staff/$(request.auth.token.email.lower()));
+    }
+    // Set `requireAllowlist: true` in config/board to also require an allowlist row (e.g. for Demo Day guests).
+    function reader() {
+      return staff() && (!get(/databases/$(db)/documents/config/board).data.get('requireAllowlist', false) || allowlisted());
+    }
+
+    match /config/{doc}    { allow read: if reader(); allow write: if false; }
+    match /audiochecks/{id} { allow read: if reader(); allow write: if false; }
+    match /cards/{id}       { allow read: if reader(); allow write: if false; }
+    match /cardreviews/{id} { allow read: if reader(); allow write: if false; }   // card root-cause reviews (worker writes)
+    match /staff/{email}   { allow read: if reader(); allow write: if false; }
+    match /cases/{id}      { allow read: if reader(); allow write: if false; }   // worker writes via Admin SDK
+    match /families/{id}   { allow read: if reader(); allow write: if false; }   // same-bug families (worker writes)
+    match /findings/{id}   { allow read: if reader(); allow write: if false; }
+    match /runlog/{id}     { allow read: if reader(); allow write: if false; }
+    match /workers/{id}    { allow read: if reader(); allow write: if false; }   // whose Night Shift worker is online (workers write)
+    match /play_issues/{id} { allow read: if reader(); allow write: if false; }   // Play vitals rows (worker writes; the board reads)
+    match /prs/{id} {                                                          // PR reviews, worker writes
+      allow read: if reader();
+      allow write: if false;
+      // Decide page answers (Agree / Not a problem / Ask author): one doc per finding per head, written as the signed-in
+      // reader. The worker reads them to tune the reviewers. Nothing else on the PR can be changed from the browser.
+      match /feedback/{fid} {
+        allow read: if reader();
+        allow create, update: if reader()
+          && fid.matches('^[0-9a-f]{0,12}_f[0-9]{1,3}$')
+          && request.resource.data.keys().hasOnly(['finding', 'title', 'where', 'decision', 'text', 'scenario', 'tier', 'head', 'by', 'at'])
+          && request.resource.data.decision in ['agree', 'no', 'ask']
+          && request.resource.data.by == request.auth.token.email.lower()
+          && request.resource.data.at == request.time
+          && request.resource.data.text is string && request.resource.data.text.size() <= 4000;
+        allow delete: if false;
+      }
+    }
+    match /merged/{id} {                                                       // Play x Firebase rows (worker writes)
+      allow read: if reader();
+      allow update: if reader()                                                // staff may edit only PR + note
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pr', 'note', 'noteBy', 'noteAt'])
+        && request.resource.data.noteBy == request.auth.token.email.lower();
+      allow create, delete: if false;
+    }
+    match /jobs/{id} {
+      allow read: if reader();
+      // The browser may only queue a job: one of the known actions, on an existing case, status 'queued', as itself.
+      allow create: if reader()
+        && request.resource.data.keys().hasOnly(['action', 'issue', 'requestedBy', 'status', 'queuedAt'])
+        && request.resource.data.action in ['start', 'triage', 'analyse', 'reproduce', 'draft-fix', 'pull', 'sync', 'sync-full', 'pr-review', 'audio-branches', 'audio-check', 'card-read', 'symbols-rebuild']
+        && request.resource.data.status == 'queued'
+        && request.resource.data.requestedBy == request.auth.token.email.lower()
+        && request.resource.data.queuedAt == request.time
+        && (request.resource.data.action == 'pr-review'
+              ? (request.resource.data.issue.matches('^([a-z0-9._-]{1,60}-)?[0-9]{0,6}$')   // '' = all open PRs, or one PR (number, or <repo>-<number> for another repo),
+                 || (request.resource.data.issue.size() <= 700                      // or redraw one diagram: id|flow or sN|note
+                     && request.resource.data.issue.matches('^([a-z0-9._-]{1,60}-)?[0-9]{1,6}[|](flow|s[0-9]{1,3})([|].*)?$')))
+              : request.resource.data.action == 'card-read'
+              ? (request.resource.data.issue.matches('^[A-Z][A-Z0-9]{1,9}-[0-9]{1,7}([|].+)?$') && request.resource.data.issue.size() <= 1600)   // a Jira key, optional |developer note
+              : request.resource.data.action == 'audio-check'
+              ? request.resource.data.issue.matches('^[A-Za-z0-9._/-]{1,100};splits;[A-Za-z0-9._/-]{0,100}$')   // branch;project;control
+              : request.resource.data.action == 'audio-branches'
+              ? request.resource.data.issue.matches('^[A-Za-z0-9._/-]{0,100}$')   // '' = latest branches, else a name search
+              : request.resource.data.action == 'symbols-rebuild'
+              ? request.resource.data.issue.matches('^[0-9]{6,12}$')               // one version code (same-binary builds come along)
+              : request.resource.data.action in ['sync', 'sync-full']
+              ? request.resource.data.issue == ''                                  // whole-app gathering, no case
+              : request.resource.data.action in ['pull', 'start']
+                ? request.resource.data.issue.matches('^[0-9a-f]{32}(~[0-9a-f]{8})?$')   // a Crashlytics issue, or one crash (card) of a mixed issue
+                : exists(/databases/$(db)/documents/cases/$(request.resource.data.issue)));
+      // Cancel: any reader may stop a queued/running job; nothing else about the job can be changed from the browser.
+      allow update: if reader()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'error', 'cancelledBy'])
+        && ((resource.data.status == 'running' && request.resource.data.status == 'cancel')
+            || (resource.data.status == 'queued' && request.resource.data.status == 'cancelled'));
+      allow delete: if false;                                                    // only the worker moves a job on
+    }
+  }
+}

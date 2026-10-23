@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY. Night Shift lab control (setup shortcuts for lab runs). Never part of a release build. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <provider
+            android:name="com.myzesty.lab.LabControl"
+            android:authorities="com.myzesty.labcontrol"
+            android:exported="false" />
+        <!-- only adb (shell holds DUMP) can send these -->
+        <receiver
+            android:name="com.myzesty.lab.LabControlReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.myzesty.LAB" />
+            </intent-filter>
+        </receiver>
+        <!-- Night Shift lab: a push from adb ("FCM push arrives") through the REAL Firebase receiver. In release builds
+             only Google Play services may send it; in debug builds also adb (shell holds DUMP), no other app. -->
+        <receiver
+            android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            tools:replace="android:permission" />
+    </application>
+</manifest>
