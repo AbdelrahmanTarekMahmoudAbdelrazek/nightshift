@@ -12,8 +12,8 @@ API = 'https://api.bitbucket.org/2.0'
 
 
 def creds():
-    if not os.path.exists(CFG):
-        raise RuntimeError('no Bitbucket token: create ~/.config/nightshift/bitbucket.json (see the PR Review page)')
+    if not os.path.exists(CFG):                          # no token here: workspace/repo for URLs; reads go through the host
+        return {'email': '', 'token': '', 'workspace': 'mitrotek', 'repo': 'video_gles3jni', 'relay': True}
     c = json.load(open(CFG))
     for k in ('email', 'token'):
         if not c.get(k):
@@ -25,6 +25,9 @@ def creds():
 
 def _get(url, raw=False, c=None):
     c = c or creds()
+    if c.get('relay'):                                    # no token on this computer: the board host reads it for us
+        from . import relay
+        return relay.get(url, raw=raw)
     auth = base64.b64encode(f"{c['email']}:{c['token']}".encode()).decode()
     req = urllib.request.Request(url, headers={'Authorization': f'Basic {auth}', 'Accept': 'application/json' if not raw else 'text/plain'})
     with urllib.request.urlopen(req, timeout=60) as r:

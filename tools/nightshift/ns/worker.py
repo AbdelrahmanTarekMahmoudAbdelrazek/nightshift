@@ -227,7 +227,7 @@ def git_over_ssh():
             threading._ns_git_ssh = False
     os.environ['GIT_TERMINAL_PROMPT'] = '0'             # never wait for a password nobody can type
     if not threading._ns_git_ssh:
-        return False
+        return git_over_token()
     prefixes = {'https://bitbucket.org/'}
     try:                                                # https://<user>@bitbucket.org/ remotes need their own rule
         url = subprocess.run(['git', '-C', config.REPO, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
@@ -237,6 +237,52 @@ def git_over_ssh():
     except Exception:
         pass
     pairs = [(f'url.git@bitbucket.org:.insteadOf', p) for p in sorted(prefixes)] + [('credential.helper', '')]
+    os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        os.environ[f'GIT_CONFIG_KEY_{i}'] = k
+        os.environ[f'GIT_CONFIG_VALUE_{i}'] = v
+    return True
+
+
+def _has_bitbucket():
+    return os.path.exists(os.path.expanduser('~/.config/nightshift/bitbucket.json'))
+
+
+def _has_jira():
+    try:
+        from . import jira
+        jira.creds()
+        return True
+    except Exception:
+        return False
+
+
+def git_over_token():
+    """No SSH key on this computer: git reaches Bitbucket over HTTPS with the API token saved by setup.sh
+    (~/.config/nightshift/bitbucket.json), never the macOS keychain. Every Bitbucket address form (https, https with a
+    user name, git@ SSH) is pointed at https://x-bitbucket-api-token-auth@bitbucket.org/ and a tiny askpass script answers
+    with the token. Needs the token's read:repository scope."""
+    bb = os.path.expanduser('~/.config/nightshift/bitbucket.json')
+    if not os.path.exists(bb):
+        return False
+    ap = os.path.expanduser('~/.config/nightshift/git-askpass.sh')
+    if not os.path.exists(ap):
+        with open(ap, 'w') as fh:
+            fh.write('#!/bin/sh\n# Night Shift: answers git with the Bitbucket API token (no keychain, no prompt)\n'
+                     'case "$1" in *sername*) echo x-bitbucket-api-token-auth;;\n'
+                     ' *) python3 -c \'import json,os;print(json.load(open(os.path.expanduser("~/.config/nightshift/bitbucket.json")))["token"])\';; esac\n')
+        os.chmod(ap, 0o700)
+    target = 'https://x-bitbucket-api-token-auth@bitbucket.org/'
+    prefixes = {'https://bitbucket.org/', 'git@bitbucket.org:', 'ssh://git@bitbucket.org/'}
+    try:
+        url = subprocess.run(['git', '-C', config.REPO, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
+        m = re.match(r'(https://[^/@]+@bitbucket\.org/)', url)
+        if m:
+            prefixes.add(m.group(1))
+    except Exception:
+        pass
+    pairs = [(f'url.{target}.insteadOf', p) for p in sorted(prefixes)] + [('credential.helper', '')]
+    os.environ['GIT_ASKPASS'] = ap
     os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
     for i, (k, v) in enumerate(pairs):
         os.environ[f'GIT_CONFIG_KEY_{i}'] = k
@@ -1793,6 +1839,11 @@ class Worker:
             start_join_responder(self.db, self.cfg)    # board host: answer "Connect this computer"
         except Exception:
             pass
+        try:
+            from . import relay
+            relay.start_responder(self.db, self.cfg)   # board host: Bitbucket reads for teammates without a token
+        except Exception:
+            pass
         o = _owner(getattr(self, 'cfg', None))
         if not o:
             return
@@ -1804,9 +1855,16 @@ class Worker:
             self.db.collection('workers').document(o).set({
                 'owner': o, 'host': os.uname().nodename, 'lastSeen': gcf.SERVER_TIMESTAMP,
                 'phone': os.environ.get('ANDROID_SERIAL') or str(((self.cfg.get('lab') or {}).get('phone_serial')) or ''),
-                'servesOthers': bool((self.cfg.get('worker') or {}).get('serve_others'))}, merge=True)
+                'servesOthers': bool((self.cfg.get('worker') or {}).get('serve_others')),
+                'hasBitbucket': _has_bitbucket(), 'hasJira': _has_jira()}, merge=True)
         except Exception:
             pass
+
+    def _caps(self, email):
+        try:
+            return self.db.collection('workers').document(email).get().to_dict() or {}
+        except Exception:
+            return {}
 
     def _alive(self, email):
         try:
@@ -1824,6 +1882,8 @@ class Worker:
             return True                                     # single-worker setup: run everything (as before)
         who = str(job.get('requestedBy') or '').strip().lower()
         serve = bool((self.cfg.get('worker') or {}).get('serve_others'))
+        if job.get('action') == 'card-read' and not serve and not _has_jira():
+            return False                                    # no Jira token here: the board host reads the card instead
         if who == me:
             return True
         if '@' not in who:                                  # scheduled ('daily 08:00', 'nightly golden check'): the host
@@ -1836,6 +1896,8 @@ class Worker:
                 return False
         if job.get('action') in SHARED_ACTIONS:
             return True
+        if serve and job.get('action') == 'card-read' and self._caps(who).get('hasJira') is False:
+            return True                                     # their computer has no Jira token: the host reads the card
         if not serve or self._alive(who):
             return False
         try:                                                # give their own worker 90 s to wake up and claim it first

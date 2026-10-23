@@ -78,10 +78,11 @@ var FB = /*__NS_FIREBASE__*/null;
         ref.set({ email: email, at: firebase.firestore.FieldValue.serverTimestamp(), ua: navigator.userAgent.slice(0, 160) })
           .then(function () { listen(); })
           .catch(function (e) { clearTimeout(slow); dot(2, 'err'); done('Could not ask the board: ' + (e.message || e), true); });
-        function listen() { ref.onSnapshot(function (d) {
+        var stop = null;
+        function listen() { stop = ref.onSnapshot(function (d) {
           var x = d.exists ? d.data() : null;
           if (!x || !x.pack || handed) return;
-          handed = true; clearTimeout(slow); dot(2, 'done'); $('s2').textContent = 'Key received for this computer'; dot(3, 'on');
+          handed = true; clearTimeout(slow); if (stop) stop();   // stop watching: the host deletes the request after the hand-over dot(2, 'done'); $('s2').textContent = 'Key received for this computer'; dot(3, 'on');
           var body = JSON.stringify({ code: CODE, email: email, board: x.pack.board, serviceAccount: x.pack.sa });
           fetch('http://127.0.0.1:' + PORT + '/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body })
             .then(function (r) { if (!r.ok) throw new Error('installer said ' + r.status); })
@@ -94,7 +95,7 @@ var FB = /*__NS_FIREBASE__*/null;
               dot(3, 'done'); ref.update({ delivered: true }).catch(function () {});
               done('Connected. Go back to the terminal; you can close this page.');
             });
-        }, function (e) { dot(2, 'err'); done('Could not read the answer: ' + (e.message || e), true); }); }
+        }, function (e) { if (handed) return; dot(2, 'err'); done('Could not read the answer: ' + (e.message || e), true); }); }
       });
     });
   }).catch(function (e) { done('Could not start: ' + (e.message || e) + '. If this mentions gstatic.com, your network or a blocker stops Google Firebase.', true); });

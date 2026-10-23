@@ -35,7 +35,7 @@ ensure_ssh() {   # $1 = "required" or "optional"
   openurl "$KEY_URL"
   while true; do
     read -r -p "  Press Enter when it is added (or type s to skip): " a || a=s
-    [ "$a" = "s" ] && { [ "$1" = required ] && die "the app cannot be cloned without it"; warn "skipped: macOS may ask for your keychain password when Night Shift runs git (choose Always Allow)"; return 1; }
+    [ "$a" = "s" ] && { [ "$1" = required ] && die "Night Shift needs this key to read the code with git. Run ./setup.sh again when you have a minute"; warn "skipped: macOS may ask for your keychain password when Night Shift runs git (choose Always Allow)"; return 1; }
     ssh_ok && { ok "Bitbucket SSH key works (no password prompts)"; return 0; }
     warn "Bitbucket does not accept the key yet (it can take a few seconds). Check it was added, then press Enter again."
   done
@@ -47,8 +47,8 @@ openurl() {
 }
 
 step "1/9  The app (video_gles3jni with its modules)"
-CREATE=0; REPO=""
-for x in "$@"; do case "$x" in --create) CREATE=1;; *) [ -z "$REPO" ] && REPO="$x";; esac; done
+CREATE=0; TOKENS=0; REPO=""
+for x in "$@"; do case "$x" in --create) CREATE=1;; --tokens) TOKENS=1;; *) [ -z "$REPO" ] && REPO="$x";; esac; done
 if [ -z "$REPO" ]; then
   for c in "$HOME/video_gles3jni" "$HOME/AndroidStudioProjects/video_gles3jni" "$HOME/.nightshift_app/video_gles3jni"; do
     [ -d "$c/app/src/main/cpp/JNI" ] && { REPO="$c"; break; }; done
@@ -115,7 +115,7 @@ else cp -R "$KIT/app-overlay/app/src/debug" "$REPO/app/src/debug" && ok "app/src
 mkdir -p "$KIT/tools/nightshift/out/batch"
 grep -qs "^tools/$" "$REPO/.git/info/exclude" || { echo "tools/" >> "$REPO/.git/info/exclude"; echo "app/src/debug/" >> "$REPO/.git/info/exclude"; ok "tools/ and app/src/debug/ hidden from your git status (local only)"; }
 
-step "4/9  Your Bitbucket and Jira access (stays in $CONF on this computer)"
+step "4/9  Bitbucket and Jira access"
 mkdir -p "$CONF" && chmod 700 "$CONF"
 JIRA_URL="$(grep -E '^\s+jira_base_url:' "$KIT/tools/nightshift/nightshift.example.yaml" | sed -E 's/.*jira_base_url:[[:space:]]*"?([^" #]+)"?.*/\1/')"
 bb_ok() { python3 - "$1" "$2" <<'PY'
@@ -138,6 +138,11 @@ if v:
     get(f'{API}/pullrequests/{n}/diff', f'read PR #{n} diff: tick read:repository')
 PY
 }
+if [ $CREATE = 0 ] && [ $TOKENS = 0 ] && [ ! -f "$CONF/bitbucket.json" ]; then
+  ok "no tokens needed: the board host reads Bitbucket PRs and Jira cards for you"
+  echo "    (Want your own tokens anyway? Run ./setup.sh --tokens later.)"
+  ensure_ssh required                     # git (linked Kotlin PRs, checkouts) still needs your own key
+else
 if [ -f "$CONF/bitbucket.json" ]; then
   SBE="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])" 2>/dev/null)"
   SBT="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['token'])" 2>/dev/null)"
@@ -206,7 +211,14 @@ PY
   done
 fi
 
-ensure_ssh optional || true
+if ! ensure_ssh optional; then            # no SSH key: check git can use the token instead (no keychain)
+  AP="$(mktemp)"; printf '#!/bin/sh\ncase "$1" in *sername*) echo x-bitbucket-api-token-auth;; *) python3 -c '"'"'import json,os;print(json.load(open(os.path.expanduser("~/.config/nightshift/bitbucket.json")))["token"])'"'"';; esac\n' > "$AP"; chmod 700 "$AP"
+  if GIT_ASKPASS="$AP" GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote "https://x-bitbucket-api-token-auth@bitbucket.org/mitrotek/java-common.git" HEAD >/dev/null 2>&1
+  then ok "git can use your Bitbucket token instead (no keychain prompts)"
+  else warn "git cannot use the token either: Night Shift cannot fetch linked Kotlin PRs until you add the SSH key (run ./setup.sh again)"; fi
+  rm -f "$AP"
+fi
+fi
 
 step "5/9  Connect to the team board"
 if [ $CREATE = 0 ]; then
