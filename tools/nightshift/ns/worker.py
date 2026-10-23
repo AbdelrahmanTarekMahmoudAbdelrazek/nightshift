@@ -213,6 +213,37 @@ def start_join_responder(db, cfg):
     t.start()
 
 
+# ---- git without password prompts (23 Oct) -------------------------------------------------------------------------
+def git_over_ssh():
+    """Every git command the worker (and its scripts) runs talks to Bitbucket over SSH, even when the checkout's remote
+    is https://...: no macOS keychain prompt ("git-credential-osxkeychain wants to access..."), no password questions.
+    Applied only when this computer's SSH key is accepted by Bitbucket (setup.sh adds it); otherwise nothing changes."""
+    if getattr(threading, '_ns_git_ssh', None) is None:
+        try:
+            r = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10',
+                                '-T', 'git@bitbucket.org'], capture_output=True, text=True, timeout=20)
+            threading._ns_git_ssh = 'authenticated' in (r.stdout + r.stderr).lower()
+        except Exception:
+            threading._ns_git_ssh = False
+    os.environ['GIT_TERMINAL_PROMPT'] = '0'             # never wait for a password nobody can type
+    if not threading._ns_git_ssh:
+        return False
+    prefixes = {'https://bitbucket.org/'}
+    try:                                                # https://<user>@bitbucket.org/ remotes need their own rule
+        url = subprocess.run(['git', '-C', config.REPO, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
+        m = re.match(r'(https://[^/@]+@bitbucket\.org/)', url)
+        if m:
+            prefixes.add(m.group(1))
+    except Exception:
+        pass
+    pairs = [(f'url.git@bitbucket.org:.insteadOf', p) for p in sorted(prefixes)] + [('credential.helper', '')]
+    os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        os.environ[f'GIT_CONFIG_KEY_{i}'] = k
+        os.environ[f'GIT_CONFIG_VALUE_{i}'] = v
+    return True
+
+
 def _stable_lock(name):
     import threading as _t
     lk = getattr(_t, name, None)
@@ -1736,6 +1767,10 @@ class Worker:
         self.cfg = config.load()
         action = (snap.to_dict() or {}).get('action')
         self.heartbeat()
+        try:
+            git_over_ssh()                             # no keychain / password prompts from background git
+        except Exception:
+            pass
         if not self.route(snap.to_dict() or {}):       # another person's job, and their own worker is online: leave it
             return
         self._pin_phone()                             # every adb command of this job (and its scripts) goes to the lab phone

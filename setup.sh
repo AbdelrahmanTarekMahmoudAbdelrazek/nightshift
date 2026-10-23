@@ -17,6 +17,29 @@ OS="$(uname -s)"; WSL=0
 grep -qi microsoft /proc/version 2>/dev/null && WSL=1
 case "$OS" in Darwin) PLAT="macOS";; Linux) [ $WSL = 1 ] && PLAT="Windows (WSL2)" || PLAT="Linux";; *) PLAT="$OS";; esac
 printf "Night Shift setup on %s\n" "$PLAT"
+ssh_ok() { ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@bitbucket.org 2>&1 | grep -qi authenticated; }
+copy_clip() { if command -v pbcopy >/dev/null; then pbcopy; elif command -v clip.exe >/dev/null; then clip.exe; elif command -v wl-copy >/dev/null; then wl-copy; elif command -v xclip >/dev/null; then xclip -selection clipboard; else cat >/dev/null; return 1; fi; }
+ensure_ssh() {   # $1 = "required" or "optional"
+  ssh_ok && { ok "Bitbucket SSH key works (no password prompts)"; return 0; }
+  [ -f "$HOME/.ssh/id_ed25519.pub" ] || { mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -C "nightshift $(whoami)@$(hostname -s 2>/dev/null)" >/dev/null; }
+  local KEY_URL="https://bitbucket.org/account/settings/ssh-keys/"
+  echo
+  echo "    Bitbucket SSH key (1 minute; afterwards git never asks for your password or keychain)."
+  if copy_clip < "$HOME/.ssh/id_ed25519.pub"; then echo "    Your key is already COPIED. This page opens in your browser now:"
+  else echo "    Copy this line:"; echo; cat "$HOME/.ssh/id_ed25519.pub"; echo; echo "    Then open:"; fi
+  printf "      \033[4m%s\033[0m\n" "$KEY_URL"
+  echo "      1. Click  Add key"
+  echo "      2. Label: Night Shift → paste into Key (Cmd+V / Ctrl+V)"
+  echo "      3. Click  Add key"
+  echo
+  openurl "$KEY_URL"
+  while true; do
+    read -r -p "  Press Enter when it is added (or type s to skip): " a || a=s
+    [ "$a" = "s" ] && { [ "$1" = required ] && die "the app cannot be cloned without it"; warn "skipped: macOS may ask for your keychain password when Night Shift runs git (choose Always Allow)"; return 1; }
+    ssh_ok && { ok "Bitbucket SSH key works (no password prompts)"; return 0; }
+    warn "Bitbucket does not accept the key yet (it can take a few seconds). Check it was added, then press Enter again."
+  done
+}
 openurl() {
   if [ "$OS" = Darwin ]; then open "$1"
   elif [ $WSL = 1 ]; then (command -v wslview >/dev/null && wslview "$1") || cmd.exe /c start "" "$(echo "$1" | sed 's/&/^\&/g')" >/dev/null 2>&1
@@ -36,14 +59,7 @@ if [ -z "$REPO" ] || [ ! -d "$REPO/app/src/main/cpp/JNI" ]; then
   echo "    (in ~/.nightshift_app, not your work folders). It is large (several GB with all modules)."
   yes "Clone it now?" || die "run ./setup.sh <path of your video_gles3jni checkout>"
   command -v git >/dev/null || die "git is missing"
-  if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@bitbucket.org 2>&1 | grep -qi "authenticated"; then
-    echo "    Bitbucket needs your SSH key once:"
-    [ -f "$HOME/.ssh/id_ed25519.pub" ] || ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -C "nightshift" >/dev/null
-    echo "    1) copy this line:"; echo; cat "$HOME/.ssh/id_ed25519.pub"; echo
-    echo "    2) bitbucket.org → (your avatar) Personal settings → SSH keys → Add key → paste → Save"
-    read -r -p "  Press Enter when it is added... " _
-    ssh -o BatchMode=yes -T git@bitbucket.org 2>&1 | grep -qi "authenticated" || die "Bitbucket still refuses the key"
-  fi
+  ensure_ssh required
   REPO="$HOME/.nightshift_app/video_gles3jni"; mkdir -p "$HOME/.nightshift_app"
   if [ ! -d "$REPO/.git" ]; then
     git -c url."git@bitbucket.org:".insteadOf="https://bitbucket.org/" clone --recurse-submodules --jobs 4 \
@@ -189,6 +205,8 @@ PY
     warn "Jira did not accept it. Try again, or press Enter to skip."
   done
 fi
+
+ensure_ssh optional || true
 
 step "5/9  Connect to the team board"
 if [ $CREATE = 0 ]; then
