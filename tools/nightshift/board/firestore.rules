@@ -24,6 +24,15 @@ service cloud.firestore {
     match /families/{id}   { allow read: if reader(); allow write: if false; }   // same-bug families (worker writes)
     match /findings/{id}   { allow read: if reader(); allow write: if false; }
     match /runlog/{id}     { allow read: if reader(); allow write: if false; }
+    match /joinrequests/{code} {                                               // "Connect this computer" (setup.sh): any staff
+      allow create: if staff() && code.matches('^[0-9a-f]{12}$')
+        && request.resource.data.keys().hasOnly(['email', 'at', 'ua'])
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.at == request.time;
+      allow read: if staff() && resource.data.email == request.auth.token.email.lower();   // only the requester sees the answer
+      allow update: if staff() && resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['delivered']) && request.resource.data.delivered == true;
+    }
     match /devicechoice/{email} {                                              // the phone each person picks on the board
       allow read: if reader();
       allow write: if reader() && email == request.auth.token.email.lower()

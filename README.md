@@ -237,31 +237,20 @@ cd ~/nightshift && ./setup.sh
 
 If you already have the app checked out, pass its path: `./setup.sh ~/video_gles3jni`.
 
-`setup.sh` takes about 15 minutes, once. It:
+`setup.sh` takes about 15 minutes, once, and opens every page it needs by itself:
 
-1. finds your app checkout, or clones it (with your Bitbucket SSH key; it shows how to add one);
+1. finds your app checkout, or clones it (it shows how to add your Bitbucket SSH key if needed);
 2. checks your tools and Python packages (it asks before installing anything);
 3. links Night Shift into your checkout (`tools/nightshift`, `tools/stress`, hidden from your git status) and adds the
-   debug-only lab remote control (`app/src/debug`), which is never part of a release build;
-4. asks for your **Bitbucket API token** (Bitbucket → Personal settings → API tokens, scopes `read:repository` and
-   `read:pullrequest`). It's stored only in `~/.config/nightshift/` on your computer;
-5. asks **Join or create**:
-   - **j: join the team board** (recommended). Use the join pack the board owner sent you
-     (`nightshift-join-<you>.zip`).
-   - **c: create your own private board.** A free Firebase project in your Google account. Two clicks in the
-     Firebase console, with links shown.
-6. finds your phone, writes your settings, installs the Claude review plugins and starts your worker in the background
-   (macOS: a login item; Linux/WSL2: a systemd user service, or a starter that runs when you open the terminal).
+   debug-only lab remote control (`app/src/debug`), never part of a release build;
+4. **opens the Atlassian token page** and tells you what to click (a Bitbucket token, and optionally a Jira token for
+   Card Issue). You paste each one; it's tested on the spot and stored only in `~/.config/nightshift/`;
+5. **opens "Connect this computer"** on the team board: sign in with your @msd-my.com address and wait a few
+   seconds. Your computer receives the board's settings by itself. There's nothing to download or send;
+6. finds your phone, writes your settings, installs the Claude review plugins and starts your worker in the background.
 
-**Board owner: inviting a teammate**
-
-```bash
-cd ~/video_gles3jni
-python3 tools/nightshift/joinpack.py their.name@msd-my.com
-```
-
-Send the zip **privately** (AirDrop or a password manager, never a channel or GitHub), then delete your copy.
-It contains the board's write key.
+The board host's computer must be on for step 5 (it hands over the connection).
+Want a separate, private board instead of the team board? Run `./setup.sh --create`.
 
 **Crash data:** the crash gathering reads Crashlytics with your `firebase login`, so your Google account needs read
 access to the MyZesty Firebase project. Google Play vitals are optional: run `python3 tools/nightshift/sentinel.py

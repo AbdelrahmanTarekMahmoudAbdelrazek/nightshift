@@ -3,6 +3,7 @@
 # Safe to run again: it skips what is already done and never deletes anything.
 #   ./setup.sh                      # finds your video_gles3jni checkout, or offers to clone the app for you
 #   ./setup.sh ~/video_gles3jni
+#   ./setup.sh --create             # your own private board instead of the team board
 set -u
 KIT="$(cd "$(dirname "$0")" && pwd)"
 CONF="$HOME/.config/nightshift"
@@ -16,9 +17,15 @@ OS="$(uname -s)"; WSL=0
 grep -qi microsoft /proc/version 2>/dev/null && WSL=1
 case "$OS" in Darwin) PLAT="macOS";; Linux) [ $WSL = 1 ] && PLAT="Windows (WSL2)" || PLAT="Linux";; *) PLAT="$OS";; esac
 printf "Night Shift setup on %s\n" "$PLAT"
+openurl() {
+  if [ "$OS" = Darwin ]; then open "$1"
+  elif [ $WSL = 1 ]; then (command -v wslview >/dev/null && wslview "$1") || cmd.exe /c start "" "$(echo "$1" | sed 's/&/^\&/g')" >/dev/null 2>&1
+  else xdg-open "$1" >/dev/null 2>&1 || true; fi
+}
 
 step "1/9  The app (video_gles3jni with its modules)"
-REPO="${1:-}"
+CREATE=0; REPO=""
+for x in "$@"; do case "$x" in --create) CREATE=1;; *) [ -z "$REPO" ] && REPO="$x";; esac; done
 if [ -z "$REPO" ]; then
   for c in "$HOME/video_gles3jni" "$HOME/AndroidStudioProjects/video_gles3jni" "$HOME/.nightshift_app/video_gles3jni"; do
     [ -d "$c/app/src/main/cpp/JNI" ] && { REPO="$c"; break; }; done
@@ -92,42 +99,78 @@ else cp -R "$KIT/app-overlay/app/src/debug" "$REPO/app/src/debug" && ok "app/src
 mkdir -p "$KIT/tools/nightshift/out/batch"
 grep -qs "^tools/$" "$REPO/.git/info/exclude" || { echo "tools/" >> "$REPO/.git/info/exclude"; echo "app/src/debug/" >> "$REPO/.git/info/exclude"; ok "tools/ and app/src/debug/ hidden from your git status (local only)"; }
 
-step "4/9  Your keys (stay in $CONF, never in the kit)"
+step "4/9  Your Bitbucket and Jira access (stays in $CONF on this computer)"
 mkdir -p "$CONF" && chmod 700 "$CONF"
-if [ -f "$CONF/bitbucket.json" ]; then ok "bitbucket.json"
+JIRA_URL="$(grep -E '^\s+jira_base_url:' "$KIT/tools/nightshift/nightshift.example.yaml" | sed -E 's/.*jira_base_url:[[:space:]]*"?([^" #]+)"?.*/\1/')"
+bb_ok() { python3 - "$1" "$2" <<'PY'
+import base64, sys, urllib.request
+e, t = sys.argv[1:3]
+r = urllib.request.Request('https://api.bitbucket.org/2.0/repositories/mitrotek/video_gles3jni',
+                           headers={'Authorization': 'Basic ' + base64.b64encode(f'{e}:{t}'.encode()).decode()})
+try:
+    urllib.request.urlopen(r, timeout=20); sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+}
+if [ -f "$CONF/bitbucket.json" ]; then ok "Bitbucket token already saved"
 else
-  echo "    Bitbucket API token: bitbucket.org → Personal settings → API tokens, scopes read:repository + read:pullrequest"
-  BE="$(ask 'Your Atlassian email')"; BT="$(ask 'The API token (input is visible; it is only written to this computer)')"
+  echo "    Opening the Atlassian token page in your browser. There:"
+  echo "      1) Create API token with scopes → name: Night Shift → expiry: 1 year → Next"
+  echo "      2) App: Bitbucket → Next"
+  echo "      3) Tick read:repository:bitbucket and read:pullrequest:bitbucket → Next → Create → Copy"
+  openurl "https://id.atlassian.com/manage-profile/security/api-tokens"
+  BE="$(ask 'Your Atlassian (company) email')"
+  while true; do
+    read -r -s -p "  Paste the token (hidden) and press Enter: " BT; echo
+    if bb_ok "$BE" "$BT"; then break; fi
+    warn "Bitbucket did not accept it (wrong email, token, or missing scopes). Try again, or Ctrl-C to stop."
+  done
   python3 - "$CONF/bitbucket.json" "$BE" "$BT" <<'PY'
 import json, os, sys
 p, e, t = sys.argv[1:4]
 json.dump({'email': e, 'token': t, 'workspace': 'mitrotek', 'repo': 'video_gles3jni'}, open(p, 'w'), indent=1)
 os.chmod(p, 0o600)
 PY
-  ok "bitbucket.json written (also used for Jira)"
+  ok "Bitbucket token works and is saved"
+fi
+if [ -f "$CONF/jira.json" ]; then ok "Jira token already saved"
+else
+  echo "    Card Issue reads Jira cards. On the same page: Create API token (the plain one, no scopes) → Night Shift Jira → Create → Copy"
+  echo "    (press Enter without a token to skip; you can add it later by running ./setup.sh again)"
+  while true; do
+    read -r -s -p "  Paste the Jira token (hidden), or Enter to skip: " JT; echo
+    [ -z "$JT" ] && { warn "Jira skipped: Card Issue will not work until you add it"; break; }
+    if python3 - "$JIRA_URL" "${BE:-$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])")}" "$JT" <<'PY'
+import base64, sys, urllib.request
+u, e, t = sys.argv[1:4]
+r = urllib.request.Request(u.rstrip('/') + '/rest/api/3/myself', headers={'Authorization': 'Basic ' + base64.b64encode(f'{e}:{t}'.encode()).decode(), 'Accept': 'application/json'})
+try:
+    urllib.request.urlopen(r, timeout=20); sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+    then
+      python3 - "$CONF/jira.json" "$JIRA_URL" "${BE:-$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])")}" "$JT" <<'PY'
+import json, os, sys
+p, u, e, t = sys.argv[1:5]
+json.dump({'base_url': u, 'email': e, 'token': t}, open(p, 'w'), indent=1)
+os.chmod(p, 0o600)
+PY
+      ok "Jira token works and is saved"; break
+    fi
+    warn "Jira did not accept it. Try again, or press Enter to skip."
+  done
 fi
 
-step "5/9  Your board"
-echo "    j) JOIN the team board: you got a join pack (nightshift-join-<you>.zip) from its owner  [recommended]"
-echo "    c) CREATE your own private board (nobody else sees it)"
-MODE="$(ask 'Join or create (j/c)' j)"
-if [ "$MODE" = "j" ] || [ "$MODE" = "J" ]; then
-  ZIP="$(ls -t "$HOME"/Downloads/nightshift-join-*.zip 2>/dev/null | head -1)"
-  ZIP="$(ask 'Path of your join pack' "$ZIP")"; ZIP="${ZIP/#\~/$HOME}"
-  [ -f "$ZIP" ] || die "no join pack at $ZIP (ask the board owner: python3 tools/nightshift/joinpack.py <your email>)"
-  TMPJ="$(mktemp -d)"; unzip -q -o "$ZIP" -d "$TMPJ" || die "the join pack is damaged"
-  cp "$TMPJ/service-account.json" "$CONF/service-account.json" && chmod 600 "$CONF/service-account.json"
-  eval "$(python3 - "$TMPJ/board.json" <<'PY'
-import json, shlex, sys
-b = json.load(open(sys.argv[1]))
-for k, v in (('APIKEY', 'apiKey'), ('PROJ', 'projectId'), ('APPID', 'appId'), ('ME', 'for'), ('BURL', 'url')):
-    print(f"{k}={shlex.quote(str(b.get(v, '')))}")
-PY
-)"
-  rm -rf "$TMPJ"
+step "5/9  Connect to the team board"
+if [ $CREATE = 0 ]; then
+  [ -f "$KIT/tools/nightshift/team_board.json" ] || die "this kit has no team board address (team_board.json): ask the board owner"
+  CONN="$(cd "$KIT/tools/nightshift" && python3 connect.py)" || die "not connected (see above). Run ./setup.sh again; it is safe to rerun"
+  eval "$CONN"
   ROLE=join
+  ok "connected to $BURL as $ME"
   firebase login:list 2>/dev/null | grep -q "@" || warn "for 'Sync now' and crash data your Firebase login needs read access to the MyZesty Firebase project: run 'firebase login' later"
-  ok "joining board $PROJ as $ME (worker key saved in $CONF; delete the zip now: rm \"$ZIP\")"
 else
   ROLE=create
 firebase login:list 2>/dev/null | grep -q "@" || { echo "    Sign in to Firebase with your Google account:"; firebase login || die "firebase login failed"; }

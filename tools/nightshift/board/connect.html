@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect this computer · Night Shift</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#14161f;--muted:#5d6475;--line:#e3e6ef;--accent:#5b5bd6;--ok:#13895b;--bad:#c23b3b}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1017;--card:#151a24;--ink:#e8ebf3;--muted:#9aa3b5;--line:#252c3a;--accent:#8b8cf5;--ok:#38c48b;--bad:#ef6b6b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:520px;margin:56px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 22px 18px;box-shadow:0 8px 28px rgba(0,0,0,.06)}
+h1{font-size:20px;margin:0 0 6px}p{margin:8px 0}.muted{color:var(--muted)}.ok{color:var(--ok)}.bad{color:var(--bad)}
+form{display:flex;gap:8px;margin-top:12px}input{flex:1;font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink)}
+button{font:inherit;padding:9px 14px;border:0;border-radius:9px;background:var(--accent);color:#fff;cursor:pointer}
+ol{padding-left:20px;margin:10px 0}li{margin:4px 0}.step{display:flex;gap:10px;align-items:center;margin:8px 0}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--line);flex:none}.dot.on{background:var(--accent)}.dot.done{background:var(--ok)}.dot.err{background:var(--bad)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>Connect this computer</h1>
+    <p class="muted">Links the Night Shift you are installing to the team board. Nothing to copy: keep this page open for a few seconds.</p>
+    <div id="signin" class="hidden">
+      <p>Sign in with your company address. You get a one-click link by email; open it <b>on this computer</b>.</p>
+      <form id="f"><input id="email" type="email" required placeholder="you@msd-my.com" autocomplete="email"><button>Send link</button></form>
+      <p id="msg" class="muted"></p>
+    </div>
+    <div id="steps" class="hidden">
+      <div class="step"><span class="dot" id="d1"></span><span id="s1">Signed in</span></div>
+      <div class="step"><span class="dot" id="d2"></span><span id="s2">Asking the board for this computer's key…</span></div>
+      <div class="step"><span class="dot" id="d3"></span><span id="s3">Handing it to the installer on this computer…</span></div>
+    </div>
+    <p id="final" class="hidden"></p>
+  </div>
+</main>
+<script>
+var FB = /*__NS_FIREBASE__*/null;
+(function () {
+  var P = new URLSearchParams(location.search), CODE = P.get('code') || '', PORT = P.get('port') || '';
+  var $ = function (id) { return document.getElementById(id); };
+  function dot(n, cls) { $('d' + n).className = 'dot ' + cls; }
+  function done(html, bad) { $('final').innerHTML = html; $('final').className = bad ? 'bad' : 'ok'; }
+  if (!/^[0-9a-f]{12}$/.test(CODE) || !/^\d{2,5}$/.test(PORT)) { done('This page is opened by <b>./setup.sh</b>. Run it again in your terminal.', true); return; }
+  if (!FB) { done('This page needs the live board.', true); return; }
+  function load(src) { return new Promise(function (ok, bad) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { bad(new Error('could not load ' + src)); }; document.head.appendChild(s); }); }
+  var v = '10.12.2';
+  ['app', 'auth', 'firestore'].reduce(function (p, m) { return p.then(function () { return load('https://www.gstatic.com/firebasejs/' + v + '/firebase-' + m + '-compat.js'); }); }, Promise.resolve())
+  .then(function () {
+    firebase.initializeApp(FB);
+    var auth = firebase.auth(), db = firebase.firestore(), dom = (FB.domain || 'msd-my.com').toLowerCase();
+    var start = Promise.resolve();
+    if (auth.isSignInWithEmailLink(location.href)) {
+      var em = null; try { em = localStorage.getItem('ns.email'); } catch (e) {}
+      if (!em) em = prompt('Confirm your email address to finish signing in');
+      start = auth.signInWithEmailLink(em, location.href).then(function () {
+        history.replaceState({}, '', location.pathname + '?code=' + CODE + '&port=' + PORT);
+      }).catch(function (e) { $('msg').textContent = 'Sign-in link invalid or expired: ' + (e.message || e); });
+    }
+    $('f').onsubmit = function (ev) {
+      ev.preventDefault();
+      var em = $('email').value.trim().toLowerCase();
+      if (!em.endsWith('@' + dom)) { $('msg').textContent = 'Only @' + dom + ' addresses.'; return; }
+      auth.sendSignInLinkToEmail(em, { url: location.origin + location.pathname + '?code=' + CODE + '&port=' + PORT, handleCodeInApp: true })
+        .then(function () { try { localStorage.setItem('ns.email', em); } catch (e) {} $('msg').textContent = 'Link sent to ' + em + '. Open it on this computer.'; })
+        .catch(function (e) { $('msg').textContent = e.message || String(e); });
+    };
+    start.then(function () {
+      auth.onAuthStateChanged(function (user) {
+        var ok = user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + dom);
+        $('signin').classList.toggle('hidden', !!ok); $('steps').classList.toggle('hidden', !ok);
+        if (!ok) return;
+        var email = user.email.toLowerCase(), ref = db.collection('joinrequests').doc(CODE), handed = false;
+        dot(1, 'done'); $('s1').textContent = 'Signed in as ' + email; dot(2, 'on');
+        var slow = setTimeout(function () { $('s2').textContent = "Still waiting for the board host's computer… (it must be on with Night Shift running)"; }, 20000);
+        ref.set({ email: email, at: firebase.firestore.FieldValue.serverTimestamp(), ua: navigator.userAgent.slice(0, 160) })
+          .then(function () { listen(); })
+          .catch(function (e) { clearTimeout(slow); dot(2, 'err'); done('Could not ask the board: ' + (e.message || e), true); });
+        function listen() { ref.onSnapshot(function (d) {
+          var x = d.exists ? d.data() : null;
+          if (!x || !x.pack || handed) return;
+          handed = true; clearTimeout(slow); dot(2, 'done'); $('s2').textContent = 'Key received for this computer'; dot(3, 'on');
+          var body = JSON.stringify({ code: CODE, email: email, board: x.pack.board, serviceAccount: x.pack.sa });
+          fetch('http://127.0.0.1:' + PORT + '/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body })
+            .then(function (r) { if (!r.ok) throw new Error('installer said ' + r.status); })
+            .catch(function () {                         // the browser blocked the local hand-over: download it instead
+              var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+              a.download = 'nightshift-connect-' + CODE + '.json'; document.body.appendChild(a); a.click();
+              $('s3').textContent = 'Saved a connection file to Downloads; the installer picks it up and deletes it';
+            })
+            .then(function () {
+              dot(3, 'done'); ref.update({ delivered: true }).catch(function () {});
+              done('Connected. Go back to the terminal; you can close this page.');
+            });
+        }, function (e) { dot(2, 'err'); done('Could not read the answer: ' + (e.message || e), true); }); }
+      });
+    });
+  }).catch(function (e) { done('Could not start: ' + (e.message || e) + '. If this mentions gstatic.com, your network or a blocker stops Google Firebase.', true); });
+})();
+</script>
+</body>
+</html>

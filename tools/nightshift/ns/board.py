@@ -92,6 +92,12 @@ def write(cfg: dict, live: bool = False) -> str:
         if live:
             ad_page = ad_page.replace('/*__NS_FIREBASE__*/null', json.dumps(_fb(cfg)))
         open(os.path.join(out_dir, 'audio.html'), 'w', encoding='utf-8').write(ad_page)
+    cnp = os.path.join(HERE, 'board', 'connect.html')   # "Connect this computer" (opened by setup.sh)
+    if os.path.exists(cnp):
+        cn_page = open(cnp, encoding='utf-8').read()
+        if live:
+            cn_page = cn_page.replace('/*__NS_FIREBASE__*/null', json.dumps(_fb(cfg)))
+        open(os.path.join(out_dir, 'connect.html'), 'w', encoding='utf-8').write(cn_page)
     cdp = os.path.join(HERE, 'board', 'card.html')       # the card root-cause review page (reads cardreviews/<KEY>)
     if os.path.exists(cdp):
         cd_page = open(cdp, encoding='utf-8').read()

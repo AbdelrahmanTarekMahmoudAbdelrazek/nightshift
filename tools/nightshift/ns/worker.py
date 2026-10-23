@@ -151,6 +151,68 @@ def chosen_phone(db, cfg):
         return ''
 
 
+# ---- "Connect this computer": the board host hands its key to a signed-in colleague's setup.sh (23 Oct) --------------
+def start_join_responder(db, cfg):
+    """Board host only (worker.serve_others): answer joinrequests/<code> created by a signed-in @domain colleague with the
+    board's web settings and worker key. Only that colleague can read the request (rules); the answer is wiped as soon
+    as their installer has it, and every request is removed after 15 minutes either way."""
+    w = (cfg or {}).get('worker') or {}
+    if not w.get('serve_others'):
+        return
+    t = getattr(threading, '_ns_joinresp', None)
+    if t is not None and t.is_alive():
+        return
+    fb = dict((cfg or {}).get('firebase') or {})
+    dom = str(fb.get('domain') or 'msd-my.com').lower()
+    sa_path = os.path.expanduser(os.environ.get('NIGHTSHIFT_SA', '~/.config/nightshift/service-account.json'))
+
+    def answer(doc):
+        x = doc.to_dict() or {}
+        email = str(x.get('email') or '').lower()
+        at = x.get('at')
+        age = (dt.datetime.now(dt.timezone.utc) - at).total_seconds() if at else 0
+        if x.get('delivered') or age > 900:
+            doc.reference.delete()                       # handed over, or abandoned: the key must not stay on the board
+            return
+        if x.get('pack') or not email.endswith('@' + dom):
+            return
+        try:
+            sa = open(sa_path).read()
+        except OSError:
+            return
+        board = {k: fb[k] for k in ('apiKey', 'authDomain', 'projectId', 'appId', 'domain') if fb.get(k)}
+        doc.reference.update({'pack': {'board': board, 'sa': sa}, 'answeredAt': _now()})
+        try:
+            db.collection('staff').document(email).set({'note': 'connected a computer'}, merge=True)
+        except Exception:
+            pass
+        print(f'[worker] connected a computer for {email}', flush=True)
+
+    def on_change(snaps, changes, read_time):            # a live listener: reads only when a request changes
+        for ch in changes:
+            if ch.type.name in ('ADDED', 'MODIFIED'):
+                try:
+                    answer(ch.document)
+                except Exception as e:
+                    print(f'[worker] join request: {str(e)[:120]}', flush=True)
+
+    def loop():
+        watch = None
+        while True:
+            try:
+                if watch is None or getattr(watch, '_closed', False):
+                    watch = db.collection('joinrequests').on_snapshot(on_change)
+                for d in db.collection('joinrequests').stream():   # every 5 min: wipe abandoned requests
+                    answer(d)
+            except Exception as e:
+                print(f'[worker] join requests: {str(e)[:120]}', flush=True)
+                watch = None
+            time.sleep(300)
+    t = threading.Thread(target=loop, name='ns-joinresp', daemon=True)
+    threading._ns_joinresp = t
+    t.start()
+
+
 def _stable_lock(name):
     import threading as _t
     lk = getattr(_t, name, None)
@@ -1692,9 +1754,16 @@ class Worker:
 
     def heartbeat(self):
         """workers/<owner>: this person's worker is alive (the board shows "no worker online" without it)."""
+        try:
+            start_join_responder(self.db, self.cfg)    # board host: answer "Connect this computer"
+        except Exception:
+            pass
         o = _owner(getattr(self, 'cfg', None))
         if not o:
             return
+        if time.time() - getattr(threading, '_ns_hb_at', 0) < 90:   # free plan: at most one write per 90 s per worker
+            return
+        threading._ns_hb_at = time.time()
         try:
             from google.cloud import firestore as gcf
             self.db.collection('workers').document(o).set({
@@ -2087,7 +2156,7 @@ class Worker:
         rules = os.path.join(b, 'firestore.rules')
         vids = [os.path.getmtime(p) for p in glob.glob(os.path.join(b, 'public', 'v', '*', '*'))]
         prp = os.path.join(b, 'pr.html')
-        pages = [os.path.getmtime(os.path.join(b, f)) for f in ('card.html', 'audio.html') if os.path.exists(os.path.join(b, f))]
+        pages = [os.path.getmtime(os.path.join(b, f)) for f in ('card.html', 'audio.html', 'connect.html') if os.path.exists(os.path.join(b, f))]
         newest = max([os.path.getmtime(src), os.path.getmtime(rules) if os.path.exists(rules) else 0,
                       os.path.getmtime(prp) if os.path.exists(prp) else 0] + vids + pages)
         if os.path.exists(mark) and os.path.getmtime(mark) >= newest:

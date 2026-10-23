@@ -13,9 +13,9 @@ import argparse, json, os, re, shutil, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
 NS_DIRS = ['ns', 'audio', 'cards', 'skills', 'claude-plugin', 'templates', 'knowledge']
-NS_FILES = ['sentinel.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
+NS_FILES = ['connect.py', 'sentinel.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
             'restartworker.py', 'workerlog.py', 'lab_repros.json', 'SECURITY.md', 'kit_build.py', 'joinpack.py']
-BOARD_FILES = ['index.html', 'pr.html', 'card.html', 'audio.html', 'firestore.rules', 'firestore.indexes.json', 'README.md']
+BOARD_FILES = ['index.html', 'pr.html', 'card.html', 'audio.html', 'connect.html', 'firestore.rules', 'firestore.indexes.json', 'README.md']
 STRESS_KEEP = re.compile(r'^(zesty\.py|scenarios\.py|anrsan_findings\.py|repro_slideshow_recreate\.py|screen_map\.json|README\.md)$')
 SKIP_DIR = {'__pycache__', 'out', 'public', '.firebase', 'node_modules'}
 SKIP_FILE = re.compile(r'(\.pyc|\.tmp|\.bak|\.log|\.orig|\.rej|~)$|^\.DS_Store$|^_')
@@ -77,6 +77,18 @@ def main():
         if os.path.exists(os.path.join(HERE, 'board', f)):
             put(os.path.join(HERE, 'board', f), os.path.join(ns_out, 'board', f))
     example_yaml(os.path.join(HERE, 'nightshift.yaml'), os.path.join(ns_out, 'nightshift.example.yaml'))
+    try:                                              # the team board's address (public web settings, no key): setup joins it
+        sys.path.insert(0, HERE)
+        from ns import config as _c
+        fb = dict(_c.load().get('firebase') or {})
+        if fb.get('projectId'):
+            tb = {k: fb[k] for k in ('apiKey', 'authDomain', 'projectId', 'appId', 'domain') if fb.get(k)}
+            tb['url'] = f"https://{fb['projectId']}.web.app"
+            p = os.path.join(ns_out, 'team_board.json')
+            json.dump(tb, open(p, 'w'), indent=1)
+            WRITTEN.add(os.path.abspath(p))
+    except Exception as e:
+        print(f'note: team_board.json not written ({e})')
     st_src, st_out = os.path.join(REPO, 'tools', 'stress'), os.path.join(out, 'tools', 'stress')
     for f in os.listdir(st_src):
         if STRESS_KEEP.match(f):
