@@ -65,6 +65,92 @@ def _lab_lock_id(cfg):
     return 'lab_lock' if not o else 'lab_lock_' + re.sub(r'[^a-z0-9]+', '_', o)
 
 
+# ---- phones: live device list for the board's "My phone" picker (23 Oct) ---------------------------------------------
+_ANDROID_VER = {}
+
+
+def adb_devices():
+    """Every device adb sees: [{serial, state, model, emulator, android}]. state: device (ready), unauthorized (tap
+    Allow on the phone), offline, ..."""
+    try:
+        out = subprocess.run(['adb', 'devices', '-l'], capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return []
+    devs = []
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        serial, state = parts[0], parts[1]
+        kv = dict(x.split(':', 1) for x in parts[2:] if ':' in x)
+        d = {'serial': serial, 'state': state, 'model': kv.get('model', '').replace('_', ' '),
+             'emulator': serial.startswith('emulator-'), 'wifi': bool(re.match(r'^[\d.]+:\d+$|_adb-tls-connect', serial))}
+        if state == 'device':
+            if serial not in _ANDROID_VER:
+                try:
+                    _ANDROID_VER[serial] = subprocess.run(['adb', '-s', serial, 'shell', 'getprop', 'ro.build.version.release'],
+                                                          capture_output=True, text=True, timeout=8).stdout.strip()
+                    mk = subprocess.run(['adb', '-s', serial, 'shell', 'getprop', 'ro.product.manufacturer'],
+                                        capture_output=True, text=True, timeout=8).stdout.strip()
+                    _ANDROID_VER[serial + '#mk'] = mk
+                except Exception:
+                    _ANDROID_VER[serial] = ''
+            d['android'] = _ANDROID_VER.get(serial, '')
+            d['maker'] = _ANDROID_VER.get(serial + '#mk', '')
+        devs.append(d)
+    return devs
+
+
+def _publish_devices(db, owner, last=[None]):
+    devs = adb_devices()
+    if devs == last[0]:
+        return
+    last[0] = devs
+    try:
+        from google.cloud import firestore as gcf
+        db.collection('workers').document(owner).set({'devices': devs, 'devicesAt': gcf.SERVER_TIMESTAMP}, merge=True)
+    except Exception:
+        pass
+
+
+def start_device_watch(db, cfg):
+    """One background thread per worker process: `adb track-devices` reports every plug / unplug / authorise at once;
+    each change republishes the list to workers/<owner> (the board updates live). Falls back to a 3 s poll."""
+    owner = _owner(cfg)
+    t = getattr(threading, '_ns_devwatch', None)
+    if not owner or (t is not None and t.is_alive()):
+        return
+
+    def loop():
+        while True:
+            try:
+                _publish_devices(db, owner)
+                p = subprocess.Popen(['adb', 'track-devices'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                while True:
+                    head = p.stdout.read(4)
+                    if len(head) < 4:
+                        break
+                    p.stdout.read(int(head, 16))
+                    _publish_devices(db, owner)
+            except Exception:
+                pass
+            time.sleep(3)
+    t = threading.Thread(target=loop, name='ns-devwatch', daemon=True)
+    threading._ns_devwatch = t
+    t.start()
+
+
+def chosen_phone(db, cfg):
+    """The phone picked on the board (devicechoice/<owner>.serial), or '' for automatic."""
+    o = _owner(cfg)
+    if not o:
+        return ''
+    try:
+        return str((db.collection('devicechoice').document(o).get().to_dict() or {}).get('serial') or '').strip()
+    except Exception:
+        return ''
+
+
 def _stable_lock(name):
     import threading as _t
     lk = getattr(_t, name, None)
@@ -1105,13 +1191,23 @@ class Worker:
         """With an emulator lane running, plain `adb` would refuse ("more than one device"). Pin this process (and every
         command it starts) to the physical phone: the first non-emulator device."""
         os.environ.setdefault('ZESTY_PKG', config.app_package(getattr(self, 'cfg', None)))   # the phone driver's app (profile)
+        try:
+            start_device_watch(self.db, self.cfg)     # the board's "My phone" list (one thread per worker process)
+        except Exception:
+            pass
+        pick = chosen_phone(self.db, self.cfg) if getattr(self, 'db', None) is not None else ''
+        if pick:                                      # picked on the board: this phone, if it is connected and allowed
+            ready = [d['serial'] for d in adb_devices() if d['state'] == 'device']
+            if pick in ready:
+                os.environ['ANDROID_SERIAL'] = pick
+                return
+            print(f'[worker] the phone picked on the board ({pick}) is not connected or not allowed: using the default', flush=True)
         want = str((getattr(self, 'cfg', None) or {}).get('lab', {}).get('phone_serial') or '').strip()
         if want:                                      # nightshift.yaml lab.phone_serial: always this phone
             os.environ['ANDROID_SERIAL'] = want
             return
         try:
-            out = subprocess.run('adb devices', shell=True, capture_output=True, text=True, timeout=20).stdout
-            phones = [l.split()[0] for l in out.splitlines()[1:] if l.strip().endswith('device') and not l.startswith('emulator-')]
+            phones = [d['serial'] for d in adb_devices() if d['state'] == 'device' and not d['emulator']]
             if phones and os.environ.get('ANDROID_SERIAL') not in phones:
                 os.environ['ANDROID_SERIAL'] = phones[0]
         except Exception:
@@ -2092,6 +2188,10 @@ class Worker:
                 if ch.type.name in ('ADDED', 'MODIFIED'):
                     fire(ch.document)
         self.cleanup_stale()
+        try:
+            start_device_watch(self.db, self.cfg)       # live phone list for the board
+        except Exception:
+            pass
         watch = q.on_snapshot(on_snapshot)
         print(f'worker {os.uname().nodename} listening for jobs (dry={self.dry}); Ctrl-C to stop', flush=True)
         last_poll = time.time()

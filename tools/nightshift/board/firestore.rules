@@ -24,6 +24,13 @@ service cloud.firestore {
     match /families/{id}   { allow read: if reader(); allow write: if false; }   // same-bug families (worker writes)
     match /findings/{id}   { allow read: if reader(); allow write: if false; }
     match /runlog/{id}     { allow read: if reader(); allow write: if false; }
+    match /devicechoice/{email} {                                              // the phone each person picks on the board
+      allow read: if reader();
+      allow write: if reader() && email == request.auth.token.email.lower()
+        && request.resource.data.keys().hasOnly(['serial', 'at'])
+        && request.resource.data.serial is string && request.resource.data.serial.size() <= 80
+        && request.resource.data.at == request.time;
+    }
     match /workers/{id}    { allow read: if reader(); allow write: if false; }   // whose Night Shift worker is online (workers write)
     match /play_issues/{id} { allow read: if reader(); allow write: if false; }   // Play vitals rows (worker writes; the board reads)
     match /prs/{id} {                                                          // PR reviews, worker writes
