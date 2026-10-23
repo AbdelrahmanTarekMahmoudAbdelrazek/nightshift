@@ -23,7 +23,7 @@ def team_board():
 def open_url(url):
     """The default browser on macOS, Linux, or Windows when running inside WSL2."""
     wsl = 'microsoft' in open('/proc/version').read().lower() if os.path.exists('/proc/version') else False
-    for cmd in (['open', url] if sys.platform == 'darwin' else
+    for cmd in ((['open', url],) if sys.platform == 'darwin' else
                 (['wslview', url], ['cmd.exe', '/c', 'start', '', url.replace('&', '^&')], ['powershell.exe', '-NoProfile', 'Start-Process', url]) if wsl else
                 (['xdg-open', url],)):
         cmd = cmd if isinstance(cmd, list) else cmd

@@ -328,7 +328,7 @@ claude -p "reply with OK" 2>/dev/null | grep -qi ok && ok "claude is signed in" 
 
 step "9/9  Start your worker (runs in the background)"
 RUN="cd \"$REPO\" && exec python3 -u tools/nightshift/sentinel.py worker"
-if yes "Install the background worker now?"; then
+if [ -f "$HOME/Library/LaunchAgents/com.nightshift.worker.plist" ] || [ -f "$HOME/.config/systemd/user/nightshift-worker.service" ] || yes "Install the background worker now?"; then
   if [ "$OS" = Darwin ]; then
     P="$HOME/Library/LaunchAgents/com.nightshift.worker.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
@@ -343,8 +343,20 @@ if yes "Install the background worker now?"; then
   <key>StandardOutPath</key><string>/tmp/nightshift-worker.log</string><key>StandardErrorPath</key><string>/tmp/nightshift-worker.log</string>
 </dict></plist>
 PL
-    launchctl bootout "gui/$(id -u)/com.nightshift.worker" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" "$P" && ok "worker running, starts at login (restart: launchctl kickstart -k gui/\$(id -u)/com.nightshift.worker)"
+    D="gui/$(id -u)"; L=com.nightshift.worker
+    launchctl enable "$D/$L" 2>/dev/null || true
+    launchctl bootout "$D/$L" 2>/dev/null || true
+    for i in $(seq 1 15); do launchctl print "$D/$L" >/dev/null 2>&1 || break; sleep 1; done   # bootout finishes in the background
+    started=0
+    for i in 1 2 3; do launchctl bootstrap "$D" "$P" 2>/dev/null && { started=1; break; }; sleep 3; done
+    [ $started = 1 ] || { launchctl load -w "$P" 2>/dev/null && started=1; }               # older macOS way
+    sleep 2
+    if launchctl print "$D/$L" >/dev/null 2>&1; then
+      launchctl kickstart "$D/$L" 2>/dev/null || true
+      ok "worker running, starts at login (restart: launchctl kickstart -k gui/\$(id -u)/$L · log: tail -f /tmp/nightshift-worker.log)"
+    else
+      warn "macOS did not start the worker. Run:  launchctl bootstrap gui/\$(id -u) $P   (or restart the Mac; it starts at login)"
+    fi
   elif systemctl --user show-environment >/dev/null 2>&1; then
     U="$HOME/.config/systemd/user"; mkdir -p "$U"
     cat > "$U/nightshift-worker.service" <<SV
