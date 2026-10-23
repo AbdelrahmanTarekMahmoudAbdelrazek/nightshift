@@ -103,18 +103,33 @@ step "4/9  Your Bitbucket and Jira access (stays in $CONF on this computer)"
 mkdir -p "$CONF" && chmod 700 "$CONF"
 JIRA_URL="$(grep -E '^\s+jira_base_url:' "$KIT/tools/nightshift/nightshift.example.yaml" | sed -E 's/.*jira_base_url:[[:space:]]*"?([^" #]+)"?.*/\1/')"
 bb_ok() { python3 - "$1" "$2" <<'PY'
-import base64, sys, urllib.request
+# The token must do exactly what the reviews do: read the repo, list PRs, read one PR's commits and diff.
+import base64, json, sys, urllib.request
 e, t = sys.argv[1:3]
-r = urllib.request.Request('https://api.bitbucket.org/2.0/repositories/mitrotek/video_gles3jni',
-                           headers={'Authorization': 'Basic ' + base64.b64encode(f'{e}:{t}'.encode()).decode()})
-try:
-    urllib.request.urlopen(r, timeout=20); sys.exit(0)
-except Exception:
-    sys.exit(1)
+H = {'Authorization': 'Basic ' + base64.b64encode(f'{e}:{t}'.encode()).decode()}
+API = 'https://api.bitbucket.org/2.0/repositories/mitrotek/video_gles3jni'
+def get(u, what):
+    try:
+        return urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=30).read()
+    except Exception as x:
+        print(f"    ✗ cannot {what} ({getattr(x, 'code', x)})", file=sys.stderr); sys.exit(1)
+get(API, 'read the repository: tick read:repository')
+prs = json.loads(get(API + '/pullrequests?pagelen=1&state=OPEN', 'list pull requests: tick read:pullrequest'))
+v = prs.get('values') or []
+if v:
+    n = v[0]['id']
+    get(f'{API}/pullrequests/{n}/commits?pagelen=1', f'read PR #{n} commits: tick read:repository AND read:pullrequest')
+    get(f'{API}/pullrequests/{n}/diff', f'read PR #{n} diff: tick read:repository')
 PY
 }
-if [ -f "$CONF/bitbucket.json" ]; then ok "Bitbucket token already saved"
-else
+if [ -f "$CONF/bitbucket.json" ]; then
+  SBE="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])" 2>/dev/null)"
+  SBT="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['token'])" 2>/dev/null)"
+  if bb_ok "$SBE" "$SBT"; then ok "Bitbucket token saved and working"
+  else warn "your saved Bitbucket token cannot do everything PR Review needs: make a new one"
+    mv "$CONF/bitbucket.json" "$CONF/bitbucket.json.old.$(date +%s)"; fi
+fi
+if [ ! -f "$CONF/bitbucket.json" ]; then
   TOK_URL="https://id.atlassian.com/manage-profile/security/api-tokens"
   echo
   echo "    Bitbucket token (needed, 1 minute). This page opens in your browser now:"
@@ -128,7 +143,7 @@ else
   while true; do
     read -r -s -p "  Paste the Bitbucket token here (it stays hidden) and press Enter: " BT; echo
     if bb_ok "$BE" "$BT"; then break; fi
-    warn "Bitbucket did not accept it (wrong email, token, or missing scopes). Try again, or Ctrl-C to stop."
+    warn "Not accepted (see the ✗ line). Make a new token with BOTH read:repository and read:pullrequest, then paste it again."
   done
   python3 - "$CONF/bitbucket.json" "$BE" "$BT" <<'PY'
 import json, os, sys
