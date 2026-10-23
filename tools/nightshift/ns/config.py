@@ -81,3 +81,23 @@ def app_package(cfg=None):
         return profile(cfg)['package']
     except Exception:
         return 'com.myzesty'
+
+
+def android_sdk():
+    """The Android SDK on this machine: ANDROID_HOME / ANDROID_SDK_ROOT, the checkout's local.properties, then the
+    usual place on macOS (~/Library/Android/sdk) or Linux / WSL2 (~/Android/Sdk)."""
+    for k in ('ANDROID_HOME', 'ANDROID_SDK_ROOT'):
+        if os.environ.get(k) and os.path.isdir(os.environ[k]):
+            return os.environ[k]
+    try:
+        for line in open(os.path.join(REPO, 'local.properties'), encoding='utf-8'):
+            if line.startswith('sdk.dir='):
+                p = line.split('=', 1)[1].strip().replace('\\:', ':').replace('\\\\', '\\')
+                if os.path.isdir(p):
+                    return p
+    except OSError:
+        pass
+    for p in ('~/Library/Android/sdk', '~/Android/Sdk', '~/android-sdk'):
+        if os.path.isdir(os.path.expanduser(p)):
+            return os.path.expanduser(p)
+    return os.path.expanduser('~/Library/Android/sdk' if os.uname().sysname == 'Darwin' else '~/Android/Sdk')

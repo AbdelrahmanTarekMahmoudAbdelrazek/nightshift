@@ -6,7 +6,7 @@ Night Shift gathers every crash and ANR from Crashlytics and Google Play, finds 
 phone, drafts a fix and checks it on the phone. It reviews pull requests with a panel of Claude reviewers, explains Jira
 cards from their screen recordings, and checks that audio stays clean where clips are cut.
 
-Everything shows up on one team board in the browser. Each person's jobs run on **their own Mac**, with **their own
+Everything shows up on one team board in the browser. Each person's jobs run on **their own computer**, with **their own
 phone** and **their own Claude account**, so nobody waits for, or depends on, anyone else's machine.
 
 ---
@@ -37,11 +37,11 @@ flowchart LR
     subgraph Browser["Team board (Firebase, always on)"]
         B["Dashboard · Crashes & ANRs · PR Review<br/>Card Issue · Audio Check · Jobs"]
     end
-    subgraph You["Your Mac"]
+    subgraph You["Your computer"]
         W1["Night Shift worker"] --- P1["your phone"]
         W1 --- C1["your Claude account"]
     end
-    subgraph Mate["A teammate's Mac"]
+    subgraph Mate["A teammate's computer"]
         W2["Night Shift worker"] --- P2["their phone"]
         W2 --- C2["their Claude account"]
     end
@@ -53,10 +53,10 @@ flowchart LR
     BB["Bitbucket + Jira<br/>(read-only)"] --> W1 & W2
 ```
 
-- **The board** is a website on Google Firebase. It's up even when every Mac is off. Sign in with your
+- **The board** is a website on Google Firebase. It's up even when every computer is off. Sign in with your
   @msd-my.com address (a one-click link by email, no password).
-- **A worker** runs in the background on each person's Mac. It picks up the jobs **you** queue and runs them on your
-  Mac. The board host's Mac also runs the daily crash gathering at 08:00 (Egypt), and covers anyone whose Mac is off.
+- **A worker** runs in the background on each person's computer. It picks up the jobs **you** queue and runs them on your
+  computer. The board host's computer also runs the daily crash gathering at 08:00 (Egypt), and covers anyone whose computer is off.
 - **Nothing is ever committed, pushed or merged** by Night Shift. Production (Crashlytics, Play, Bitbucket, Jira) is
   only read.
 
@@ -71,7 +71,7 @@ flowchart LR
 | [PR Review](#pr-review) | Is this pull request safe to merge? | no | 10–25 min |
 | [Card Issue](#card-issue) | What really causes the bug in this Jira card? | no | 15–30 min |
 | [Audio Check](#audio-check) | Does this branch keep audio clean at clip cuts? | yes | 30–45 min |
-| [Jobs](#jobs) | What's running, for whom, on which Mac? | no | live |
+| [Jobs](#jobs) | What's running, for whom, on whose computer? | no | live |
 
 ### Dashboard
 
@@ -190,40 +190,68 @@ outside its usual range.
 
 ### Jobs
 
-Every job: who asked, on whose Mac it runs, its live log and its result. **Cancel** stops a queued or running job.
-If the person's Mac is offline, the job says so instead of waiting silently.
+Every job: who asked, on whose computer it runs, its live log and its result. **Cancel** stops a queued or running job.
+If the person's computer is offline, the job says so instead of waiting silently.
 
 ---
 
 ## Install
 
-You need:
-- a **Mac**;
-- your **`video_gles3jni` checkout** that builds in Android Studio;
-- **Homebrew**, **Node/npm**;
-- **Claude Code** signed in with your company account;
-- an Android **phone with USB debugging**, for Reproduce and Audio Check.
+Works on **macOS**, **Linux** and **Windows (through WSL2)**. You need:
 
+- **Claude Code** signed in with your company account (the AI reviewers run on it);
+- a **Bitbucket SSH key**, only if you don't already have the app checked out (setup clones it for you);
+- **Android SDK** and an Android **phone with USB debugging**, only for Reproduce, Draft fix and Audio Check.
+  PR Review and Card Issue need neither.
+
+You don't need your own `video_gles3jni` checkout, and you don't need to work in that repo. Night Shift builds and
+reads the whole app (the engine plus `android-video-editor-module`, `java-common`, `gallerypicker`). If you have no
+checkout, `setup.sh` clones it into `~/.nightshift_app`, away from your work folders.
+
+**macOS**
 ```bash
-brew install android-platform-tools ffmpeg
+brew install android-platform-tools ffmpeg node git
 npm install -g firebase-tools
 git clone https://github.com/AbdelrahmanTarekMahmoudAbdelrazek/nightshift.git ~/nightshift
-cd ~/nightshift && ./setup.sh ~/video_gles3jni
+cd ~/nightshift && ./setup.sh
 ```
+
+**Linux**
+```bash
+sudo apt update && sudo apt install -y adb ffmpeg nodejs npm python3-pip unzip git
+sudo npm install -g firebase-tools
+git clone https://github.com/AbdelrahmanTarekMahmoudAbdelrazek/nightshift.git ~/nightshift
+cd ~/nightshift && ./setup.sh
+```
+
+**Windows**
+1. In PowerShell (as admin): `wsl --install -d Ubuntu`, then restart and open **Ubuntu**.
+2. Recommended, so the worker keeps running with no window open: run
+   `sudo sh -c 'printf "[boot]\nsystemd=true\n" >> /etc/wsl.conf'`, then `wsl --shutdown` in PowerShell, and reopen Ubuntu.
+3. In Ubuntu, run the **Linux** commands above.
+4. The phone (only for Reproduce and Audio Check), either way:
+   - **Wi-Fi:** phone → Developer options → Wireless debugging → Pair device with pairing code, then in Ubuntu:
+     `adb pair <ip:port>` and `adb connect <ip:port>`.
+   - **USB:** in PowerShell (admin): `winget install usbipd`, `usbipd list`, `usbipd bind --busid <id>`,
+     `usbipd attach --wsl --busid <id>`.
+
+If you already have the app checked out, pass its path: `./setup.sh ~/video_gles3jni`.
 
 `setup.sh` takes about 15 minutes, once. It:
 
-1. checks your tools and Python packages (it asks before installing anything);
-2. links Night Shift into your checkout (`tools/nightshift`, `tools/stress`, hidden from your git status) and adds the
+1. finds your app checkout, or clones it (with your Bitbucket SSH key; it shows how to add one);
+2. checks your tools and Python packages (it asks before installing anything);
+3. links Night Shift into your checkout (`tools/nightshift`, `tools/stress`, hidden from your git status) and adds the
    debug-only lab remote control (`app/src/debug`), which is never part of a release build;
-3. asks for your **Bitbucket API token** (Bitbucket → Personal settings → API tokens, scopes `read:repository` and
-   `read:pullrequest`). It's stored only in `~/.config/nightshift/` on your Mac;
-4. asks **Join or create**:
+4. asks for your **Bitbucket API token** (Bitbucket → Personal settings → API tokens, scopes `read:repository` and
+   `read:pullrequest`). It's stored only in `~/.config/nightshift/` on your computer;
+5. asks **Join or create**:
    - **j: join the team board** (recommended). Use the join pack the board owner sent you
      (`nightshift-join-<you>.zip`).
    - **c: create your own private board.** A free Firebase project in your Google account. Two clicks in the
      Firebase console, with links shown.
-5. finds your phone, writes your settings, installs the Claude review plugins and starts your worker in the background.
+6. finds your phone, writes your settings, installs the Claude review plugins and starts your worker in the background
+   (macOS: a login item; Linux/WSL2: a systemd user service, or a starter that runs when you open the terminal).
 
 **Board owner: inviting a teammate**
 
@@ -279,7 +307,7 @@ Full day-to-day guide: [SOP.md](SOP.md).
 - **Never commits, pushes or merges.** Fixes are patches you apply yourself.
 - **Never touches your working copy.** Crash builds and PR checkouts live in their own folders (`~/.nightshift_lab`,
   `~/.nightshift_pr`).
-- **Keys stay on your Mac** in `~/.config/nightshift/` (mode 600). This repository contains none.
+- **Keys stay on your computer** in `~/.config/nightshift/` (mode 600). This repository contains none.
 - **Free plan:** the board runs on Firebase's free Spark plan.
 - **Your phone:** between jobs you can use it normally. The next phone job installs its own build again (and removes
   a Play/release build once if needed). Don't unplug it while a Reproduce or Audio Check is running.
@@ -291,7 +319,7 @@ Full day-to-day guide: [SOP.md](SOP.md).
 | Problem | Fix |
 |---|---|
 | The board shows only the sidebar, or a red box | Hard-refresh (Cmd+Shift+R). The red box names the cause (blocked network, old browser) |
-| My job stays "queued" | Jobs tab: if it says your Night Shift is offline, start your Mac's worker: `launchctl kickstart -k gui/$(id -u)/com.nightshift.worker` |
+| My job stays "queued" | Jobs tab: if it says your Night Shift is offline, start your worker. macOS: `launchctl kickstart -k gui/$(id -u)/com.nightshift.worker` · Linux/WSL2: `systemctl --user restart nightshift-worker` (or `~/.local/bin/nightshift-worker` without systemd) |
 | Worker log | `tail -f /tmp/nightshift-worker.log` |
 | "could not read it from Bitbucket" | Your token lacks a scope or access to that repo: make a new one with `read:repository` + `read:pullrequest` |
 | Reproduce fails at the first screen | Unlock the phone, keep the screen on, close dialogs. A different phone model may need its first recipe step adjusted |
@@ -305,12 +333,15 @@ Full day-to-day guide: [SOP.md](SOP.md).
 Yes, for the jobs you queue: reviews, root causes and fixes. Audio Check and the crash gathering use no Claude.
 
 **Can someone else's job use my phone?**
-Only if you're the board host and their Mac is offline. Then your Mac covers their job after waiting 90 seconds.
+Only if you're the board host and their computer is offline. Then yours covers their job after waiting 90 seconds.
+
+**Do I need a Mac?**
+No. macOS, Linux and Windows (WSL2) all work. The board itself opens in any browser, including on a phone.
 
 **Does it work for repos other than video_gles3jni?**
 Yes. PR Review takes a link from any repo in the project. Everything project-specific lives in
 `tools/nightshift/nightshift.yaml` (`profile:`).
 
-**What if the board owner's Mac is off?**
-The board stays up, and everyone's own jobs still run on their Macs. The daily gathering is picked up by another Mac
+**What if the board owner's computer is off?**
+The board stays up, and everyone's own jobs still run on their computers. The daily gathering is picked up by another computer
 after 15 minutes.

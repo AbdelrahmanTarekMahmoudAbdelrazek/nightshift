@@ -29,7 +29,7 @@ def tool(name):
     for c in [shutil.which(name), f'/opt/homebrew/bin/{name}', f'/usr/local/bin/{name}']:
         if c and os.path.exists(c):
             return c
-    raise RuntimeError(f'{name} is not installed on the Mac (brew install ffmpeg)')
+    raise RuntimeError(f'{name} is not installed (macOS: brew install ffmpeg · Linux/WSL2: sudo apt install ffmpeg)')
 
 
 def run(cmd, timeout=600):

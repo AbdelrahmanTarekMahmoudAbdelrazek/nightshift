@@ -181,7 +181,8 @@ def add(src, version_code, lib='libMYJNILIB26.so', abi='arm64-v8a', version_name
 
 def _addr2line():
     import glob
-    ndk = sorted(glob.glob(os.path.expanduser('~/Library/Android/sdk/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-addr2line')) +
+    from . import config as _cfg
+    ndk = sorted(glob.glob(os.path.join(_cfg.android_sdk(), 'ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-addr2line')) +
                  glob.glob(os.path.join(os.environ.get('ANDROID_NDK_HOME', '/nonexistent'), 'toolchains/llvm/prebuilt/*/bin/llvm-addr2line')))
     return shutil.which('llvm-addr2line') or (ndk[-1] if ndk else None) or shutil.which('addr2line')
 

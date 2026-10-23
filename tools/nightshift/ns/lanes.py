@@ -9,7 +9,11 @@ import subprocess
 import threading
 import time
 
-SDK = os.path.expanduser(os.environ.get('ANDROID_HOME') or '~/Library/Android/sdk')
+from . import config                                # noqa: E402
+if not hasattr(config, 'android_sdk'):              # long-running worker: pick up the new helper once
+    import importlib as _il
+    _il.reload(config)
+SDK = config.android_sdk()                         # macOS, Linux or WSL2 (ns/config.py)
 EMU = os.path.join(SDK, 'emulator', 'emulator')
 AVD = os.environ.get('NS_LANE_AVD', 'Medium_Phone_API_36')
 
