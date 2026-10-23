@@ -213,6 +213,44 @@ def start_join_responder(db, cfg):
     t.start()
 
 
+def _bb_user_prefixes():
+    """Every https://<user>@bitbucket.org/ form in the app checkout, its submodules and Night Shift's own clones, read from
+    the raw config files (git remote get-url shows the address AFTER our insteadOf rewrite, so the second job of a running
+    worker lost the rule and git asked for 'Password for https://<user>@bitbucket.org'). Remembered for the process."""
+    import glob
+    seen = getattr(threading, '_ns_bb_prefixes', None)
+    if seen is None:
+        seen = set()
+        threading._ns_bb_prefixes = seen
+    files = [os.path.join(config.REPO, '.git', 'config'), os.path.join(config.REPO, '.gitmodules')]
+    files += glob.glob(os.path.join(config.REPO, '.git', 'modules', '**', 'config'), recursive=True)
+    for root in ('~/.nightshift_kotlin/*', '~/.nightshift_pr/repos/*', '~/.nightshift_app/*'):
+        for d in glob.glob(os.path.expanduser(root)):
+            files += [os.path.join(d, '.git', 'config'), os.path.join(d, 'config')]
+    for f in files:
+        try:
+            seen.update(re.findall(r'(https://[^/@\s"]+@bitbucket\.org/)', open(f, errors='replace').read()))
+        except OSError:
+            pass
+    seen.discard('https://x-bitbucket-api-token-auth@bitbucket.org/')
+    return set(seen)
+
+
+def _git_env(pairs):
+    """Hand git extra settings through the environment. GIT_CONFIG_PARAMETERS works on every git (Apple's older
+    git 2.2x included); GIT_CONFIG_COUNT (git 2.31+) is set too. Earlier values of our own are replaced, others kept."""
+    base = getattr(threading, '_ns_git_params_base', None)
+    if base is None:
+        base = os.environ.get('GIT_CONFIG_PARAMETERS', '')
+        threading._ns_git_params_base = base
+    ours = ' '.join("'" + f'{k}={v}'.replace("'", "'\\''") + "'" for k, v in pairs)
+    os.environ['GIT_CONFIG_PARAMETERS'] = (base + ' ' + ours).strip()
+    os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        os.environ[f'GIT_CONFIG_KEY_{i}'] = k
+        os.environ[f'GIT_CONFIG_VALUE_{i}'] = v
+
+
 # ---- git without password prompts (23 Oct) -------------------------------------------------------------------------
 def git_over_ssh():
     """Every git command the worker (and its scripts) runs talks to Bitbucket over SSH, even when the checkout's remote
@@ -226,21 +264,13 @@ def git_over_ssh():
         except Exception:
             threading._ns_git_ssh = False
     os.environ['GIT_TERMINAL_PROMPT'] = '0'             # never wait for a password nobody can type
+    os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')    # no gRPC fork notes mixed into git's errors
     if not threading._ns_git_ssh:
         return git_over_token()
     prefixes = {'https://bitbucket.org/'}
-    try:                                                # https://<user>@bitbucket.org/ remotes need their own rule
-        url = subprocess.run(['git', '-C', config.REPO, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
-        m = re.match(r'(https://[^/@]+@bitbucket\.org/)', url)
-        if m:
-            prefixes.add(m.group(1))
-    except Exception:
-        pass
+    prefixes |= _bb_user_prefixes()                    # https://<user>@bitbucket.org/ remotes need their own rule
     pairs = [(f'url.git@bitbucket.org:.insteadOf', p) for p in sorted(prefixes)] + [('credential.helper', '')]
-    os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
-    for i, (k, v) in enumerate(pairs):
-        os.environ[f'GIT_CONFIG_KEY_{i}'] = k
-        os.environ[f'GIT_CONFIG_VALUE_{i}'] = v
+    _git_env(pairs)
     return True
 
 
@@ -274,19 +304,10 @@ def git_over_token():
         os.chmod(ap, 0o700)
     target = 'https://x-bitbucket-api-token-auth@bitbucket.org/'
     prefixes = {'https://bitbucket.org/', 'git@bitbucket.org:', 'ssh://git@bitbucket.org/'}
-    try:
-        url = subprocess.run(['git', '-C', config.REPO, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
-        m = re.match(r'(https://[^/@]+@bitbucket\.org/)', url)
-        if m:
-            prefixes.add(m.group(1))
-    except Exception:
-        pass
+    prefixes |= _bb_user_prefixes()
     pairs = [(f'url.{target}.insteadOf', p) for p in sorted(prefixes)] + [('credential.helper', '')]
     os.environ['GIT_ASKPASS'] = ap
-    os.environ['GIT_CONFIG_COUNT'] = str(len(pairs))
-    for i, (k, v) in enumerate(pairs):
-        os.environ[f'GIT_CONFIG_KEY_{i}'] = k
-        os.environ[f'GIT_CONFIG_VALUE_{i}'] = v
+    _git_env(pairs)
     return True
 
 

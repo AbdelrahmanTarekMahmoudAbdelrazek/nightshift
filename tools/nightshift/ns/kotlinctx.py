@@ -17,7 +17,10 @@ SKIP_DIRS = {'build', '.git', '.gradle', 'node_modules', 'intermediates', 'gener
 
 
 def _git(args, cwd=None, timeout=180):
-    return subprocess.run(['git'] + args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(['git'] + args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    # drop gRPC log lines a forked child prints ("I1023 ... ev_poll_posix.cc ... FD from fork parent"): they hid git's own error
+    r.stderr = '\n'.join(l for l in (r.stderr or '').splitlines() if not re.match(r'[IWE]\d{4} \d\d:\d\d:\d\d', l)).strip()
+    return r
 
 
 def _remote_base():
