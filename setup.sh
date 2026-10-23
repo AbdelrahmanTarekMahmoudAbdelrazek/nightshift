@@ -115,14 +115,18 @@ PY
 }
 if [ -f "$CONF/bitbucket.json" ]; then ok "Bitbucket token already saved"
 else
-  echo "    Opening the Atlassian token page in your browser. There:"
-  echo "      1) Create API token with scopes → name: Night Shift → expiry: 1 year → Next"
-  echo "      2) App: Bitbucket → Next"
-  echo "      3) Tick read:repository:bitbucket and read:pullrequest:bitbucket → Next → Create → Copy"
-  openurl "https://id.atlassian.com/manage-profile/security/api-tokens"
-  BE="$(ask 'Your Atlassian (company) email')"
+  TOK_URL="https://id.atlassian.com/manage-profile/security/api-tokens"
+  echo
+  echo "    Bitbucket token (needed, 1 minute). This page opens in your browser now:"
+  printf "      \033[4m%s\033[0m\n" "$TOK_URL"
+  echo "      1. Click  Create API token with scopes  → Name: Night Shift → Next"
+  echo "      2. Choose  Bitbucket  → Next"
+  echo "      3. Tick  read:repository  and  read:pullrequest  → Next → Create → Copy"
+  echo
+  openurl "$TOK_URL"
+  BE="$(ask 'Your company email (the one you use for Jira/Bitbucket)')"
   while true; do
-    read -r -s -p "  Paste the token (hidden) and press Enter: " BT; echo
+    read -r -s -p "  Paste the Bitbucket token here (it stays hidden) and press Enter: " BT; echo
     if bb_ok "$BE" "$BT"; then break; fi
     warn "Bitbucket did not accept it (wrong email, token, or missing scopes). Try again, or Ctrl-C to stop."
   done
@@ -136,10 +140,18 @@ PY
 fi
 if [ -f "$CONF/jira.json" ]; then ok "Jira token already saved"
 else
-  echo "    Card Issue reads Jira cards. On the same page: Create API token (the plain one, no scopes) → Night Shift Jira → Create → Copy"
-  echo "    (press Enter without a token to skip; you can add it later by running ./setup.sh again)"
+  TOK_URL="https://id.atlassian.com/manage-profile/security/api-tokens"
+  echo
+  echo "    Jira token (optional, for Card Issue, 1 minute). This page opens in your browser now:"
+  printf "      \033[4m%s\033[0m\n" "$TOK_URL"
+  echo "      1. Click  Create API token  (the plain button, not 'with scopes')"
+  echo "      2. Name: Night Shift Jira → Create"
+  echo "      3. Click Copy, come back here, paste (Cmd+V / Ctrl+Shift+V) and press Enter"
+  echo "      Don't need Card Issue? Just press Enter to skip."
+  echo
+  openurl "$TOK_URL"
   while true; do
-    read -r -s -p "  Paste the Jira token (hidden), or Enter to skip: " JT; echo
+    read -r -s -p "  Paste the Jira token here (it stays hidden), or just Enter to skip: " JT; echo
     [ -z "$JT" ] && { warn "Jira skipped: Card Issue will not work until you add it"; break; }
     if python3 - "$JIRA_URL" "${BE:-$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])")}" "$JT" <<'PY'
 import base64, sys, urllib.request
