@@ -263,18 +263,23 @@ def play_issues(cfg, codes, top=50, log=print):
                         'events': int(it.get('errorReportCount') or 0), 'users': int(it.get('distinctUsers') or 0),
                         'last_report': it.get('lastErrorReportTime', ''),
                         'console_url': it.get('issueUri') or _console_link(cfg, ptype, pid),
-                        'versions': {'last 3 releases': int(it.get('errorReportCount') or 0)}})
+                        'versions': {'all listed builds': int(it.get('errorReportCount') or 0)}})
         log(f'Google Play {ptype}: {n} issues')
     byid = {r['id']: r for r in out}                 # exact per-build counts: one search per build and type
     for code in codes:
         for ptype in ('CRASH', 'ANR'):
-            try:
-                res = _play_get(f'apps/{pkg}/errorIssues:search', _play_interval(days) + [
-                    ('filter', f'errorIssueType = {ptype} AND versionCode = {code}'), ('pageSize', top)], tok, quota)
+            q = _play_interval(days) + [('filter', f'errorIssueType = {ptype} AND versionCode = {code}'), ('pageSize', top)]
+            found, tokn, pages = [], None, 0
+            try:                                     # follow every page: one build can have more than 50 ANR clusters
+                while pages == 0 or (tokn and pages < 20):
+                    res = _play_get(f'apps/{pkg}/errorIssues:search', q + ([('pageToken', tokn)] if tokn else []), tok, quota)
+                    found += res.get('errorIssues', []) or []
+                    tokn, pages = res.get('nextPageToken'), pages + 1
             except RuntimeError as e:
                 log(f'  per-build {code} {ptype}: {str(e)[:120]}')
-                continue
-            for it in res.get('errorIssues', []) or []:
+                if not found:
+                    continue
+            for it in found:
                 r = byid.get('play-' + it.get('name', '').split('/')[-1])
                 if r is not None:
                     r.setdefault('per_build', {})[str(code)] = int(it.get('errorReportCount') or 0)
@@ -421,6 +426,13 @@ def run(db, cfg, log=print, sources=('crashlytics', 'play'), analyse=True, stop=
     except BaseException as e:
         status['merged'] = {'error': str(e)[:300]}
         log(f'merge: FAILED {str(e)[:300]}')
+    try:                                             # new clusters of a known problem (often an old, fixed bug): link them
+        from . import analyse as _an
+        importlib.reload(_an)
+        _rows, _f, fol = _an.link_families(db, log=log)
+        status['linked'] = len(fol)
+    except BaseException as e:
+        log(f'linking related crashes: FAILED {str(e)[:200]}')
     try:                                             # release statistics: crash/ANR rates per build (Play vitals)
         from . import vitals
         importlib.reload(vitals)

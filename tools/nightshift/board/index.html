@@ -1287,12 +1287,18 @@ function groupFamilies(rows) {
   FAM_ROWS = new Map();
   const fams0 = (DATA.families || []).filter(f => f.status === 'confirmed' && (f.cards || []).length > 1);
   const inFam = new Set(fams0.flatMap(f => f.cards || []));
+  const byMid = new Map(rows.map(r => [r.id, r])), linked = new Map(), cid = r => r.caseId || r.id.replace(/^m-/, '');
+  rows.forEach(r => { const p = byMid.get(r.familyOf); if (!p) return; const pid = cid(p), id = cid(r);   // root-cause step: one bug
+    if (inFam.has(id) || inFam.has(pid)) return; if (!linked.has(pid)) linked.set(pid, [pid]); linked.get(pid).push(id); });
+  const inLink = new Set([...linked.values()].flat());
   const auto = new Map();
-  rows.forEach(r => { const id = r.caseId || r.id.replace(/^m-/, ''); if (inFam.has(id)) return; const k = crashPoint(r); if (k) { if (!auto.has(k)) auto.set(k, []); auto.get(k).push(r); } });
+  rows.forEach(r => { const id = r.caseId || r.id.replace(/^m-/, ''); if (inFam.has(id) || inLink.has(id)) return; const k = crashPoint(r); if (k) { if (!auto.has(k)) auto.set(k, []); auto.get(k).push(r); } });
   const fams = fams0.concat([...auto].filter(([, rs]) => rs.length > 1).map(([k, rs]) => ({
     id: 'auto-' + k, status: 'confirmed', auto: true, cards: rs.map(r => r.caseId || r.id.replace(/^m-/, '')),
     title: k.split('|')[1] + ' · same crash point', by: 'Night Shift (auto)',
-    why: 'These reports crash in the same function of the app code (separate Crashlytics issues and Play clusters). Usually one bug; open a member to check before treating them as one.' })));
+    why: 'These reports crash in the same function of the app code (separate Crashlytics issues and Play clusters). Usually one bug; open a member to check before treating them as one.' })))
+    .concat([...linked].map(([pid, ids]) => ({ id: 'link-' + pid, status: 'confirmed', cards: ids, title: 'same bug (linked by Night Shift)',
+      by: 'Night Shift (same stack)', why: 'Night Shift matched these reports to one bug (same crashing code). A fix of the main report covers them all.' })));
   if (!fams.length) return rows;
   const drop = new Set(), lead2row = new Map();
   for (const f of fams) {

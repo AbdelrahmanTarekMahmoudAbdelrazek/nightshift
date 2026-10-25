@@ -569,6 +569,35 @@ class Worker:
         self.do_pull(ref, case)
         if getattr(self, 'cancelled', False):
             raise RuntimeError('cancelled')
+        try:                                          # a cluster of a bigger problem: the work belongs to that problem
+            from . import analyse as _an
+            _an.link_families(self.db, log=lambda t: None)
+        except Exception:
+            pass
+        mine = next(((p + case['id'], d) for p in ('m-', 'm-play-', '') for d in
+                     [self.db.collection('merged').document(p + case['id']).get().to_dict() or {}] if d), (None, {}))[1]
+        prim_id = mine.get('familyOf')
+        if prim_id:
+            prim = self.db.collection('merged').document(prim_id).get().to_dict() or {}
+            pc = str(prim.get('caseId') or prim_id.replace('m-', '', 1))
+            pcase = self.db.collection('cases').document(pc).get().to_dict() or {}
+            name = (prim.get('fb') or {}).get('title') or prim.get('title') or pc
+            fx = prim.get('fixState') or {}
+            st = str(pcase.get('status') or '')
+            self.log(ref, f'same bug as {pc[:12]} ({name[:90]}): this crash is one more report of it, read together with it')
+            self.db.collection('cases').document(case['id']).set({'familyOf': pc, 'familyTitle': name[:200],
+                                                                  'status': 'same-as-known', 'verdict': 'same-bug'}, merge=True)
+            if st.startswith('fix-verified') or fx.get('verified'):
+                where = {'shipped': f"the fix is in {fx.get('release', 'the new release')}: these crashes come from older builds",
+                         'pending': f"the fix is verified but not in {fx.get('release', 'the live release')} yet",
+                         'regressed': f"WARNING: still crashing on {fx.get('release', 'the new release')} after the fix: open {pc[:12]} and re-run Start there"
+                         }.get(fx.get('state'), 'its fix was verified on the lab phone')
+                self.log(ref, f'already fixed: {where}. Nothing to reproduce; open {pc[:12]} on the board for the root cause and the fix')
+                return
+            self.log(ref, f'continuing with {pc[:12]}, the main report of this bug')
+            case = {**pcase, 'id': pc}
+            self.do_pull(ref, case)
+            case = {**case, **(self.db.collection('cases').document(pc).get().to_dict() or {}), 'id': pc}
         case = {**case, **(self.db.collection('cases').document(case['id']).get().to_dict() or {}), 'id': case['id']}
         self.log(ref, 'Start 2/3: root cause (main thread, the thread it waits for, the wait chain, the code)')
         self.do_analyse(ref, case)
@@ -931,6 +960,9 @@ class Worker:
             key = self._build_key() or key            # the healed swap changed the code state
             self._cache_apk(ref, key, t0)
         if rc and any(k in ' '.join(getattr(self, '_last_tail', [])) for k in
+                      ('not enough space', 'INSTALL_FAILED_INSUFFICIENT_STORAGE', 'No space left')):
+            rc = self._phone_full(ref, cmd)
+        if rc and any(k in ' '.join(getattr(self, '_last_tail', [])) for k in
                       ('INSTALL_FAILED_VERSION_DOWNGRADE', 'INSTALL_FAILED_UPDATE_INCOMPATIBLE', 'signatures do not match')):
             self.log(ref, 'the phone has a different build (Play/release): uninstalling it once, then installing the debug build')
             self.run_cmd(ref, f'adb uninstall {config.app_package(getattr(self, "cfg", None))}', 120)
@@ -940,6 +972,27 @@ class Worker:
             k2 = self._build_key()
             c2 = os.path.join(config.REPO, 'tools/nightshift/out/apk_cache', f'{k2}.apk') if k2 else ''
             self._lanes_install(ref, c2 if c2 and os.path.exists(c2) else self._apk_path())
+        return rc
+
+    def _free_mb(self):
+        try:
+            out = subprocess.run(['adb', 'shell', 'df', '-k', '/data'], capture_output=True, text=True, timeout=30).stdout
+            return int(out.strip().splitlines()[-1].split()[3]) // 1024
+        except Exception:
+            return None
+
+    def _phone_full(self, ref, cmd):
+        """The lab phone has no room for the APK. Free only what Android itself can rebuild (app caches, never anyone's
+        files or app data), then try once more; still full -> a plain message saying how much space to make."""
+        before = self._free_mb()
+        self.log(ref, f'the lab phone is full ({before if before is not None else "?"} MB free): clearing app caches on it (no files or app data)')
+        subprocess.run(['adb', 'shell', 'pm', 'trim-caches', '64G'], capture_output=True, text=True, timeout=180)
+        after = self._free_mb()
+        self.log(ref, f'free space now {after if after is not None else "?"} MB; installing again')
+        rc = self._build(ref, cmd)
+        if rc and any(k in ' '.join(getattr(self, '_last_tail', [])) for k in ('not enough space', 'INSTALL_FAILED_INSUFFICIENT_STORAGE', 'No space left')):
+            raise RuntimeError(f'the lab phone is full ({after if after is not None else "?"} MB free, the app needs about 1.5 GB): '
+                               'delete old videos or apps on the phone, then press Start again')
         return rc
 
     def _build(self, ref, cmd):

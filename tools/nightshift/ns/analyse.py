@@ -351,21 +351,38 @@ OURS = ('libMYJNILIB26', 'com.myzesty', 'com.video.myzesty', 'com.ai.myzesty', '
         'com.overlay', 'myzesty')
 
 
+def _engine_fn(text):
+    """'libMYJNILIB26.so MsgLooper::QueueMessage(std::shared_ptr..)' -> 'MsgLooper::QueueMessage'; None for library frames."""
+    t = str(text or '')
+    if 'libMYJNILIB26' not in t:
+        return None
+    fn = re.sub(r'\(.*$', '', t.split('libMYJNILIB26.so', 1)[1]).strip(' ]-')
+    fn = re.sub(r'^.*? - ', '', fn).strip()          # '[lib] File.cpp - Class::fn' -> 'Class::fn'
+    if not fn or fn.startswith(('std::', '__', 'operator', 'void ', 'non-virtual', '0x')) or '::' not in fn:
+        return None                                  # a library frame (std::future, operator new) says nothing about the cause
+    return fn
+
+
 def family_key(m):
     """Same crashing function in our engine = same problem, even when Crashlytics and Play split it into several
-    clusters (different build, offset or inlined caller). Key: kind + the function in the title, without arguments."""
-    t = str(m.get('title') or '')
-    if 'libMYJNILIB26' not in t or '::' not in t:
-        return None                                  # generic titles (libc abort, system) are never grouped
-    fn = re.sub(r'\(.*$', '', t.split('libMYJNILIB26.so', 1)[1]).strip()
-    if not fn or fn.startswith(('std::', '__', 'operator', 'void ', 'non-virtual')) or '::' not in fn:
-        return None                                  # a library frame (std::future, operator new) says nothing about the cause
-    return (m.get('kind') or 'CRASH', fn)
+    clusters (different build, offset, inlined caller, or a title naming only libc/libc++). Key: kind + the first
+    engine function of the title, else of the top frames (Firebase, then Play)."""
+    cands = [m.get('title')] + list((m.get('fb') or {}).get('top') or [])[:8] + list((m.get('play') or {}).get('top') or [])[:8]
+    for t in cands:
+        fn = _engine_fn(t)
+        if fn:
+            return (m.get('kind') or 'CRASH', fn)
+    return None                                      # no engine frame (Java, system): never grouped here
+
+
+def _worked(r):
+    """A report that already has a root cause or a verified fix stays the main one, so new clusters join it."""
+    return 2 if r.get('fixState') else 1 if r.get('analysis') else 0
 
 
 def families(rows):
-    """{merged id: [ids of every report cluster of the same problem]}. The primary of a family is the one with the
-    most field data (Firebase+Play first, then events), it gets the analysis; the others point to it."""
+    """{merged id: [ids of every report cluster of the same problem]}. The primary of a family is the one already worked
+    on (verified fix, then root cause), then the one with the most field data; it gets the analysis, the others point to it."""
     fam = {}
     for r in rows:
         k = family_key(r)
@@ -373,7 +390,7 @@ def families(rows):
             fam.setdefault(k, []).append(r)
     out = {}
     for k, rs in fam.items():
-        rs.sort(key=lambda r: (r.get('match') != 'both', -(((r.get('fb') or {}).get('events') or 0) + ((r.get('play') or {}).get('events') or 0))))
+        rs.sort(key=lambda r: (-_worked(r), r.get('match') != 'both', -(((r.get('fb') or {}).get('events') or 0) + ((r.get('play') or {}).get('events') or 0))))
         for r in rs:
             out[r['id']] = [x['id'] for x in rs]
     return out
@@ -544,10 +561,13 @@ def fs_safe(o):
     return o
 
 
-def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
-    from firebase_admin import firestore
-    rows = [d.to_dict() | {'id': d.id} for d in db.collection('merged').stream()]
-    rows = [r for r in rows if not r.get('stale')]
+def link_families(db, log=print, rows=None):
+    """No model calls: mark every report cluster that belongs to a bigger problem (merged/<id>.familyOf = primary).
+    Run on every gathering too, so the board shows a new cluster of an old, already fixed bug as part of that bug.
+    -> (rows, fams, followers)"""
+    if rows is None:
+        rows = [d.to_dict() | {'id': d.id} for d in db.collection('merged').stream()]
+        rows = [r for r in rows if not r.get('stale')]
     fams = families(rows)
     byid = {r['id']: r for r in rows}
     followers = {i for ids in fams.values() for i in ids[1:]}
@@ -572,6 +592,13 @@ def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
                 pass
     if followers:
         log(f'analysis: {len(followers)} report cluster(s) are part of a bigger problem; read together with it, not alone')
+    return rows, fams, followers
+
+
+def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
+    from firebase_admin import firestore
+    rows, fams, followers = link_families(db, log=log)
+    byid = {r['id']: r for r in rows}
     rows = [r for r in rows if r['id'] not in followers]
     if only:                                         # one crash only (Analyse button / tests): no other problem is touched
         ids = {p + x for x in only for p in ('', 'm-', 'm-play-')}      # this crash's own records, not linked ones
