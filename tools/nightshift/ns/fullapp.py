@@ -19,7 +19,7 @@ from . import config
 
 IDX = os.path.join(config.REPO, 'tools/nightshift/out', 'class_index.json')
 LEARNED = os.path.join(config.REPO, 'tools/nightshift/knowledge', 'build_modes.json')
-SKIP = {'build', '.git', '.gradle', 'node_modules', 'intermediates', 'generated', 'tools', 'out'}
+SKIP = {'build', '.git', '.gradle', 'node_modules', 'intermediates', 'generated', 'tools', 'out', 'ios', 'Pods'}
 RE_CLS = re.compile(r'\b((?:[a-z][a-z0-9_]*\.){2,}[A-Z][A-Za-z0-9_$]*)')
 
 
@@ -27,15 +27,16 @@ def _packages(cfg):
     return [p.strip() for p in str(((cfg or {}).get('profile') or {}).get('code_packages') or 'com.myzesty.').split(',') if p.strip()]
 
 
-def index(max_age=6 * 3600):
+def index(max_age=6 * 3600, root_dir=None, cache=None):
     """{package dirs: [...], classes: [...]} of every .kt/.java under the checkout (cached for 6 h)."""
+    root_dir, cache = root_dir or config.REPO, cache or IDX
     try:
-        if time.time() - os.path.getmtime(IDX) < max_age:
-            return json.load(open(IDX))
+        if time.time() - os.path.getmtime(cache) < max_age:
+            return json.load(open(cache))
     except (OSError, ValueError):
         pass
     pk, cl = set(), set()
-    for root, dirs, files in os.walk(config.REPO):
+    for root, dirs, files in os.walk(root_dir, followlinks=False):
         dirs[:] = [d for d in dirs if d not in SKIP and not d.startswith('.')]
         m = re.search(r'/src/[^/]+/(?:java|kotlin)/(.+)$', root)
         if not m:
@@ -47,8 +48,8 @@ def index(max_age=6 * 3600):
             cl.update(f'{pkg}.{os.path.splitext(f)[0]}' for f in src)
     out = {'packages': sorted(pk), 'classes': sorted(cl), 'at': time.time()}
     try:
-        os.makedirs(os.path.dirname(IDX), exist_ok=True)
-        json.dump(out, open(IDX, 'w'))
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        json.dump(out, open(cache, 'w'))
     except OSError:
         pass
     return out
@@ -92,7 +93,18 @@ def remember(case_id, mode, classes):
 
 
 def decide(case, merged, cfg):
-    """-> {'mode': 'play'|'debug', 'why': str, 'classes': [...]}"""
+    """-> {'mode': 'debug'|'fullsrc'|'play', 'why': str, 'classes': [...]}. A full-app crash is built from source when
+    this computer has a myzesty_mobile checkout (fullsrc, fix verified), else the real app from Google (play)."""
+    d = _decide(case, merged, cfg)
+    if d['mode'] == 'play':
+        from . import fulllab
+        src = fulllab.checkout(cfg)
+        if src:
+            d = {**d, 'mode': 'fullsrc', 'why': d['why'] + f'; built from your myzesty_mobile ({src})'}
+    return d
+
+
+def _decide(case, merged, cfg):
     pk = _packages(cfg)
     texts = [case.get('title'), case.get('subtitle'), case.get('stack')]
     for f in case.get('frames') or []:
@@ -192,3 +204,70 @@ def ensure_play_build(pkg, log=print, wait_min=15):
                 log(f'lab phone: tapped "{tapped}" in the Play Store; waiting for the download')
     raise RuntimeError('the Play build did not install in 15 min: on the lab phone open the Play Store, check the Google '
                        'account is an internal tester of MyZesty and tap Install, then press Start again')
+
+
+# ------------------------------------------------------------------ the exact field build from Google (26 Oct)
+
+APKS = os.path.expanduser('~/.nightshift_apks')     # downloaded signed universal APKs, one per build (outside the repo)
+
+
+def field_build(case, merged=None):
+    """The build the crash came from: the case's build with the most events ('1.25.1 (800054871)' -> '800054871')."""
+    vers = case.get('versions') or case.get('sync_versions') or {}
+    best = max(((k, v) for k, v in vers.items() if re.search(r'\d{6,}', k)), key=lambda kv: kv[1] or 0, default=(None, 0))[0]
+    if not best:
+        pb = (merged or {}).get('perBuild') or {}
+        best = max(pb, key=lambda b: (pb[b].get('fb') or 0) + (pb[b].get('play') or 0), default=None)
+    m = re.search(r'(\d{6,})', str(best or ''))
+    return m.group(1) if m else None
+
+
+def download_apk(cfg, vc, log=print):
+    """The signed universal APK of build vc (Play Console > App bundle explorer > Downloads, through the Play API).
+    Kept in ~/.nightshift_apks/ so each build is downloaded once."""
+    from . import symbols_auto as sa
+    import urllib.parse
+    os.makedirs(APKS, exist_ok=True)
+    dst = os.path.join(APKS, f'{vc}-universal.apk')
+    if os.path.exists(dst) and os.path.getsize(dst) > 1_000_000:
+        return dst
+    pkg = cfg['app']['package']
+    tok = sa._token()
+    gen = sa._get(f'{sa.API}/applications/{pkg}/generatedApks/{vc}', tok)
+    did = next(((g.get('generatedUniversalApk') or {}).get('downloadId') for g in gen.get('generatedApks', []) or []
+                if (g.get('generatedUniversalApk') or {}).get('downloadId')), None)
+    if not did:
+        raise RuntimeError(f'Google Play has no universal APK for build {vc}')
+    log(f'lab phone: downloading the real app of build {vc} from Google Play (once; about 300 MB)')
+    url = f'{sa.API}/applications/{pkg}/generatedApks/{vc}/downloads/{urllib.parse.quote(did, safe="")}:download?alt=media'
+    r = sa._get(url, tok, raw=True)
+    with open(dst + '.part', 'wb') as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    os.replace(dst + '.part', dst)
+    return dst
+
+
+def ensure_exact_build(cfg, vc, log=print):
+    """The real app of build vc on the lab phone. Another build (our debug build, or a newer/older real one) is
+    uninstalled first: different signature or a downgrade (clears the app data on the LAB phone)."""
+    pkg = cfg['app']['package']
+    st = installed(pkg)
+    d = _sh('shell', 'dumpsys', 'package', pkg, timeout=60)
+    debuggable = 'DEBUGGABLE' in ''.join(re.findall(r'pkgFlags=\[([^\]]*)\]', d))
+    if st['installed'] and st['version'] == str(vc) and not debuggable:
+        log(f'lab phone: the real app of build {vc} is installed')
+        return st
+    apk = download_apk(cfg, vc, log)
+    if st['installed']:
+        log(f"lab phone: it has {'our debug build' if debuggable else 'build ' + st['version']}; uninstalling it for build {vc} "
+            '(clears the app data on the lab phone)')
+        _sh('uninstall', pkg, timeout=120)
+    out = _sh('install', apk, timeout=900)
+    if 'Success' not in out:
+        raise RuntimeError(f'the real app of build {vc} did not install: {" ".join(out.split())[-200:]}')
+    log(f'lab phone: real app of build {vc} installed (exactly what users have)')
+    return installed(pkg)

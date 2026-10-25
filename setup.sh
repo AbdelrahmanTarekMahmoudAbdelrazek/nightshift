@@ -295,6 +295,21 @@ open(p, 'w', encoding='utf-8').write(s)
 PY
 ok "nightshift.yaml: board $PROJ, phone ${SERIAL:-none}, base $BASE"
 
+if ! grep -qE '^full_app:' "$Y"; then                 # the full app (myzesty_mobile): full-app crashes built from source here
+  FA=""
+  for c in "$HOME/myzesty_mobile" "$HOME/AndroidStudioProjects/myzesty_mobile" "$HOME/Projects/myzesty_mobile" "$HOME/Documents/myzesty_mobile" "$HOME/StudioProjects/myzesty_mobile"; do
+    [ -d "$c/android/app" ] && [ -d "$c/.git" ] && { FA="$c"; break; }; done
+  [ -z "$FA" ] && FA="$(ask 'Path of your myzesty_mobile checkout, if you have one (Enter to skip)')"
+  FA="${FA/#\~/$HOME}"
+  if [ -n "$FA" ] && [ -d "$FA/android/app" ]; then
+    printf '\nfull_app:\n  path: "%s"                 # full-app crashes are built from here (its release branch), fixes verified on the phone\n' "$FA" >> "$Y"
+    ok "full app: $FA (crashes in templates, photo editor, tasks... are built from it)"
+    [ -d "$FA/node_modules" ] || warn "run 'npm install' in $FA once, so Night Shift can build the full app"
+  else
+    ok "no myzesty_mobile here: full-app crashes use the real app of that build from Google (fix written, not tested)"
+  fi
+fi
+
 step "7/9  Publish your board"
 if [ "$ROLE" = "join" ]; then ok "joined the team board: nothing to publish (its owner publishes it)"; else
 B="$KIT/tools/nightshift/board"

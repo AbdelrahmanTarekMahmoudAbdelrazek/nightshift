@@ -1172,8 +1172,8 @@ function jobWhere(j) {
   if (j.status !== 'queued' || !Object.keys(WORKERS).length) return '';
   const who = String(j.requestedBy || '').toLowerCase();
   if (!who.includes('@') || workerAlive(who)) return '';
-  return hostAlive() ? `<span class="t-warn">${esc(who.split('@')[0])}'s Night Shift is offline: the lab Mac takes it in about 1-2 min</span>`
-                     : `<span class="t-bad">no Night Shift worker is online for ${esc(who.split('@')[0])}: it waits until their Mac is on</span>`;
+  if (/^sync/.test(j.action)) return hostAlive() ? '' : '<span class="t-bad">the board host\'s computer is off: the gathering waits until it is on</span>';
+  return `<span class="t-warn">${esc(who.split('@')[0])}'s Night Shift is offline: it waits until their own computer is on (jobs never run on someone else's computer)</span>`;
 }
 function renderJobs() {
   const active = jobs.filter(j => /queued|running/.test(j.status)).length;
@@ -2187,8 +2187,8 @@ function openProblem(id, keep) {
           ${m.play?.url ? `<a class="iconbtn" href="${esc(m.play.url)}" target="_blank" title="Open in Google Play Console">Play ↗</a>` : ''}
           ${F ? F.members.filter(x => x.url).map((x, i) => `<a class="iconbtn" href="${esc(x.url)}" target="_blank" title="${esc('Open stack ' + (i + 1) + ' in Crashlytics: ' + x.name)}">Crashlytics ${i + 1} ↗</a>`).join('') : m.fb?.url ? `<a class="iconbtn" href="${esc(m.fb.url)}" target="_blank" title="Open in Crashlytics">Crashlytics ↗</a>` : ''}
           ${fbId ? `<button class="iconbtn primary" onclick="queue('start','${esc(fbId)}')" title="Everything in one go: pull, root cause, reproduce on the lab phone, fix, check on the phone, hand-over drafts (plug in the lab phone first)">▶ Start</button><button class="iconbtn" onclick="queue('analyse','${esc(fbId)}')" title="Root cause only (about 5 min)">${a.summary ? 'Re-analyse' : 'Analyse'}</button><button class="iconbtn" onclick="queue('pull','${esc(fbId)}')" title="Pull fresh events from Crashlytics (no root cause)">Refresh</button><button class="iconbtn" onclick="openCase('${esc(fbId)}')">Case</button>${(() => { const ci = DATA.issues.find(x => x.id === fbId) || {}, bm = ci.buildMode || '';
-            const lbl = bm === 'play' ? 'Play build' : bm === 'debug' ? 'Debug build' : ci.buildUsed === 'play' ? 'Play build (auto)' : 'Build: auto';
-            return `<button class="iconbtn" onclick="queue('build-mode','${esc(fbId)}|next')" title="${esc('Which app the lab phone runs for this crash. Auto: the debug build from video_gles3jni, or the Play internal-test build when the crash is in code only the full app has.' + (ci.buildWhy ? ' Last run: ' + ci.buildWhy : '') + ' Click to switch: auto → Play → debug → auto.')}">${lbl}</button>`; })()}` : ''}
+            const lbl = bm === 'play' ? 'Full app' : bm === 'debug' ? 'video_gles3jni build' : /play|fullsrc/.test(ci.buildUsed || '') ? 'Full app (auto)' : 'Build: auto';
+            return `<button class="iconbtn" onclick="queue('build-mode','${esc(fbId)}|next')" title="${esc('Which app the lab phone runs for this crash. Auto: the debug build from video_gles3jni; for code only the full app has, the full app (built from myzesty_mobile on computers that have it, else the real app of that build from Google).' + (ci.buildWhy ? ' Last run: ' + ci.buildWhy : '') + ' Click to switch: auto → full app → video_gles3jni → auto.')}">${lbl}</button>`; })()}` : ''}
           <button class="iconbtn" onclick="copyText(location.origin + location.pathname + '#problems/${esc(m.id)}', this)" title="Copy link">Link</button>
           <button class="x" onclick="closeProblem()" title="Close (Esc)">✕</button></div></div>
       <h2 class="dv-title" title="${esc(F?.title || m.title)}"${F ? ' style="font-family:inherit"' : ''}>${esc(F?.title || shortSig(m.title))}</h2>

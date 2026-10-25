@@ -699,18 +699,33 @@ class Worker:
             th.join(2400)
             self._prebuild_th = None
         self._restore_swaps(ref)
-        self._play_mode = False
-        try:                                          # crashes in parts only the full app has: the Play build, not ours
+        self._play_mode = self._full_mode = False
+        try:                                          # crashes in parts only the full app has: the full app, not our build
             from . import fullapp
             importlib.reload(fullapp)
             bm = fullapp.decide(case, self._merged(case), self.cfg)
             self._play_mode = bm['mode'] == 'play'
+            self._full_mode = bm['mode'] == 'fullsrc'
+            self._play_vc = fullapp.field_build(case, self._merged(case)) if bm['mode'] != 'debug' else None
+            if self._full_mode:                       # the full app from this person's myzesty_mobile, release branch of the crash
+                from . import fulllab
+                importlib.reload(fulllab)
+                vn = next((k.split(' ')[0] for k in (case.get('versions') or {}) if self._play_vc and self._play_vc in k), None)
+                try:
+                    wt, br, sha = fulllab.ensure(self.cfg, vn, log=lambda t: self.log(ref, t))
+                    config.LAB = wt                   # fixes and builds happen there (reset when the job ends)
+                    bm['why'] += f' · {br} @ {sha[:10]}'
+                except Exception as e:                # the checkout cannot be used: the real app from Google instead
+                    self.log(ref, f'full app from myzesty_mobile not possible ({str(e)[:200]}); using the real app from Google')
+                    self._full_mode, self._play_mode, bm['mode'] = False, True, 'play'
             self.db.collection('cases').document(case['id']).set({'buildUsed': bm['mode'], 'buildWhy': bm['why']}, merge=True)
-            self.log(ref, f"lab build: {'the Play internal-test build' if self._play_mode else 'the debug build from video_gles3jni'} ({bm['why']})")
+            self.log(ref, 'lab build: ' + {'play': 'the real app of the crashing build from Google (fix cannot be tested on it)',
+                                           'fullsrc': 'the full app built from myzesty_mobile (debug)',
+                                           'debug': 'the debug build from video_gles3jni'}[bm['mode']] + f" ({bm['why']})")
         except Exception as e:
             self.log(ref, f'lab build: could not decide ({str(e)[:120]}); using the debug build')
         lt = os.path.join(config.REPO, 'tools/nightshift/out', 'labtask.json')
-        use = (self.cfg.get('lab') or {}).get('build_as_shipped', True) and not os.path.exists(lt) and not self._play_mode
+        use = (self.cfg.get('lab') or {}).get('build_as_shipped', True) and not os.path.exists(lt) and not self._play_mode and not self._full_mode
         self._lanes_start(ref)                       # emulator lanes boot while the build compiles
         swaps = self._shipped_swap(ref, case) if use else []
         self._swaps = swaps                          # install_app may extend it when the old/new mix does not compile
@@ -945,11 +960,33 @@ class Worker:
             pass
 
     def install_app(self, ref):
-        if getattr(self, '_play_mode', False):        # full-app crash: the Play internal-test build from the Play Store
+        if getattr(self, '_full_mode', False):        # full app from myzesty_mobile (this person's checkout)
+            return self._install_full(ref)
+        if getattr(self, '_play_mode', False):        # full-app crash: the real app of the build that crashed (from Google)
             from . import fullapp
-            fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
+            vc = getattr(self, '_play_vc', None)
+            try:
+                if not vc:
+                    raise RuntimeError('the build of this crash is not known')
+                fullapp.ensure_exact_build(self.cfg, vc, log=lambda t: self.log(ref, t))
+            except Exception as e:                    # no Play download access: the latest internal-test build instead
+                self.log(ref, f'exact build {vc or "?"} not available ({str(e)[:160]}); using the latest Play Store build instead')
+                fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
             return 0
         return self._install_debug(ref)
+
+    def _install_full(self, ref):
+        from . import fulllab
+        cmd = fulllab.install_cmd(self.cfg)
+        rc = self.run_cmd(ref, cmd, 3600, cwd=config.LAB)
+        tail = ' '.join(getattr(self, '_last_tail', []) or [])
+        if rc and any(k in tail for k in ('INSTALL_FAILED_UPDATE_INCOMPATIBLE', 'signatures do not match', 'INSTALL_FAILED_VERSION_DOWNGRADE')):
+            self.log(ref, 'the lab phone has a differently signed app: uninstalling it for the full-app debug build (clears the app data on the lab phone)')
+            self.run_cmd(ref, f'adb uninstall {config.app_package(getattr(self, "cfg", None))}', 120)
+            rc = self.run_cmd(ref, cmd, 3600, cwd=config.LAB)
+        if rc and any(k in ' '.join(getattr(self, '_last_tail', []) or []) for k in ('not enough space', 'INSUFFICIENT_STORAGE')):
+            rc = self._phone_full(ref, f'cd "{config.LAB}" && {cmd}')
+        return rc
 
     def _install_debug(self, ref):
         """Build + install the debug build. Only a signature/version clash (a Play build on the phone) is fixed by
@@ -959,8 +996,9 @@ class Worker:
         try:                                          # the Play build is on the phone (an earlier full-app crash): it is signed
             from . import fullapp                     # differently, so it goes first (clears the app data on the lab phone)
             pkg = config.app_package(getattr(self, 'cfg', None))
-            if fullapp.installed(pkg).get('play'):
-                self.log(ref, 'the lab phone has the Play build from a full-app crash: uninstalling it for the debug build (clears the app data on the lab phone)')
+            _d = subprocess.run(['adb', 'shell', 'dumpsys', 'package', pkg], capture_output=True, text=True, timeout=60).stdout
+            if f'Package [{pkg}]' in _d and 'DEBUGGABLE' not in ''.join(re.findall(r'pkgFlags=\[([^\]]*)\]', _d)):
+                self.log(ref, 'the lab phone has a real (release) app from a full-app crash: uninstalling it for the debug build (clears the app data on the lab phone)')
                 self._save_install(cmd, None)
                 self.run_cmd(ref, f'adb uninstall {pkg}', 120)
         except Exception as e:
@@ -1258,9 +1296,9 @@ class Worker:
             raise RuntimeError('another stress run is using the phone; try again when it finishes')
         install = (self.cfg.get('lab') or {}).get('repro_install') or self.cfg['lab']['anrsan_install']
         applied = []
-        if getattr(self, '_play_mode', False):
+        if getattr(self, '_play_mode', False) or getattr(self, '_full_mode', False):
             if hooks:
-                self.log(ref, f'Play build: {len(hooks)} debug hook(s) skipped (the Play build cannot be patched; real taps only)')
+                self.log(ref, f'full app: {len(hooks)} engine debug hook(s) of video_gles3jni skipped')
             hooks = []
         try:
             for h in hooks:
@@ -2000,36 +2038,18 @@ class Worker:
             return False
 
     def route(self, job):
-        """Should THIS worker take the job? Mine; shared board work (anyone); or a colleague's job when this worker
-        serves others and their own worker is not online. The claim transaction still guarantees one runner."""
+        """Should THIS worker take the job? (26 Oct, the team's rule) A person's job runs ONLY on that person's own
+        worker, never on a colleague's computer, even when theirs is off (it waits until they are back). The only
+        board-wide work is the gathering (daily sync, Sync now) and scheduled checks: the board host runs those.
+        The claim transaction still guarantees one runner."""
         me = _owner(self.cfg)
         if not me:
             return True                                     # single-worker setup: run everything (as before)
         who = str(job.get('requestedBy') or '').strip().lower()
         serve = bool((self.cfg.get('worker') or {}).get('serve_others'))
-        if job.get('action') == 'card-read' and not serve and not _has_jira():
-            return False                                    # no Jira token here: the board host reads the card instead
-        if who == me:
-            return True
-        if '@' not in who:                                  # scheduled ('daily 08:00', 'nightly golden check'): the host
-            if serve:                                       # runs it; if the host is off, any worker after 15 min (not phone work)
-                return True
-            try:
-                q = job.get('queuedAt')
-                return job.get('action') not in PHONE_ACTIONS and q is not None and (dt.datetime.now(dt.timezone.utc) - q).total_seconds() > 900
-            except Exception:
-                return False
-        if job.get('action') in SHARED_ACTIONS:
-            return True
-        if serve and job.get('action') == 'card-read' and self._caps(who).get('hasJira') is False:
-            return True                                     # their computer has no Jira token: the host reads the card
-        if not serve or self._alive(who):
-            return False
-        try:                                                # give their own worker 90 s to wake up and claim it first
-            q = job.get('queuedAt')
-            return q is None or (dt.datetime.now(dt.timezone.utc) - q).total_seconds() > 90
-        except Exception:
-            return True
+        if job.get('action') in ('sync', 'sync-full') or '@' not in who:
+            return serve                                    # board-wide gathering / scheduled work: the board host only
+        return who == me                                    # everything else: the requester's own computer, nobody else's
 
     def handle(self, snap):
         job = snap.to_dict()
