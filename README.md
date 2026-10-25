@@ -248,7 +248,14 @@ If you already have the app checked out, pass its path: `./setup.sh ~/video_gles
    copied for you; paste it on the page that opens). Want your own tokens anyway? Run `./setup.sh --tokens`;
 5. **opens "Connect this computer"** on the team board: sign in with your @msd-my.com address and wait a few
    seconds. Your computer receives the board's settings by itself. There's nothing to download or send;
-6. finds your phone, writes your settings, installs the Claude review plugins and starts your worker in the background.
+6. finds your phone, writes your settings, installs the Claude review plugins, signs you in to GitHub once (`gh`, for
+   the shared crash symbols) and starts your worker in the background.
+
+**Crash symbols (function names + file:line).** The board host keeps every build's symbols and shares them in this
+repo's Releases (`symbols-<versionCode>`, not app releases). The first time your computer meets a crash from a new
+build it downloads that build's file once (10-40 MB) and keeps it. Without GitHub it asks the board host's computer
+instead. The board's Releases page shows which builds have full symbols; download a missing build's .aab from Play
+Console into Downloads on the host Mac and the next sync takes care of the rest.
 
 The board host's computer must be on for step 5 (it hands over the connection), and later for PR lists and Card Issue
 if you have no tokens of your own.

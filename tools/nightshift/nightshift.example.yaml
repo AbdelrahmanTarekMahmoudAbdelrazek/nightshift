@@ -116,3 +116,6 @@ server_content:                    # card reviews: content the app downloads (re
 worker:                                   # shared board: whose jobs this worker runs
   owner: a.tarek@msd-my.com
   serve_others: true                      # lab host: also runs jobs of people whose own worker is offline
+
+symbols:
+  github_repo: AbdelrahmanTarekMahmoudAbdelrazek/nightshift   # the team's private kit repo: each build's symbols go to its Releases

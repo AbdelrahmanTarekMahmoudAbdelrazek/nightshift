@@ -613,6 +613,7 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
   </section>
   <section id="tab-releases" class="hidden">
     <div class="p-head"><h2>Releases</h2><span class="p-scope">every build Crashlytics saw in the last 30 days · rates from Google Play vitals</span></div>
+    <div class="card" id="r-symbols" style="margin:0 0 12px;padding:10px 14px"></div>
     <div class="rel-wrap">
       <div id="r-list"></div>
       <div>
@@ -1748,7 +1749,20 @@ function renderDashboardV1() {
 }
 /* ---- Releases ---- */
 let selRel = null, selBuild = null, selKind = '';
+function renderSymbols() {
+  const el = $('#r-symbols'); if (!el) return;
+  const S = DATA.symbolsDoc || {}, B = S.builds || {}, codes = Object.keys(B).sort().reverse();
+  if (!codes.length) { el.innerHTML = '<b>Crash symbols</b> <span class="muted small">appear after the next sync on the board host</span>'; return; }
+  const st = b => !b.have ? ['missing', 'fx-bad', 'No symbols: download this build\'s .aab from Play Console into Downloads on the board host Mac']
+    : b.full ? ['names + file:line', 'fx-good', 'Full debug symbols (from the .aab)'] : ['names only', 'fx-warn', 'Function names only: download the .aab into Downloads on the board host Mac for file:line'];
+  el.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><b>Crash symbols</b><span class="muted small">shared with the team through ${esc(S.repo || 'GitHub')} (Releases); each computer downloads a build once</span></div>
+    <table class="small" style="margin-top:6px;width:100%"><thead><tr><th>Build</th><th>Version</th><th>Symbols</th><th>Shared</th><th></th></tr></thead><tbody>${codes.map(c => { const b = B[c], [l, k, t] = st(b);
+      return `<tr style="${b.hidden ? 'opacity:.5' : ''}"><td class="mono">${esc(c)}</td><td>${esc(b.version || '')}</td><td><span class="tbadge ${k}" title="${esc(t)}">${esc(l)}</span></td>
+        <td>${b.hidden ? 'hidden' : b.shared ? 'on GitHub' : `<span class="muted" title="${esc(b.shareNote || '')}">not yet</span>`}</td>
+        <td>${b.have ? `<button class="iconbtn" onclick="queue('symbols-hide','${esc(c)}|${b.hidden ? 'show' : 'hide'}')" title="${b.hidden ? 'Offer this build to teammates again' : 'Teammates stop downloading this build. The file stays on GitHub; nothing is deleted.'}">${b.hidden ? 'Show' : 'Hide'}</button>` : ''}</td></tr>`; }).join('')}</tbody></table>`;
+}
 function renderReleases() {
+  renderSymbols();
   const rel = DATA.releasesDoc?.releases || []; const v = vit(); const scope = new Set(scopeCodes());
   if (!rel.length) { $('#r-list').innerHTML = '<div class="empty">Releases arrive with the next sync.</div>'; return; }
   if (!selRel || !rel.find(r => r.version === selRel)) selRel = rel[0].version;
@@ -2172,7 +2186,9 @@ function openProblem(id, keep) {
         <div class="dv-act">
           ${m.play?.url ? `<a class="iconbtn" href="${esc(m.play.url)}" target="_blank" title="Open in Google Play Console">Play ↗</a>` : ''}
           ${F ? F.members.filter(x => x.url).map((x, i) => `<a class="iconbtn" href="${esc(x.url)}" target="_blank" title="${esc('Open stack ' + (i + 1) + ' in Crashlytics: ' + x.name)}">Crashlytics ${i + 1} ↗</a>`).join('') : m.fb?.url ? `<a class="iconbtn" href="${esc(m.fb.url)}" target="_blank" title="Open in Crashlytics">Crashlytics ↗</a>` : ''}
-          ${fbId ? `<button class="iconbtn primary" onclick="queue('start','${esc(fbId)}')" title="Everything in one go: pull, root cause, reproduce on the lab phone, fix, check on the phone, hand-over drafts (plug in the lab phone first)">▶ Start</button><button class="iconbtn" onclick="queue('analyse','${esc(fbId)}')" title="Root cause only (about 5 min)">${a.summary ? 'Re-analyse' : 'Analyse'}</button><button class="iconbtn" onclick="queue('pull','${esc(fbId)}')" title="Pull fresh events from Crashlytics (no root cause)">Refresh</button><button class="iconbtn" onclick="openCase('${esc(fbId)}')">Case</button>` : ''}
+          ${fbId ? `<button class="iconbtn primary" onclick="queue('start','${esc(fbId)}')" title="Everything in one go: pull, root cause, reproduce on the lab phone, fix, check on the phone, hand-over drafts (plug in the lab phone first)">▶ Start</button><button class="iconbtn" onclick="queue('analyse','${esc(fbId)}')" title="Root cause only (about 5 min)">${a.summary ? 'Re-analyse' : 'Analyse'}</button><button class="iconbtn" onclick="queue('pull','${esc(fbId)}')" title="Pull fresh events from Crashlytics (no root cause)">Refresh</button><button class="iconbtn" onclick="openCase('${esc(fbId)}')">Case</button>${(() => { const ci = DATA.issues.find(x => x.id === fbId) || {}, bm = ci.buildMode || '';
+            const lbl = bm === 'play' ? 'Play build' : bm === 'debug' ? 'Debug build' : ci.buildUsed === 'play' ? 'Play build (auto)' : 'Build: auto';
+            return `<button class="iconbtn" onclick="queue('build-mode','${esc(fbId)}|next')" title="${esc('Which app the lab phone runs for this crash. Auto: the debug build from video_gles3jni, or the Play internal-test build when the crash is in code only the full app has.' + (ci.buildWhy ? ' Last run: ' + ci.buildWhy : '') + ' Click to switch: auto → Play → debug → auto.')}">${lbl}</button>`; })()}` : ''}
           <button class="iconbtn" onclick="copyText(location.origin + location.pathname + '#problems/${esc(m.id)}', this)" title="Copy link">Link</button>
           <button class="x" onclick="closeProblem()" title="Close (Esc)">✕</button></div></div>
       <h2 class="dv-title" title="${esc(F?.title || m.title)}"${F ? ' style="font-family:inherit"' : ''}>${esc(F?.title || shortSig(m.title))}</h2>
@@ -2840,6 +2856,7 @@ async function bootLive() {
     db.collection('config').doc('sync').onSnapshot(d => { DATA.sync = d.exists ? d.data() : null; renderSync(); if (DATA.issues) renderIssues(); renderProblems(); });
     db.collection('config').doc('vitals').onSnapshot(d => { DATA.vitalsRaw = d.exists ? d.data() : null; renderAll(); });
     db.collection('config').doc('releases').onSnapshot(d => { DATA.releasesDoc = d.exists ? d.data() : null; renderAll(); });
+    db.collection('config').doc('symbols').onSnapshot(d => { DATA.symbolsDoc = d.exists ? d.data() : null; renderSymbols(); }, () => {});
     db.collection('config').doc('trends').onSnapshot(d => { DATA.trends = d.exists ? d.data() : null; renderAll(); });
     db.collection('merged').onSnapshot(q => { DATA.merged = q.docs.map(d => scopeStack({ id: d.id, ...d.data() })); renderProblems(); });
     $('#p-sync').onclick = () => { queueSync(); $('#p-sync').textContent = 'Sync queued…'; setTimeout(() => $('#p-sync').textContent = 'Sync now', 8000); };

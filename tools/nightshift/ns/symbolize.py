@@ -9,6 +9,7 @@ Pure-Python ELF reader; demangling via c++filt / llvm-cxxfilt when available.
 import bisect
 import json
 import os
+import time
 import re
 import shutil
 import struct
@@ -212,10 +213,56 @@ def resolve(version_code, version_name, native_lib):
     return None, False
 
 
-def symbolize_frames(frames, version_code, native_lib, version_name=None):
-    p, assumed = resolve(version_code, version_name, native_lib)
-    if not p:
+def _via_host(frames, version_code, native_lib, version_name):
+    """No symbols for this build on this computer (a teammate's): the board host names the pcs (relay), cached here."""
+    idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and not f.get('func') and f.get('address')]
+    if not idx:
         return frames, False
+    cf = os.path.join(STORE, '_from_host', f'{version_code}_{native_lib}.json')
+    try:
+        cache = json.load(open(cf))
+    except (OSError, ValueError):
+        cache = {}
+    ask = sorted({int(frames[i]['address']) for i in idx} - {int(k) for k in cache})
+    if ask:
+        if getattr(_via_host, 'down_until', 0) > time.time():
+            return frames, False                    # the host did not answer a minute ago: do not wait again for every event
+        try:
+            from . import relay
+            res = relay.symbolize(ask, version_code, version_name, native_lib)
+            cache.update({str(a): r for a, r in zip(ask, res)})
+            os.makedirs(os.path.dirname(cf), exist_ok=True)
+            json.dump(cache, open(cf, 'w'))
+        except Exception:
+            _via_host.down_until = time.time() + 120
+            return frames, False
+    for i in idx:
+        r = cache.get(str(int(frames[i]['address']))) or {}
+        if r.get('func'):
+            frames[i]['func'] = r['func']
+            frames[i]['srcline'] = r.get('srcline')
+            frames[i]['named_by'] = r.get('named_by') or 'board-host'
+            if r.get('assumed_lib'):
+                frames[i]['assumed_lib'] = True
+    return frames, True
+
+
+def symbolize_frames(frames, version_code, native_lib, version_name=None, relay_ok=True):
+    p, assumed = resolve(version_code, version_name, native_lib)
+    if relay_ok and (not p or not p.endswith('.dbg') or assumed) and not _host_here():
+        try:                                        # a teammate's computer: the build's symbols from the team's GitHub, once
+            from . import symshare
+            if symshare.fetch(version_code):
+                p, assumed = resolve(version_code, version_name, native_lib)
+        except Exception:
+            pass
+    if not p or (relay_ok and not p.endswith('.dbg') and not _host_here()):
+        if relay_ok and not _host_here():           # the host has the full debug symbols (.aab): ask it first
+            fr, did = _via_host(frames, version_code, native_lib, version_name)
+            if did and not p:
+                return fr, did
+        if not p:
+            return frames, False
     sym = Symbolizer(p)
     idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and not f.get('func') and f.get('address')]
     res = sym.lookup([int(frames[i]['address']) for i in idx])
@@ -239,6 +286,15 @@ def symbolize_frames(frames, version_code, native_lib, version_name=None):
     except Exception:
         pass
     return frames, bool(idx)
+
+
+def _host_here():
+    """True on the board host (it keeps the symbol store); False on a teammate's computer."""
+    try:
+        from . import config as _c
+        return bool(((_c.load() or {}).get('worker') or {}).get('serve_others')) or not ((_c.load() or {}).get('worker') or {}).get('owner')
+    except Exception:
+        return True
 
 
 PCMAP = os.path.join(STORE, 'pcmap.json')

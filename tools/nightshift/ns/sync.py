@@ -426,6 +426,13 @@ def run(db, cfg, log=print, sources=('crashlytics', 'play'), analyse=True, stop=
     except BaseException as e:
         status['merged'] = {'error': str(e)[:300]}
         log(f'merge: FAILED {str(e)[:300]}')
+    try:                                             # board host: every build's symbols to the team's GitHub (teammates download once)
+        from . import symbolize as _sy, symshare
+        importlib.reload(symshare)
+        if _sy._host_here():
+            symshare.publish_all(db, codes, log=log, cfg=cfg)
+    except BaseException as e:
+        log(f'symbols: sharing on GitHub skipped ({str(e)[:200]})')
     try:                                             # new clusters of a known problem (often an old, fixed bug): link them
         from . import analyse as _an
         importlib.reload(_an)

@@ -84,6 +84,14 @@ def main():
         if fb.get('projectId'):
             tb = {k: fb[k] for k in ('apiKey', 'authDomain', 'projectId', 'appId', 'domain') if fb.get(k)}
             tb['url'] = f"https://{fb['projectId']}.web.app"
+            try:                                      # the team's private GitHub repo: shared symbols are downloaded from it
+                import subprocess as _sp, re as _re
+                u = _sp.run(['git', '--no-optional-locks', '-C', out, 'remote', 'get-url', 'origin'], capture_output=True, text=True).stdout.strip()
+                m = _re.search(r'github\.com[:/]([^/]+/[^/.]+)', u)
+                if m:
+                    tb['github'] = m.group(1)
+            except Exception:
+                pass
             p = os.path.join(ns_out, 'team_board.json')
             json.dump(tb, open(p, 'w'), indent=1)
             WRITTEN.add(os.path.abspath(p))

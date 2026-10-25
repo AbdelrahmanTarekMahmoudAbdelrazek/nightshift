@@ -71,7 +71,7 @@ service cloud.firestore {
       // The browser may only queue a job: one of the known actions, on an existing case, status 'queued', as itself.
       allow create: if reader()
         && request.resource.data.keys().hasOnly(['action', 'issue', 'requestedBy', 'status', 'queuedAt'])
-        && request.resource.data.action in ['start', 'triage', 'analyse', 'reproduce', 'draft-fix', 'pull', 'sync', 'sync-full', 'pr-review', 'audio-branches', 'audio-check', 'card-read', 'symbols-rebuild']
+        && request.resource.data.action in ['start', 'triage', 'analyse', 'reproduce', 'draft-fix', 'pull', 'sync', 'sync-full', 'pr-review', 'audio-branches', 'audio-check', 'card-read', 'symbols-rebuild', 'build-mode', 'symbols-hide']
         && request.resource.data.status == 'queued'
         && request.resource.data.requestedBy == request.auth.token.email.lower()
         && request.resource.data.queuedAt == request.time
@@ -87,6 +87,10 @@ service cloud.firestore {
               ? request.resource.data.issue.matches('^[A-Za-z0-9._/-]{0,100}$')   // '' = latest branches, else a name search
               : request.resource.data.action == 'symbols-rebuild'
               ? request.resource.data.issue.matches('^[0-9]{6,12}$')               // one version code (same-binary builds come along)
+              : request.resource.data.action == 'symbols-hide'
+              ? request.resource.data.issue.matches('^[0-9]{6,12}[|](hide|show)$')         // one build's shared symbols: hide/show
+              : request.resource.data.action == 'build-mode'
+              ? request.resource.data.issue.matches('^[0-9a-f]{32}(~[0-9a-f]{8})?[|](play|debug|auto|next)$')   // which app the lab phone runs for one crash
               : request.resource.data.action in ['sync', 'sync-full']
               ? request.resource.data.issue == ''                                  // whole-app gathering, no case
               : request.resource.data.action in ['pull', 'start']

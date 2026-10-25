@@ -774,6 +774,40 @@ def run(worker, ref, case, merged, first_patch=None):
     return False
 
 
+def draft_unverified(worker, ref, case, merged):
+    """Play-build crash (25 Oct): the Play build cannot be rebuilt with a fix, so the fix is proposed against
+    video_gles3jni's code where it lives, reviewed, and handed over as NOT verified on the phone."""
+    from . import llm as _llm
+    if not _llm.claude_ok():
+        worker.log(ref, 'fix stage skipped: the Claude CLI on this computer cannot run (login expired?)')
+        return None
+    history, note = [], 'NOT verified on the phone: this crash only happens in the full Play app, which cannot be rebuilt with the fix'
+    for n in range(1, 4):
+        worker.log(ref, f'step 7 propose (round {n}): Claude reads the analysis, the Play-build reproduction and the code')
+        patch, ans, err = propose(case, merged, worker.cfg, history, n)
+        if err:
+            worker.log(ref, f'  rejected: {err}')
+            history.append(f'## round {n}: rejected: {err}. Answer again with ONE complete unified diff in a ```diff block.')
+            continue
+        worker.log(ref, f'step 9 review (round {n}): independent code review (no phone check possible on the Play build)')
+        rev = review(case, merged, worker.cfg, patch, n)
+        worker.log(ref, f"  review: {rev.get('verdict')}; {len(rev.get('blocking') or [])} blocking; {rev.get('summary', '')[:200]}")
+        diff = open(patch, errors='replace').read()
+        if rev.get('blocking') and n < 3:
+            history.append(f'## round {n}\n```diff\n{diff[:6000]}\n```\nReview asked for changes:\n' + json.dumps(rev['blocking'], indent=1)[:4000])
+            continue
+        ho = handover(case, merged, worker.cfg, patch, note, rev)
+        _save(case['id'], {'status': 'fix-drafted', 'patch': diff, 'note': note, 'review': rev, 'handover': ho})
+        worker.db.collection('cases').document(case['id']).set({
+            'status': 'fix-drafted', 'patch': diff[:20000], 'fixVerified': False, 'fixNote': note, 'review': rev,
+            'handover': ho, 'fixAnswer': (ans or '')[:6000]}, merge=True)
+        worker.log(ref, f'DONE: fix drafted and reviewed ({rev.get("verdict")}), NOT verified on the phone (Play build); '
+                        f'patch in tools/nightshift/out/patches/{case["id"]}.patch (not committed)')
+        return True
+    worker.log(ref, 'no usable fix draft after 3 rounds')
+    return False
+
+
 def _blind_setup(worker, ref):
     global BLIND_DENY
     if getattr(worker, '_blind', False):

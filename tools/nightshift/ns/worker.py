@@ -693,13 +693,24 @@ class Worker:
                 self.log(ref, f'restored the working copy left from an interrupted lab build ({os.path.basename(bdir)[:12]})')
 
     def do_reproduce(self, ref, case):
+        import importlib
         th = getattr(self, '_prebuild_th', None)
         if th is not None:                            # the build started during the root cause: let it finish first
             th.join(2400)
             self._prebuild_th = None
         self._restore_swaps(ref)
+        self._play_mode = False
+        try:                                          # crashes in parts only the full app has: the Play build, not ours
+            from . import fullapp
+            importlib.reload(fullapp)
+            bm = fullapp.decide(case, self._merged(case), self.cfg)
+            self._play_mode = bm['mode'] == 'play'
+            self.db.collection('cases').document(case['id']).set({'buildUsed': bm['mode'], 'buildWhy': bm['why']}, merge=True)
+            self.log(ref, f"lab build: {'the Play internal-test build' if self._play_mode else 'the debug build from video_gles3jni'} ({bm['why']})")
+        except Exception as e:
+            self.log(ref, f'lab build: could not decide ({str(e)[:120]}); using the debug build')
         lt = os.path.join(config.REPO, 'tools/nightshift/out', 'labtask.json')
-        use = (self.cfg.get('lab') or {}).get('build_as_shipped', True) and not os.path.exists(lt)
+        use = (self.cfg.get('lab') or {}).get('build_as_shipped', True) and not os.path.exists(lt) and not self._play_mode
         self._lanes_start(ref)                       # emulator lanes boot while the build compiles
         swaps = self._shipped_swap(ref, case) if use else []
         self._swaps = swaps                          # install_app may extend it when the old/new mix does not compile
@@ -879,7 +890,10 @@ class Worker:
             from . import fixloop
             importlib.reload(fixloop)
             case = {**case, **(self.db.collection('cases').document(case['id']).get().to_dict() or {}), 'id': case['id']}
-            fixloop.run(self, ref, case, merged, first_patch=getattr(self, '_early_patch', None))
+            if getattr(self, '_play_mode', False):    # the Play build cannot be rebuilt with a fix: drafted, reviewed, not verified
+                fixloop.draft_unverified(self, ref, case, merged)
+            else:
+                fixloop.run(self, ref, case, merged, first_patch=getattr(self, '_early_patch', None))
 
     def _merged(self, case):
         for mid in ('m-' + case['id'], 'm-play-' + case['id']):
@@ -931,10 +945,26 @@ class Worker:
             pass
 
     def install_app(self, ref):
+        if getattr(self, '_play_mode', False):        # full-app crash: the Play internal-test build from the Play Store
+            from . import fullapp
+            fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
+            return 0
+        return self._install_debug(ref)
+
+    def _install_debug(self, ref):
         """Build + install the debug build. Only a signature/version clash (a Play build on the phone) is fixed by
         uninstalling, which wipes the app's drafts and permissions; a compile error must never uninstall."""
         cmd = (self.cfg.get('lab') or {}).get('repro_install') or self.cfg['lab']['anrsan_install']
         cmd = cmd.split('||')[0].strip()
+        try:                                          # the Play build is on the phone (an earlier full-app crash): it is signed
+            from . import fullapp                     # differently, so it goes first (clears the app data on the lab phone)
+            pkg = config.app_package(getattr(self, 'cfg', None))
+            if fullapp.installed(pkg).get('play'):
+                self.log(ref, 'the lab phone has the Play build from a full-app crash: uninstalling it for the debug build (clears the app data on the lab phone)')
+                self._save_install(cmd, None)
+                self.run_cmd(ref, f'adb uninstall {pkg}', 120)
+        except Exception as e:
+            self.log(ref, f'Play-build check skipped: {str(e)[:120]}')
         if self._same_build_on_phone(cmd):
             self.log(ref, 'build skipped: no app source changed since the last install and the phone still has that build')
             k0 = self._build_key()
@@ -973,6 +1003,23 @@ class Worker:
             c2 = os.path.join(config.REPO, 'tools/nightshift/out/apk_cache', f'{k2}.apk') if k2 else ''
             self._lanes_install(ref, c2 if c2 and os.path.exists(c2) else self._apk_path())
         return rc
+
+    def _build_cause(self):
+        """The one line that says WHY gradle failed, for the board (the tail is mostly gradle's own boilerplate)."""
+        tail = [str(l) for l in getattr(self, '_last_tail', []) or []]
+        for pat, msg in (('not enough space', 'the lab phone is full'), ('INSUFFICIENT_STORAGE', 'the lab phone is full'),
+                         ('No space left', 'the Mac or the phone is out of disk space'),
+                         ('no devices/emulators found', 'no phone connected'), ('device offline', 'the phone went offline'),
+                         ('unauthorized', 'the phone did not allow USB debugging (tap Allow on it)'),
+                         ('INSTALL_FAILED', None), ('error: ', None), ('e: file:', None), ('Caused by:', None),
+                         ("What went wrong", None)):
+            for i, l in enumerate(tail):
+                if pat in l:
+                    if msg:
+                        return msg
+                    t = tail[i + 1] if pat == 'What went wrong' and i + 1 < len(tail) else l
+                    return ' '.join(t.split())[:160]
+        return 'see the log above'
 
     def _free_mb(self):
         try:
@@ -1211,6 +1258,10 @@ class Worker:
             raise RuntimeError('another stress run is using the phone; try again when it finishes')
         install = (self.cfg.get('lab') or {}).get('repro_install') or self.cfg['lab']['anrsan_install']
         applied = []
+        if getattr(self, '_play_mode', False):
+            if hooks:
+                self.log(ref, f'Play build: {len(hooks)} debug hook(s) skipped (the Play build cannot be patched; real taps only)')
+            hooks = []
         try:
             for h in hooks:
                 p = os.path.join(config.REPO, h)
@@ -1221,7 +1272,7 @@ class Worker:
                 elif getattr(self, '_hooks_strict', False):
                     raise RuntimeError(f'patch does not apply to the lab code: {h}')
             if self.install_app(ref):
-                raise RuntimeError('build/install failed: the phone still has the old app, so this run would prove nothing')
+                raise RuntimeError(f'build/install failed ({self._build_cause()}): the phone still has the old app, so this run would prove nothing')
         finally:
             for p in reversed(applied):            # the working tree goes back exactly as it was; never committed
                 subprocess.run(['git', '--no-optional-locks', 'apply', '-R', p], cwd=config.LAB, capture_output=True, timeout=60)
@@ -2102,6 +2153,37 @@ class Worker:
                 except Exception as e:
                     self.log(ref, f'ERROR {e}')
                     ref.update({'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:500]})
+                return
+            if job.get('action') == 'symbols-hide':      # board: hide / show one build's shared symbols (nothing is deleted)
+                try:
+                    vc, what = (str(job.get('issue') or '').split('|') + [''])[:2]
+                    d = self.db.collection('config').document('symbols')
+                    b = (d.get().to_dict() or {}).get('builds') or {}
+                    if vc not in b:
+                        raise RuntimeError(f'build {vc} is not in the symbols list')
+                    d.set({'builds': {vc: {'hidden': what == 'hide'}}}, merge=True)
+                    self.log(ref, f"symbols of {vc}: {'hidden (teammates will not download them; the file stays on GitHub)' if what == 'hide' else 'shown again'}")
+                    ref.update({'status': 'done', 'finishedAt': _now()})
+                except Exception as e:
+                    ref.update({'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:300]})
+                return
+            if job.get('action') == 'build-mode':        # board switch: Play build / debug build / automatic for one crash
+                try:
+                    from . import fullapp
+                    cid, want = (str(job.get('issue') or '').split('|') + [''])[:2]
+                    cref = self.db.collection('cases').document(cid)
+                    c = cref.get().to_dict() or {}
+                    if want == 'next':
+                        want = {'': 'play', 'auto': 'play', 'play': 'debug', 'debug': 'auto'}.get(str(c.get('buildMode') or ''), 'auto')
+                    if want not in ('play', 'debug', 'auto'):
+                        raise RuntimeError(f'unknown build mode {want}')
+                    cref.set({'buildMode': '' if want == 'auto' else want}, merge=True)
+                    if want != 'auto':
+                        fullapp.remember(cid, want, fullapp.decide({**c, 'buildMode': ''}, self._merged({**c, 'id': cid}), self.cfg)['classes'])
+                    self.log(ref, f'crash {cid[:12]}: lab build set to {want}' + (' (remembered for the same code)' if want != 'auto' else ''))
+                    ref.update({'status': 'done', 'finishedAt': _now()})
+                except Exception as e:
+                    ref.update({'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:300]})
                 return
             if job.get('action') == 'pr-review':         # tool 1: review open Bitbucket PRs (no phone)
                 try:

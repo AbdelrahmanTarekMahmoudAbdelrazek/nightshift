@@ -326,6 +326,27 @@ step "8/9  Claude reviewers (your own Claude account)"
 claude -p "reply with OK" 2>/dev/null | grep -qi ok && ok "claude is signed in" || warn "run 'claude' once and sign in with your company account, then ./setup.sh again"
 ( cd "$REPO" && python3 tools/nightshift/plugsetup.py >/dev/null 2>&1 ) && ok "review plugins installed" || warn "plugins: run python3 tools/nightshift/plugsetup.py and read out/batch/plugsetup.txt"
 
+echo
+echo "    Shared crash symbols (function names + file:line for every build) come from the team's private GitHub repo."
+if ! command -v gh >/dev/null; then
+  if yes "Install the GitHub command line tool (gh) for that?"; then
+    if [ "$OS" = Darwin ] && command -v brew >/dev/null; then brew install gh
+    elif command -v apt-get >/dev/null; then sudo apt-get install -y gh
+    else warn "install gh from https://cli.github.com, then run ./setup.sh again"; fi
+  fi
+fi
+if command -v gh >/dev/null; then
+  if gh auth status -h github.com >/dev/null 2>&1; then ok "GitHub: signed in"
+  else
+    echo "    Sign in to GitHub once (your browser opens; use the account invited to the Night Shift repo):"
+    gh auth login -h github.com -p https -w && ok "GitHub: signed in" || warn "GitHub sign-in skipped: crash names come from the board host's computer instead (it must be on)"
+  fi
+  GHR="$(python3 -c "import json;print(json.load(open('$KIT/tools/nightshift/team_board.json')).get('github',''))" 2>/dev/null)"
+  [ -n "$GHR" ] && { gh repo view "$GHR" >/dev/null 2>&1 && ok "GitHub: you can read $GHR" || warn "GitHub: this account cannot open $GHR; ask the board owner to invite it"; }
+else
+  warn "no gh: crash names come from the board host's computer instead (it must be on)"
+fi
+
 step "9/9  Start your worker (runs in the background)"
 RUN="cd \"$REPO\" && exec python3 -u tools/nightshift/sentinel.py worker"
 if [ -f "$HOME/Library/LaunchAgents/com.nightshift.worker.plist" ] || [ -f "$HOME/.config/systemd/user/nightshift-worker.service" ] || yes "Install the background worker now?"; then
