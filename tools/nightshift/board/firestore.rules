@@ -11,19 +11,25 @@ service cloud.firestore {
       return exists(/databases/$(db)/documents/staff/$(request.auth.token.email.lower()));
     }
     // Set `requireAllowlist: true` in config/board to also require an allowlist row (e.g. for Demo Day guests).
+    // Guest mode (26 Oct, asked by the board owner): anyone who presses "Enter as guest" may READ the board until the
+    // date below. Guests can never queue jobs or change anything. To turn guests off earlier, change the date and redeploy.
+    function guest() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous'
+        && request.time < timestamp.date(2026, 11, 2);
+    }
     function reader() {
       return staff() && (!get(/databases/$(db)/documents/config/board).data.get('requireAllowlist', false) || allowlisted());
     }
 
-    match /config/{doc}    { allow read: if reader(); allow write: if false; }
-    match /audiochecks/{id} { allow read: if reader(); allow write: if false; }
-    match /cards/{id}       { allow read: if reader(); allow write: if false; }
-    match /cardreviews/{id} { allow read: if reader(); allow write: if false; }   // card root-cause reviews (worker writes)
-    match /staff/{email}   { allow read: if reader(); allow write: if false; }
-    match /cases/{id}      { allow read: if reader(); allow write: if false; }   // worker writes via Admin SDK
-    match /families/{id}   { allow read: if reader(); allow write: if false; }   // same-bug families (worker writes)
-    match /findings/{id}   { allow read: if reader(); allow write: if false; }
-    match /runlog/{id}     { allow read: if reader(); allow write: if false; }
+    match /config/{doc}    { allow read: if reader() || guest(); allow write: if false; }
+    match /audiochecks/{id} { allow read: if reader() || guest(); allow write: if false; }
+    match /cards/{id}       { allow read: if reader() || guest(); allow write: if false; }
+    match /cardreviews/{id} { allow read: if reader() || guest(); allow write: if false; }   // card root-cause reviews (worker writes)
+    match /staff/{email}   { allow read: if reader() || guest(); allow write: if false; }
+    match /cases/{id}      { allow read: if reader() || guest(); allow write: if false; }   // worker writes via Admin SDK
+    match /families/{id}   { allow read: if reader() || guest(); allow write: if false; }   // same-bug families (worker writes)
+    match /findings/{id}   { allow read: if reader() || guest(); allow write: if false; }
+    match /runlog/{id}     { allow read: if reader() || guest(); allow write: if false; }
     match /joinrequests/{code} {                                               // "Connect this computer" (setup.sh): any staff
       allow create: if staff() && code.matches('^[0-9a-f]{12}$')
         && request.resource.data.keys().hasOnly(['email', 'at', 'ua'])
@@ -34,21 +40,21 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['delivered']) && request.resource.data.delivered == true;
     }
     match /devicechoice/{email} {                                              // the phone each person picks on the board
-      allow read: if reader();
+      allow read: if reader() || guest();
       allow write: if reader() && email == request.auth.token.email.lower()
         && request.resource.data.keys().hasOnly(['serial', 'at'])
         && request.resource.data.serial is string && request.resource.data.serial.size() <= 80
         && request.resource.data.at == request.time;
     }
-    match /workers/{id}    { allow read: if reader(); allow write: if false; }   // whose Night Shift worker is online (workers write)
-    match /play_issues/{id} { allow read: if reader(); allow write: if false; }   // Play vitals rows (worker writes; the board reads)
+    match /workers/{id}    { allow read: if reader() || guest(); allow write: if false; }   // whose Night Shift worker is online (workers write)
+    match /play_issues/{id} { allow read: if reader() || guest(); allow write: if false; }   // Play vitals rows (worker writes; the board reads)
     match /prs/{id} {                                                          // PR reviews, worker writes
-      allow read: if reader();
+      allow read: if reader() || guest();
       allow write: if false;
       // Decide page answers (Agree / Not a problem / Ask author): one doc per finding per head, written as the signed-in
       // reader. The worker reads them to tune the reviewers. Nothing else on the PR can be changed from the browser.
       match /feedback/{fid} {
-        allow read: if reader();
+        allow read: if reader() || guest();
         allow create, update: if reader()
           && fid.matches('^[0-9a-f]{0,12}_f[0-9]{1,3}$')
           && request.resource.data.keys().hasOnly(['finding', 'title', 'where', 'decision', 'text', 'scenario', 'tier', 'head', 'by', 'at'])
@@ -60,14 +66,14 @@ service cloud.firestore {
       }
     }
     match /merged/{id} {                                                       // Play x Firebase rows (worker writes)
-      allow read: if reader();
+      allow read: if reader() || guest();
       allow update: if reader()                                                // staff may edit only PR + note
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pr', 'note', 'noteBy', 'noteAt'])
         && request.resource.data.noteBy == request.auth.token.email.lower();
       allow create, delete: if false;
     }
     match /jobs/{id} {
-      allow read: if reader();
+      allow read: if reader() || guest();
       // The browser may only queue a job: one of the known actions, on an existing case, status 'queued', as itself.
       allow create: if reader()
         && request.resource.data.keys().hasOnly(['action', 'issue', 'requestedBy', 'status', 'queuedAt'])

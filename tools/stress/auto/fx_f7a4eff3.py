@@ -2,27 +2,13 @@
 
 @scenario('nightshift', 'auto', 'nodraft')
 def ns_f7a4eff3_fx(ed, r):
-    """Fixture for Crashlytics RealmWrapper.d (NPE 'parameter table' at launch): unchanged lab test draft, no edits."""
+    """Fixture for Crashlytics RealmWrapper.d NPE 'parameter table' (cold launch, Android 11): the plain lab test draft."""
     ed.fixture_begin()
-    # The field crash is a cold-launch crash driven by on-device state, not by project content.
-    # The only project state the recipes need is a valid draft that opens in the editor.
-    # The last attempt's process died right after app-up, before any editor step (the known lab
-    # MainActivity.onCreate crash on alternate cold launches). Start one clean cold launch and
-    # wait until the launcher is really displayed before touching anything.
-    ed.step('clean cold launch')
-    ed.dev.force_stop()
-    time.sleep(2.0)
+    ed.grant_permissions()
     mark = ed.log_mark()
-    ed.dev.launch()
-    ed.require_log(r'Displayed com\.myzesty/', 20, since=mark,
-                   why='the app process survives its cold launch and shows its first activity')
-    ed.idle(3)
-
-    ed.step('open the lab test draft')
-    mark = ed.log_mark()
-    ed.open_draft()
-    ed.require_log(r'MsgAddVideo', 40, since=mark,
-                   why='the test draft loaded its clips into the engine (editor is up with a real project)')
-    ed.idle(2)
-
-    ed.save_fixture('f7a4eff3', 'unchanged lab test draft; crash is a launch-time Realm NPE that needs stored app data, not project content')
+    ed.open_draft(timeout=240)                 # recorded test draft by id; it rebuilds a broken draft or creates one if none exist
+    ed.require_log(r'MsgAddVideo: media_layer 0 path: \S+', 180, since=mark,
+                   why='the engine loaded a saved project with at least one clip on layer 0')
+    ed.settle(3)
+    ed.save_fixture('f7a4eff3', 'Unchanged lab test draft (>=1 video on layer 0, no edits). The field crash is at cold launch '
+                                '(performLaunchActivity, RealmWrapper table=null) and needs no editor state')

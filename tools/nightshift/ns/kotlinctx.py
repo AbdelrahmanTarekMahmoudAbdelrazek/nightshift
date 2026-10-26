@@ -24,9 +24,10 @@ def _git(args, cwd=None, timeout=180):
 
 
 def _remote_base():
-    """git@bitbucket.org:mitrotek/ from the native repo's own origin, so the same login is used."""
-    url = _git(['remote', 'get-url', 'origin'], cwd=config.REPO).stdout.strip()
-    return url.rsplit('/', 1)[0] + '/' if '/' in url else url.rsplit(':', 1)[0] + ':'
+    """git@bitbucket.org:<ws>/ (SSH) or the token HTTPS base, built by Night Shift (ns/gitauth.py), never the
+    person's own 'origin' (an https://<user>@ remote made git ask for a password nobody could type)."""
+    from . import gitauth
+    return gitauth.base()
 
 
 def _pick_branch(heads, pinned=None):
@@ -92,9 +93,9 @@ def sync(cfg, log=print):
                 _git(['remote', 'add', 'origin', url], cwd=path)
             have = _git(['rev-parse', 'HEAD'], cwd=path).stdout.strip()
             if have != heads[br]:
-                f = _git(['fetch', '-q', '--depth', '1', 'origin', heads[br]], cwd=path, timeout=600)
+                f = _git(['fetch', '-q', '--depth', '1', url, heads[br]], cwd=path, timeout=600)
                 if f.returncode:
-                    f = _git(['fetch', '-q', '--depth', '1', 'origin', br], cwd=path, timeout=600)
+                    f = _git(['fetch', '-q', '--depth', '1', url, br], cwd=path, timeout=600)
                 if f.returncode:
                     log(f'Kotlin: {name}: fetch of {br} failed ({f.stderr.strip()[:120]})')
                     continue
@@ -243,9 +244,9 @@ def checkout_linked(repo, pr, log=print):
         _git(['init', '-q'], cwd=path)
         _git(['remote', 'add', 'origin', url], cwd=path)
     if _git(['rev-parse', 'HEAD'], cwd=path).stdout.strip() != pr['head']:
-        f = _git(['fetch', '-q', '--depth', '1', 'origin', pr['head']], cwd=path, timeout=600)
+        f = _git(['fetch', '-q', '--depth', '1', url, pr['head']], cwd=path, timeout=600)
         if f.returncode:
-            f = _git(['fetch', '-q', '--depth', '1', 'origin', pr['source']], cwd=path, timeout=600)
+            f = _git(['fetch', '-q', '--depth', '1', url, pr['source']], cwd=path, timeout=600)
         if f.returncode:
             raise RuntimeError(f"fetch of {repo} PR #{pr['num']} ({pr['source']}) failed: {f.stderr.strip()[:120]}")
         _git(['checkout', '-q', '--detach', '--force', 'FETCH_HEAD'], cwd=path)

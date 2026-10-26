@@ -584,7 +584,9 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
   <div class="card"><h2>Staff sign-in</h2>
     <p class="note">Enter your <b id="gate-domain">company</b> address. You'll get a one-click sign-in link in your mailbox; no password.</p>
     <form id="gate-form" style="display:flex;gap:8px"><input type="email" id="gate-email" required placeholder="you@msd-my.com" style="flex:1;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)"><button class="btn primary">Send link</button></form>
-    <p class="note" id="gate-msg"></p></div>
+    <p class="note" id="gate-msg"></p>
+    <p class="note" style="margin-top:14px"><button class="btn" id="gate-guest" type="button">Enter as guest (read only)</button>
+      <span class="muted small">look around without signing in; guests cannot start jobs</span></p></div>
 </div>
 <main>
   <section id="tab-dashboard" class="hidden">
@@ -1092,6 +1094,7 @@ function openIssue(id) {
   </div>`;
 }
 async function queue(action, issue) {
+  if (live && live.guest) { $('#dlg-title').textContent = 'Guests cannot start jobs'; $('#dlg-body').innerHTML = '<p>Sign in with your company address to run jobs.</p>'; dlg.showModal(); return; }
   const i = DATA.issues.find(x => x.id === issue) || {};
   if (live) {
     try {
@@ -2811,11 +2814,23 @@ function wire() {
   ['#f-sev', '#f-fq'].forEach(s => $(s).oninput = renderFindings);
 }
 const loadScript = src => new Promise((ok, bad) => { const t = document.createElement('script'); t.src = src; const to = setTimeout(() => bad(new Error('timed out loading ' + src)), 15000); t.onload = () => { clearTimeout(to); ok(); }; t.onerror = () => { clearTimeout(to); bad(new Error('failed ' + src)); }; document.head.appendChild(t); });
+function nsDataError(what, e) {
+  // a visible note instead of a silent board full of zeros
+  let b = document.getElementById('ns-data-err');
+  if (!b) { b = document.createElement('div'); b.id = 'ns-data-err';
+    b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:9999;background:#fff4e5;color:#7a4100;border:1px solid #f0b46a;border-radius:10px;padding:10px 14px;max-width:720px;font:14px/1.4 system-ui;box-shadow:0 4px 16px rgba(0,0,0,.12)';
+    document.body.appendChild(b); }
+  const who = (live && live.user && live.user.email) || 'you';
+  b.innerHTML = `<b>Could not load ${what}.</b> ${esc((e && (e.code ? e.code + ': ' : '') + (e.message || e)) || '')}<br><span style="opacity:.8">Signed in as ${esc(who)}. Try another network or turn off VPN / ad-blocker for this page, then reload. Send this message to the board owner if it stays.</span>`;
+}
 async function bootLive() {
   const v = '10.12.2';
   for (const m of ['app', 'auth', 'firestore']) await loadScript(`https://www.gstatic.com/firebasejs/${v}/firebase-${m}-compat.js`);
   firebase.initializeApp(FB);
   const auth = firebase.auth(), db = firebase.firestore();
+  // 26 Oct: some networks/extensions/VPNs block Firestore's streaming channel; the board then stayed at 0 for one
+  // person while working for others. Long polling is picked automatically when streaming does not get through.
+  try { db.settings({ experimentalAutoDetectLongPolling: true, merge: true }); } catch (e) {}
   const domain = (FB.domain || 'msd-my.com').toLowerCase();
   $('#gate-domain').textContent = '@' + domain;
   document.querySelector('main').classList.add('hidden'); document.querySelector('.side').classList.add('hidden'); document.body.classList.add('gated');
@@ -2836,18 +2851,24 @@ async function bootLive() {
       $('#gate-msg').textContent = `Link sent to ${email}. Open it from this device.`;
     } catch (e) { $('#gate-msg').textContent = e.message || String(e); }
   };
+  $('#gate-guest').onclick = async () => {
+    try { await auth.signInAnonymously(); }
+    catch (e) { $('#gate-msg').textContent = 'Guest entry is not switched on yet (' + (e.code || e.message || e) + ').'; }
+  };
   window.__nsBooted = true;                          // the watchdog stays quiet: the sign-in box is up
   auth.onAuthStateChanged(user => {
-    const ok = user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + domain);
+    const isGuest = !!(user && user.isAnonymous);
+    const ok = isGuest || (user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + domain));
     $('#gate').classList.toggle('hidden', !!ok);
     document.querySelector('main').classList.toggle('hidden', !ok); document.querySelector('.side').classList.toggle('hidden', !ok); document.body.classList.toggle('gated', !ok);
     if (!ok) { if (user) { $('#gate-msg').textContent = `Signed in as ${user.email}, which is not a staff address.`; auth.signOut(); } return; }
-    live = { db, user };
-    $('#add-issue').classList.remove('hidden');
+    live = { db, user, guest: isGuest };
+    if (isGuest) document.body.classList.add('guest');
+    if (!isGuest) $('#add-issue').classList.remove('hidden');
     $('#add-issue').onsubmit = ev => { ev.preventDefault(); const m = ($('#add-url').value.match(/issues\/([0-9a-f]{32})/) || $('#add-url').value.match(/^([0-9a-f]{32})$/));
       if (!m) { $('#dlg-title').textContent = 'Not a Crashlytics issue link'; $('#dlg-body').innerHTML = '<p>Paste the URL of an issue page (…/crashlytics/app/…/issues/&lt;id&gt;).</p>'; dlg.showModal(); return; }
       $('#add-url').value = ''; queue('pull', m[1]); };
-    $('#who').classList.remove('hidden'); $('#who').innerHTML = `${esc(user.email)} · <a href="#" onclick="firebase.auth().signOut();return false">sign out</a>`;
+    $('#who').classList.remove('hidden'); $('#who').innerHTML = `${isGuest ? 'guest (read only)' : esc(user.email)} · <a href="#" onclick="firebase.auth().signOut();return false">sign out</a>`;
     DATA = { app: {}, sources: {}, issues: [], findings: [], runlog: { rows: [], summary: [], total_hours: 0 }, play: [] };
     renderAll();
     const ts = t => t && t.toDate ? t.toDate().toISOString().slice(0, 19).replace('T', ' ') : (t || '');
@@ -2858,7 +2879,9 @@ async function bootLive() {
     db.collection('config').doc('releases').onSnapshot(d => { DATA.releasesDoc = d.exists ? d.data() : null; renderAll(); });
     db.collection('config').doc('symbols').onSnapshot(d => { DATA.symbolsDoc = d.exists ? d.data() : null; renderSymbols(); }, () => {});
     db.collection('config').doc('trends').onSnapshot(d => { DATA.trends = d.exists ? d.data() : null; renderAll(); });
-    db.collection('merged').onSnapshot(q => { DATA.merged = q.docs.map(d => scopeStack({ id: d.id, ...d.data() })); renderProblems(); });
+    db.collection('merged').onSnapshot(q => { window.__nsData = true; DATA.merged = q.docs.map(d => scopeStack({ id: d.id, ...d.data() })); renderProblems(); },
+      e => nsDataError('the crash list', e));
+    setTimeout(() => { if (!window.__nsData) nsDataError('the crash list', { message: 'no answer from the database after 25 s (a VPN, firewall or browser extension may block firestore.googleapis.com)' }); }, 25000);
     $('#p-sync').onclick = () => { queueSync(); $('#p-sync').textContent = 'Sync queued…'; setTimeout(() => $('#p-sync').textContent = 'Sync now', 8000); };
     $('#sync-btn').classList.remove('hidden'); $('#sync-btn').onclick = () => queueSync(false); $('#sync-full-btn').classList.remove('hidden'); $('#sync-full-btn').onclick = () => queueSync(true);
     db.collection('families').onSnapshot(q => { DATA.families = q.docs.map(d => ({ id: d.id, ...d.data() })); renderProblems(); }, () => {});
