@@ -12,8 +12,9 @@ API = 'https://api.bitbucket.org/2.0'
 
 
 def creds():
-    if not os.path.exists(CFG):                          # no token here: workspace/repo for URLs; reads go through the host
-        return {'email': '', 'token': '', 'workspace': 'mitrotek', 'repo': 'video_gles3jni', 'relay': True}
+    if not os.path.exists(CFG):                          # 26 Oct, team rule: everyone reads Bitbucket with THEIR OWN token
+        raise RuntimeError('no Bitbucket token on this computer: run ./setup.sh in your Night Shift folder and paste your '
+                           'own token (each person uses their own, so repos of every team work)')
     c = json.load(open(CFG))
     for k in ('email', 'token'):
         if not c.get(k):

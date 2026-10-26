@@ -20,6 +20,9 @@ from . import config
 IDX = os.path.join(config.REPO, 'tools/nightshift/out', 'class_index.json')
 LEARNED = os.path.join(config.REPO, 'tools/nightshift/knowledge', 'build_modes.json')
 SKIP = {'build', '.git', '.gradle', 'node_modules', 'intermediates', 'generated', 'tools', 'out', 'ios', 'Pods'}
+SYSLIB = (r'lib(c|m|dl|log|z|art|artbase|c\+\+|c\+\+_shared|android.*|hwui|gui|ui|utils|cutils|binder.*|EGL.*|GLES.*|vulkan|'
+          r'media.*|stagefright.*|icu.*|webviewchromium|javacore|openjdk.*|nativeloader|jnigraphics|camera.*|audio.*|aaudio|'
+          r'OpenSLES|sqlite|ssl|crypto|base|vndksupport|gralloc.*|adreno.*|mali.*|GLESv.*|nativewindow|monochrome.*|chrome.*)$')
 RE_CLS = re.compile(r'\b((?:[a-z][a-z0-9_]*\.){2,}[A-Z][A-Za-z0-9_$]*)')
 
 
@@ -138,7 +141,20 @@ def _decide(case, merged, cfg):
     if gone:
         return {'mode': 'play', 'why': f'the crash happened after the screen {gone[0].split(".")[-1]}, which only the full Play app has',
                 'classes': classes}
-    return {'mode': 'debug', 'why': 'all of its code is in video_gles3jni', 'classes': classes}
+    # 26 Oct (RealmWrapper, 12 lab attempts): video_gles3jni's own app is a TEST SHELL (its launcher is a developer menu);
+    # only the engine and the editor module are the real thing. A Java crash with no engine frame and no editor-module
+    # frame starts in the real app's own screens/startup, which only the full app has.
+    allt = ' '.join(str(t or '') for t in texts)
+    engine = 'libMYJNILIB26' in allt or 'MsgLooper' in allt
+    libs = set(re.findall(r'\b(lib[A-Za-z0-9_+-]+)\.so\b', str(case.get('title') or '') + ' ' + ' '.join(str(t) for t in (fb.get('top') or [])[:6])))
+    other = sorted(l for l in libs if l != 'libMYJNILIB26' and not re.match(SYSLIB, l))
+    if other and not engine:                         # e.g. libImageFilter (photo editor): not built by video_gles3jni
+        return {'mode': 'play', 'why': f'{other[0]}.so is a native library of the full app (video_gles3jni does not build it)', 'classes': classes}
+    editor = any(c.startswith(('com.video.', 'com.common.myzesty.videoPlayer')) for c in classes)
+    if not engine and not editor and classes:
+        return {'mode': 'play', 'why': f'{classes[0].split(".")[-1]} runs in the real app\'s own startup/screens; video_gles3jni\'s app '
+                                       'is only a test shell (developer-menu launcher), so the full app is needed', 'classes': classes}
+    return {'mode': 'debug', 'why': 'engine or editor code, which video_gles3jni builds for real', 'classes': classes}
 
 
 # ------------------------------------------------------------------ the Play build on the lab phone
@@ -162,16 +178,28 @@ def installed(pkg):
 
 
 def _tap_play_button():
-    """Tap Install / Update on the Play Store page if it is showing (uiautomator dump of the screen)."""
+    """Tap Install / Update for OUR app on its Play Store page. Only the main button counts: the first one, above the
+    'Sponsored' / 'Suggested for you' row (26 Oct: a re-look tapped the Install of an ad below, Kling AI, and the
+    phone downloaded it). Nothing is tapped while our own download is already running ('Pending', '% of', Cancel)."""
+    focus = _sh('shell', 'dumpsys', 'window', timeout=30)
+    if 'mCurrentFocus' in focus and 'com.android.vending' not in ''.join(l for l in focus.splitlines() if 'mCurrentFocus' in l):
+        return None                                  # another app/screen is in front (e.g. the phone's security scan): tap nothing
     _sh('shell', 'uiautomator', 'dump', '/sdcard/ns_ui.xml', timeout=30)
     x = _sh('shell', 'cat', '/sdcard/ns_ui.xml', timeout=30)
+    if 'MyZesty' not in x and 'myzesty' not in x.lower():
+        return None                                  # not OUR app's page: tap nothing
+    nodes = [(m.group(1) or m.group(2) or '', int(m.group(4)), (int(m.group(3)) + int(m.group(5))) // 2, (int(m.group(4)) + int(m.group(6))) // 2)
+             for m in re.finditer(r'<node[^>]*?text="([^"]*)"[^>]*?content-desc="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', x)]
+    ads = [top for t, top, _, _ in nodes if re.search(r'Sponsored|Suggested|You might also like|You may also like|Recommended|^ADS?$|^Ad$', t.strip())]
+    limit = min(ads) if ads else 10 ** 6
+    head = [n for n in nodes if n[1] < limit]
+    if any(re.search(r'Pending|\d+% of|Installing|Downloading', t) for t, *_ in head):
+        return 'downloading'
     for label in ('Update', 'Install', 'تحديث', 'تثبيت'):
-        m = re.search(r'text="' + re.escape(label) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', x) or \
-            re.search(r'content-desc="' + re.escape(label) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', x)
-        if m:
-            a, b, c, d = map(int, m.groups())
-            _sh('shell', 'input', 'tap', str((a + c) // 2), str((b + d) // 2))
-            return label
+        for t, top, cx, cy in head:
+            if t.strip() == label:
+                _sh('shell', 'input', 'tap', str(cx), str(cy))
+                return label
     return None
 
 
@@ -186,7 +214,11 @@ def ensure_play_build(pkg, log=print, wait_min=15):
             log('lab phone: it has the debug build; uninstalling it so the Play build can install (clears the app data on the lab phone)')
             _sh('uninstall', pkg, timeout=120)
         log('lab phone: opening the app in the Play Store (the phone\'s Google account must be an internal tester)')
-    _sh('shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', f'market://details?id={pkg}', timeout=30)
+    _sh('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP', timeout=30)       # a sleeping screen hides the Install button
+    _sh('shell', 'wm', 'dismiss-keyguard', timeout=30)
+    # explicitly the Play Store app (26 Oct: the plain link left another app, com.myzesty.genie, on screen)
+    _sh('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-p', 'com.android.vending',
+        '-d', f'market://details?id={pkg}', timeout=60)
     t0, tapped = time.time(), None
     while time.time() - t0 < wait_min * 60:
         time.sleep(6)
@@ -202,8 +234,18 @@ def ensure_play_build(pkg, log=print, wait_min=15):
             tapped = _tap_play_button() or tapped
             if tapped:
                 log(f'lab phone: tapped "{tapped}" in the Play Store; waiting for the download')
-    raise RuntimeError('the Play build did not install in 15 min: on the lab phone open the Play Store, check the Google '
-                       'account is an internal tester of MyZesty and tap Install, then press Start again')
+    try:                                             # say what the Play Store showed, so a person knows what to fix
+        _sh('shell', 'uiautomator', 'dump', '/sdcard/ns_ui.xml', timeout=30)
+        seen = [t for t in re.findall(r'text="([^"]{2,60})"', _sh('shell', 'cat', '/sdcard/ns_ui.xml', timeout=30)) if t.strip()][:12]
+        lock = 'mDreamingLockscreen=true' in _sh('shell', 'dumpsys', 'window', timeout=30) or \
+               'mWakefulness=Asleep' in _sh('shell', 'dumpsys', 'power', timeout=30)
+    except Exception:
+        seen, lock = [], False
+    raise RuntimeError('the Play build did not install in 15 min'
+                       + (' (the phone screen was off or locked)' if lock else '')
+                       + (f'; the Play Store showed: {" | ".join(seen)}' if seen else '')
+                       + ': on the lab phone open the Play Store, check the Google account is an internal tester of MyZesty '
+                         'and tap Install, then press Start again')
 
 
 # ------------------------------------------------------------------ the exact field build from Google (26 Oct)

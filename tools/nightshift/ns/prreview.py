@@ -101,11 +101,11 @@ def checkout(pr, log):
     wt = os.path.join(TREES, f"pr-{pr['id']}")
     gd = pr.setdefault('_gitdir', gitdir(pr))
     if pr.get('source') and not pr.get('local'):
-        r = _git(['fetch', '--no-tags', 'origin', f"+refs/heads/{pr['source']}:refs/nightshift/pr/{pr['id']}"], cwd=gd)
+        r = _git(['fetch', '--no-tags', 'origin', f"+refs/heads/{pr['source']}:refs/nightshift/pr/{pr['id']}"], cwd=gd, timeout=1800)
         if r.returncode:
             raise RuntimeError(f"git fetch of {pr['source']} failed: {r.stderr.strip()[:200]}")
         if pr.get('dest'):
-            _git(['fetch', '--no-tags', 'origin', f"+refs/heads/{pr['dest']}:refs/nightshift/base/{pr['id']}"], cwd=gd)
+            _git(['fetch', '--no-tags', 'origin', f"+refs/heads/{pr['dest']}:refs/nightshift/base/{pr['id']}"], cwd=gd, timeout=1800)
     if os.path.isdir(wt):
         r = _git(['checkout', '--detach', '--force', pr['head']], cwd=wt)
     else:

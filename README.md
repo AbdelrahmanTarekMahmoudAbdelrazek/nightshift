@@ -243,9 +243,9 @@ If you already have the app checked out, pass its path: `./setup.sh ~/video_gles
 2. checks your tools and Python packages (it asks before installing anything);
 3. links Night Shift into your checkout (`tools/nightshift`, `tools/stress`, hidden from your git status) and adds the
    debug-only lab remote control (`app/src/debug`), never part of a release build;
-4. **no tokens needed.** The board host's worker reads Bitbucket PRs (read-only) and Jira cards for you; your own
-   computer still runs the review with your own Claude. The only thing asked is your Bitbucket SSH key (it's already
-   copied for you; paste it on the page that opens). Want your own tokens anyway? Run `./setup.sh --tokens`;
+4. **opens the Atlassian token page** and tells you what to click: **your own** Bitbucket token (needed; everyone uses
+   their own, so the repos of every team work) and optionally a Jira token for Card Issue. Each is tested on the spot and
+   stored only in `~/.config/nightshift/`;
 5. **opens "Connect this computer"** on the team board: sign in with your @msd-my.com address and wait a few
    seconds. Your computer receives the board's settings by itself. There's nothing to download or send;
 6. finds your phone, writes your settings, installs the Claude review plugins, signs you in to GitHub once (`gh`, for
@@ -257,8 +257,7 @@ build it downloads that build's file once (10-40 MB) and keeps it. Without GitHu
 instead. The board's Releases page shows which builds have full symbols; download a missing build's .aab from Play
 Console into Downloads on the host Mac and the next sync takes care of the rest.
 
-The board host's computer must be on for step 5 (it hands over the connection), and later for PR lists and Card Issue
-if you have no tokens of your own.
+The board host's computer must be on for step 5 (it hands over the connection).
 Want a separate, private board instead of the team board? Run `./setup.sh --create`.
 
 **Crash data:** the crash gathering reads Crashlytics with your `firebase login`, so your Google account needs read

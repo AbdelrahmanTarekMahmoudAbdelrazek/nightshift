@@ -138,11 +138,6 @@ if v:
     get(f'{API}/pullrequests/{n}/diff', f'read PR #{n} diff: tick read:repository')
 PY
 }
-if [ $CREATE = 0 ] && [ $TOKENS = 0 ] && [ ! -f "$CONF/bitbucket.json" ]; then
-  ok "no tokens needed: the board host reads Bitbucket PRs and Jira cards for you"
-  echo "    (Want your own tokens anyway? Run ./setup.sh --tokens later.)"
-  ensure_ssh required                     # git (linked Kotlin PRs, checkouts) still needs your own key
-else
 if [ -f "$CONF/bitbucket.json" ]; then
   SBE="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['email'])" 2>/dev/null)"
   SBT="$(python3 -c "import json;print(json.load(open('$CONF/bitbucket.json'))['token'])" 2>/dev/null)"
@@ -217,7 +212,6 @@ if ! ensure_ssh optional; then            # no SSH key: check git can use the to
   then ok "git can use your Bitbucket token instead (no keychain prompts)"
   else warn "git cannot use the token either: Night Shift cannot fetch linked Kotlin PRs until you add the SSH key (run ./setup.sh again)"; fi
   rm -f "$AP"
-fi
 fi
 
 step "5/9  Connect to the team board"

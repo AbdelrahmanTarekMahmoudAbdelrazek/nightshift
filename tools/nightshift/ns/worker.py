@@ -707,6 +707,7 @@ class Worker:
             self._play_mode = bm['mode'] == 'play'
             self._full_mode = bm['mode'] == 'fullsrc'
             self._play_vc = fullapp.field_build(case, self._merged(case)) if bm['mode'] != 'debug' else None
+            config.LAB_MODE = 'debug' if bm['mode'] == 'debug' else 'full'   # lab facts are kept per kind of build
             if self._full_mode:                       # the full app from this person's myzesty_mobile, release branch of the crash
                 from . import fulllab
                 importlib.reload(fulllab)
@@ -965,13 +966,11 @@ class Worker:
         if getattr(self, '_play_mode', False):        # full-app crash: the real app of the build that crashed (from Google)
             from . import fullapp
             vc = getattr(self, '_play_vc', None)
-            try:
-                if not vc:
-                    raise RuntimeError('the build of this crash is not known')
-                fullapp.ensure_exact_build(self.cfg, vc, log=lambda t: self.log(ref, t))
-            except Exception as e:                    # no Play download access: the latest internal-test build instead
-                self.log(ref, f'exact build {vc or "?"} not available ({str(e)[:160]}); using the latest Play Store build instead')
-                fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
+            # 26 Oct: release builds are PairIP-protected: an adb-installed APK is killed ~0.1 s after launch
+            # (LicenseActivity), so the real app must come from the Play Store (internal-test track), never adb
+            st = fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
+            if vc and str(st.get('version')) != str(vc):
+                self.log(ref, f'note: the Play Store has build {st.get("version")}; the crash came from {vc}')
             return 0
         return self._install_debug(ref)
 

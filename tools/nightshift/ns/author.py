@@ -652,21 +652,31 @@ def _lessons_block(case):
 _USED_LESSONS = set()
 
 
-def lab_facts():
+def _all_facts():
     try:
         return json.load(open(FACTS))
     except Exception:
         return []
 
 
+def lab_facts():
+    """Facts for the kind of build this job runs (26 Oct): '[full app] ...' facts (Play install, PairIP, photo editor)
+    only for full-app runs, the rest only for the video_gles3jni debug build. A full-app fact steered a debug-build run
+    into a setup guard ("not the Play install") on every attempt."""
+    full = getattr(config, 'LAB_MODE', 'debug') == 'full'
+    return [f[11:] if f.startswith('[full app] ') else f for f in _all_facts() if f.startswith('[full app] ') == full]
+
+
 def _add_fact(fact):
     f = (fact or '').strip()
     if len(f) < 15:
         return False
-    facts = lab_facts()
-    if any(f.lower()[:60] == x.lower()[:60] for x in facts):
+    if getattr(config, 'LAB_MODE', 'debug') == 'full':
+        f = '[full app] ' + f
+    facts = _all_facts()
+    if any(f.lower()[:70] == x.lower()[:70] for x in facts):
         return False
-    json.dump((facts + [f])[-40:], open(FACTS, 'w'), indent=1)
+    json.dump((facts + [f])[-60:], open(FACTS, 'w'), indent=1)
     return True
 
 
