@@ -32,7 +32,10 @@ _SEM = threading.Semaphore(6)                       # model calls at once (all P
 
 
 def _git(args, cwd=None, timeout=300):
-    return subprocess.run(['git'] + args, cwd=cwd or config.REPO, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(['git'] + args, cwd=cwd or config.REPO, capture_output=True, text=True, timeout=timeout)
+    # drop gRPC log lines a forked child prints ("I1026 ... ev_poll_posix.cc ... FD from fork parent"): they hid git's error
+    r.stderr = '\n'.join(l for l in (r.stderr or '').splitlines() if not re.match(r'[IWE]\d{4} \d\d:\d\d:\d\d', l)).strip()
+    return r
 
 
 def _model(cfg):
@@ -104,7 +107,7 @@ def checkout(pr, log):
         src = kotlinctx._remote_base() + (pr.get('repo') or config.profile().get('main_repo') or 'video_gles3jni') + '.git'
         r = _git(['fetch', '--no-tags', src, f"+refs/heads/{pr['source']}:refs/nightshift/pr/{pr['id']}"], cwd=gd, timeout=1800)
         if r.returncode:
-            raise RuntimeError(f"git fetch of {pr['source']} failed: {r.stderr.strip()[:200]}")
+            raise RuntimeError(f"git fetch of {pr['source']} from {src.split('@')[-1]} failed: {r.stderr.strip()[-300:]}")
         if pr.get('dest'):
             _git(['fetch', '--no-tags', src, f"+refs/heads/{pr['dest']}:refs/nightshift/base/{pr['id']}"], cwd=gd, timeout=1800)
     if os.path.isdir(wt):

@@ -22,6 +22,10 @@ import datetime as dt
 import json
 import os
 import sys
+# gRPC (Firestore) prints 'FD from fork parent still in poll list' into every child process's error output, which hid
+# git's real message (26 Oct). Must be set before firebase is imported.
+os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')
+os.environ.setdefault('GRPC_ENABLE_FORK_SUPPORT', 'false')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ns import config, runlog, anrsan, diagrams, triage, match, llm, board, case as casemod  # noqa: E402

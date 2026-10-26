@@ -274,6 +274,19 @@ def git_over_ssh():
     return True
 
 
+def _ns_version():
+    """The Night Shift version this worker runs (the kit's commit), shown on the board so support can see who updated."""
+    v = getattr(threading, '_ns_version', None)
+    if v is None:
+        try:
+            d = os.path.realpath(os.path.join(config.REPO, 'tools', 'nightshift'))
+            v = subprocess.run(['git', '-C', d, 'log', '-1', '--format=%h %cs'], capture_output=True, text=True, timeout=10).stdout.strip() or '?'
+        except Exception:
+            v = '?'
+        threading._ns_version = v
+    return v
+
+
 def _has_bitbucket():
     return os.path.exists(os.path.expanduser('~/.config/nightshift/bitbucket.json'))
 
@@ -2017,7 +2030,8 @@ class Worker:
             self.db.collection('workers').document(o).set({
                 'owner': o, 'host': os.uname().nodename, 'lastSeen': gcf.SERVER_TIMESTAMP,
                 'phone': os.environ.get('ANDROID_SERIAL') or str(((self.cfg.get('lab') or {}).get('phone_serial')) or ''),
-                'servesOthers': bool((self.cfg.get('worker') or {}).get('serve_others')),
+                'servesOthers': bool((self.cfg.get('worker') or {}).get('serve_others')), 'version': _ns_version(),
+                'git': 'ssh' if getattr(threading, '_ns_git_ssh', False) else 'token',
                 'hasBitbucket': _has_bitbucket(), 'hasJira': _has_jira()}, merge=True)
         except Exception:
             pass
