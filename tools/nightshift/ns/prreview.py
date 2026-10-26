@@ -508,6 +508,18 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                     ktext = jt + ktext
                     kres = f"{kres} · {jres}"
                     log(f"PR #{pr['id']}: {jres}" + (''.join('\n    ' + x for x in jp[:6]) if jp else ''))
+                    try:                             # 26 Oct: what the OTHER repos must do, found without the description
+                        from . import integration
+                        importlib.reload(integration)
+                        il = integration.track(None, pr, _git(['show', f"{pr['head']}:{jf}"], cwd=pr.get('_gitdir')).stdout,
+                                               _git(['show', f"{mb}:{jf}"], cwd=pr.get('_gitdir')).stdout, cfg, log)
+                        if il:
+                            ktext = ('## Waiting for integration (code, not a model): the Kotlin/Java side of this PR\'s native '
+                                     'contract changes, looked up in every repo (sprint, open PRs, recent branches)\n'
+                                     + '\n'.join('- ' + x for x in il) + '\nA change whose other side is missing or wrong '
+                                     'breaks the app if this PR merges alone: report it as a blocker.\n\n') + ktext
+                    except Exception as e:
+                        log(f"PR #{pr['id']}: integration check skipped ({str(e)[:120]})")
             except Exception as e:
                 log(f"PR #{pr['id']}: JNI table check skipped ({str(e)[:120]})")
             if kdirs:
@@ -732,6 +744,11 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     elif heavy or any(x.get('verdict') == 'verified' and x.get('severity') in ('blocker', 'major')   # linked or not
                       for x in (view or {}).get('scenarios') or []):
         verdict = 'changes'
+    elif any(f.get('severity') in ('blocker', 'major') and f.get('tier') in ('suspected', 'unchecked') and not f.get('pre_existing')
+             for f in live_f):
+        # 26 Oct: a suspected blocker/major (e.g. a JNI signature that must ship with another repo) is not proof, but
+        # "approve" hid it; the PR waits for the author's answer instead.
+        verdict = 'confirm'
     else:
         verdict = 'approve'
     st.start('Chair', 'Opus')                        # summary + line comments from the final tiers; cannot change them

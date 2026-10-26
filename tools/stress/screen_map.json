@@ -483,6 +483,28 @@
   "total_time": "00:45"
  },
  "NexusLauncherActivity": {},
+ "PhotoActivity": {
+  "action_bar_root": "",
+  "album_name": "Albums",
+  "back": "",
+  "content": "",
+  "disablestate": "",
+  "frame": "",
+  "frameLayout": "",
+  "front_fragment_container": "",
+  "gallery_sort_bar": "",
+  "gridrl": "",
+  "hover": "",
+  "ic_preview": "",
+  "image": "",
+  "main": "",
+  "mediaList": "",
+  "nativegallery": "",
+  "select_cover": "",
+  "sortby": "",
+  "sorttype": "Date Imported",
+  "title": "Select an Image"
+ },
  "PlayerActivity": {
   "action_bar_root": "",
   "addVideo": "",

@@ -433,6 +433,12 @@ def run(db, cfg, log=print, sources=('crashlytics', 'play'), analyse=True, stop=
             symshare.publish_all(db, codes, log=log, cfg=cfg)
     except BaseException as e:
         log(f'symbols: sharing on GitHub skipped ({str(e)[:200]})')
+    try:                                             # PRs waiting for their Kotlin/Java side: look again every morning
+        from . import integration
+        importlib.reload(integration)
+        integration.recheck(db, cfg, log=log)
+    except BaseException as e:
+        log(f'integration re-check skipped ({str(e)[:200]})')
     try:                                             # new clusters of a known problem (often an old, fixed bug): link them
         from . import analyse as _an
         importlib.reload(_an)

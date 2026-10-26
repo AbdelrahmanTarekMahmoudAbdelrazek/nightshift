@@ -47,6 +47,7 @@ service cloud.firestore {
         && request.resource.data.at == request.time;
     }
     match /workers/{id}    { allow read: if reader() || guest(); allow write: if false; }   // whose Night Shift worker is online (workers write)
+    match /integrations/{id} { allow read: if reader() || guest(); allow write: if false; }   // waiting for integration (worker writes)
     match /play_issues/{id} { allow read: if reader() || guest(); allow write: if false; }   // Play vitals rows (worker writes; the board reads)
     match /prs/{id} {                                                          // PR reviews, worker writes
       allow read: if reader() || guest();

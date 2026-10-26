@@ -732,6 +732,7 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
         </div>
       </div>
       <p class="note" id="pr-status"></p>
+      <div id="int-box"></div>
       <div class="xa-tiles" id="pr-tiles"></div>
       <div class="xa-tools"><div class="xa-seg" id="pr-seg"></div>
         <label for="pr-q" class="xa-sr">Search PRs</label><input id="pr-q" class="xa-search" type="search" placeholder="Search title, branch, author, file" oninput="renderPRs()"></div>
@@ -867,7 +868,7 @@ function tabs() {
 /* ---------- PR review (tool 1) ---------- */
 let selPR = '';
 const PR_TYPE = { crash_fix: 'Crash fix', anr_fix: 'ANR fix', behavior_fix: 'Behaviour fix', feature: 'Feature', refactor: 'Refactor', unknown: '?' };
-const PR_VERD = { approve: ['Approve', 'b-done'], changes: ['Changes', 'b-MEDIUM'], blocking: ['Blocking', 'b-HIGH'] };
+const PR_VERD = { approve: ['Approve', 'b-done'], confirm: ['Ask author first', 'b-MEDIUM'], changes: ['Changes', 'b-MEDIUM'], blocking: ['Blocking', 'b-HIGH'] };
 function queuePR(id) {
   live.db.collection('jobs').add({ action: 'pr-review', issue: String(id || ''), requestedBy: live.user.email.toLowerCase(), status: 'queued',
     queuedAt: firebase.firestore.FieldValue.serverTimestamp() })
@@ -893,13 +894,33 @@ function prSetRepo(r) { prRepo = r; renderPRs(); }
 const NS_MAIN_REPO = (FB && FB.profile && FB.profile.main_repo) || 'video_gles3jni';
 function prRepoOf(p) { return p.repo || NS_MAIN_REPO; }
 function prNum(p) { return p.num || String(p.id).replace(/^.*-(?=\d+$)/, ''); }
-function prVerdClass(p) { return p.verdict === 'blocking' ? 'bad' : p.verdict === 'changes' ? 'warn' : p.verdict === 'approve' ? 'ok' : p.stage === 'failed' ? 'bad' : 'mute'; }
+function prVerdClass(p) { return p.verdict === 'blocking' ? 'bad' : (p.verdict === 'changes' || p.verdict === 'confirm') ? 'warn' : p.verdict === 'approve' ? 'ok' : p.stage === 'failed' ? 'bad' : 'mute'; }
 function prVerdLabel(p) { return (PR_VERD[p.verdict] || [p.stage === 'reviewing' ? 'Reviewing…' : p.stage === 'failed' ? 'Failed' : p.stage || '—'])[0]; }
 function prSevBar(c) {
   const parts = ['blocker', 'major', 'minor', 'suggestion'].map(s => [s, c[s] || 0]).filter(x => x[1]);
   return `<div class="xa-bar" aria-hidden="true">${parts.length ? parts.map(([s, n]) => `<span class="s-${s}" style="flex:${n}"></span>`).join('') : '<span class="s-none" style="flex:1"></span>'}</div>`;
 }
+const INT_ST = { missing: ['missing', 'fx-bad'], wrong: ['wrong', 'fx-bad'], branch: ['in a branch', 'fx-warn'], pr: ['in a PR', 'fx-warn'],
+                 merged: ['merged', 'fx-good'], 'not-needed': ['not needed', ''] };
+function renderIntegrations() {
+  const el = $('#int-box'); if (!el) return;
+  const items = (DATA.integrations || []).filter(x => x.status !== 'merged').sort((a, b) => String(b.pr).localeCompare(String(a.pr)));
+  if (!items.length) { el.innerHTML = ''; return; }
+  const chip = (st, title) => { const [l, c] = INT_ST[st] || [st, '']; return `<span class="tbadge ${c}" title="${esc(title || '')}">${esc(l)}</span>`; };
+  el.innerHTML = `<div class="card" style="padding:12px 14px;margin:0 0 14px">
+    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"><b>Waiting for integration</b>
+      <span class="muted small">native changes whose Kotlin/Java side is not ready everywhere; found by Night Shift in every repo (sprint, open PRs, recent branches), re-checked every morning</span></div>
+    <table class="small" style="width:100%;margin-top:8px"><thead><tr><th>ID</th><th>PR</th><th>Change</th><th>Other repos</th><th>Status</th></tr></thead><tbody>${items.map(x => {
+      const parts = Object.entries(x.parts || {}).flatMap(([repo, p]) => ['declaration', 'caller'].map(role => [repo, role, p[role] || {}]))
+        .filter(([, , p]) => p.status && p.status !== 'not-needed');
+      return `<tr><td class="mono">${esc(x.id || '')}</td>
+        <td><a href="/pr.html?id=${encodeURIComponent(x.prKey || x.pr)}">#${esc(x.pr)}</a> <span class="muted">${esc((x.author || '').split(' ')[0])}</span></td>
+        <td>${esc(x.what || x.name)}</td>
+        <td>${parts.map(([repo, role, p]) => `<div>${esc(repo)} · ${role} ${chip(p.status, p.note)} <span class="muted">${esc(p.where || '')}</span>${p.note ? `<div class="muted" style="font-size:12px">${esc(p.note)}</div>` : ''}</div>`).join('') || '<span class="muted">nothing needed</span>'}</td>
+        <td>${x.status === 'waiting' ? '<span class="tbadge fx-bad">waiting</span>' : x.status === 'ready' ? '<span class="tbadge fx-warn">ready to merge together</span>' : esc(x.status || '')}</td></tr>`; }).join('')}</tbody></table></div>`;
+}
 function renderPRs() {
+  renderIntegrations();
   const all = (DATA.prs || []).slice().sort((a, b) => (prRepoOf(a) === NS_MAIN_REPO ? 0 : 1) - (prRepoOf(b) === NS_MAIN_REPO ? 0 : 1)
     || prRepoOf(a).localeCompare(prRepoOf(b)) || Number(prNum(b)) - Number(prNum(a)) || String(b.id).localeCompare(String(a.id)));
   if ($('#prcount')) $('#prcount').textContent = all.length ? all.length : '';
@@ -2891,6 +2912,7 @@ async function bootLive() {
       DATA.findings = all.filter(f => !run || f.run === run).sort((a, b) => a.id.localeCompare(b.id)); renderFindings(); });
     db.collection('runlog').onSnapshot(q => { DATA.runlog.rows = q.docs.map(d => d.data()).sort((a, b) => (b.date || '').localeCompare(a.date || '')); renderRunlog(); });
     db.collection('prs').onSnapshot(q => { DATA.prs = q.docs.map(d => ({ id: d.id, ...d.data() })); renderPRs(); });
+    db.collection('integrations').onSnapshot(q => { DATA.integrations = q.docs.map(d => ({ docId: d.id, ...d.data() })); renderIntegrations(); }, () => {});
     $('#pr-run').onclick = () => queuePR('');
     $('#pr-add').onsubmit = ev => { ev.preventDefault(); const v = $('#pr-add-url').value.trim();
       const lm = v.match(/bitbucket\.org\/[^/]+\/([^/]+)\/pull-requests\/([0-9]{1,6})/), nm = v.match(/^#?([0-9]{1,6})$/);
