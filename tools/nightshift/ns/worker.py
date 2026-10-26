@@ -263,6 +263,11 @@ def git_over_ssh():
             threading._ns_git_ssh = 'authenticated' in (r.stdout + r.stderr).lower()
         except Exception:
             threading._ns_git_ssh = False
+    try:                                                # personal url rewrites (https://<user>@) must not apply here
+        from . import gitauth
+        gitauth.isolate()
+    except Exception:
+        pass
     os.environ['GIT_TERMINAL_PROMPT'] = '0'             # never wait for a password nobody can type
     os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')    # no gRPC fork notes mixed into git's errors
     if not threading._ns_git_ssh:

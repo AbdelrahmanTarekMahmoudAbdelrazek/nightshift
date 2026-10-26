@@ -59,3 +59,71 @@ def ns_f7a4eff3_l2_1_c(ed, r):
         _f7a4eff3_relaunch_loop(ed, r'wm_on_create_called: \[\d+,\d+,com\.myzesty\.', gap=r.uniform(4, 6))
     finally:
         ed.dev.network(True)
+
+
+# 2026-10-26 11:42 level 2 attempt 2
+_F7A4_NEW_ACT = r'wm_on_create_called: \[\d+,com\.(?!myzesty\.MainActivity)[\w.]+'
+
+
+def _f7a4eff3_home(ed):
+    """Checkpoint 1 (shipped build on Android 11), then a real cold start onto the shipped home screen."""
+    ed.dev.restore_env()
+    vc = ed.dev.sh('dumpsys package com.myzesty | grep versionCode')
+    if '800054890' not in vc or ed.dev.getprop('ro.build.version.sdk').strip() != '30':
+        raise UIError(f'field needs Play build 800054890 on Android 11; phone has {vc.strip()[:60]} sdk '
+                      f'{ed.dev.getprop("ro.build.version.sdk").strip()}')
+    mark = ed.log_mark()
+    ed.dev.launch()
+    ed.require_log(r'Start proc \d+:com\.myzesty/', 15, since=mark, why='cold start of the shipped launcher')
+    for _ in range(8):
+        s = ed.screen()
+        if s is not None and s.has(('id:home_cta_image', 'id:home_cta_video')):
+            return
+        if s is not None and s.has(T.DISMISS):
+            ed.dev.tap(*s.find(T.DISMISS).center)
+        time.sleep(2)
+    raise UIError('shipped home screen (home_cta_image) never showed')
+
+
+def _f7a4eff3_open_kill_relaunch(ed, r, sel, why):
+    """Open a Realm-backed screen like the user, process reclaimed, then field crash loop: relaunch twice 4-6 s apart."""
+    mark = ed.log_mark()
+    ed.ui.tap(sel, timeout=15)
+    ed.require_log(_F7A4_NEW_ACT, 20, since=mark, why=why)
+    ed.idle(r.uniform(6, 10))                        # resources/tags load and are written to Realm
+    ed.kill_bg()                                     # task + saved Bundle kept, process gone (checkpoint 2)
+    ed.idle(r.uniform(3, 8))
+    for k in range(2):
+        ed.step(f'cold relaunch {k + 1}/2 into the restored task (field: 08:08:12 -> 08:08:16)')
+        mark = ed.log_mark()
+        ed.mon.allow_death = True
+        ed.dev.launch()
+        ed.require_log(r'Start proc \d+:com\.myzesty/', 15, since=mark, why='a NEW process must start (cold launch)')
+        ed.mon.allow_death = False
+        ed.idle(r.uniform(4, 6))                     # NPE in performLaunchActivity lands here
+        ed.kill_bg()
+        ed.idle(1)
+
+
+@scenario('nightshift', 'auto', 'nodraft')
+def ns_f7a4eff3_l2_2_a(ed, r):
+    """All 20 instances (OnePlus8Pro x15, HRY-LX1T x5), Image Editor path: photo editor (getAllImageEditorResources) restored on relaunch."""
+    _f7a4eff3_home(ed)
+    _f7a4eff3_open_kill_relaunch(ed, r, ('id:home_cta_image', 'text:Image Editor'),
+                                 'Image Editor screen must be created (Realm-backed resources)')
+
+
+@scenario('nightshift', 'auto', 'nodraft')
+def ns_f7a4eff3_l2_2_b(ed, r):
+    """All 20 instances, template path: a home template card opened, process reclaimed, relaunched twice."""
+    _f7a4eff3_home(ed)
+    _f7a4eff3_open_kill_relaunch(ed, r, ('id:thumbnailCard', 'id:row_cards'),
+                                 'template screen must be created from the home row')
+
+
+@scenario('nightshift', 'auto', 'nodraft')
+def ns_f7a4eff3_l2_2_c(ed, r):
+    """All 20 instances, AI Studio path: AI Studio card opened, process reclaimed, relaunched twice."""
+    _f7a4eff3_home(ed)
+    _f7a4eff3_open_kill_relaunch(ed, r, ('id:home_ai_studio_card', 'id:ai_card_image', 'text:Ads Creator'),
+                                 'AI Studio screen must be created from the home card')

@@ -61,8 +61,51 @@ def _token_env():
     os.environ['GIT_ASKPASS'] = ASKPASS
 
 
+ISOLATED = os.path.expanduser('~/.config/nightshift/gitconfig')
+
+
+def isolate():
+    """Night Shift's own git commands use a copy of the person's global git config WITHOUT url.*.insteadOf rules and
+    credential helpers (26 Oct: Khairy's ~/.gitconfig rewrote every git@bitbucket.org: address to
+    https://Khairy98@bitbucket.org/, so git asked for a password whatever address Night Shift gave it). The person's own
+    ~/.gitconfig is never changed; this only applies inside Night Shift's worker."""
+    if os.environ.get('GIT_CONFIG_GLOBAL') == ISOLATED:
+        return
+    try:
+        lines = subprocess.run(['git', 'config', '--global', '--list'], capture_output=True, text=True, timeout=10).stdout.splitlines()
+    except Exception:
+        lines = []
+    keep = [l for l in lines if '=' in l and not l.lower().startswith(('url.', 'credential.', 'include.', 'includeif.'))]
+    os.makedirs(os.path.dirname(ISOLATED), exist_ok=True)
+    out = []
+    for l in keep:
+        k, v = l.split('=', 1)
+        sec, _, name = k.rpartition('.')
+        if '.' in sec:                                   # section.subsection.key
+            s1, _, sub = sec.partition('.')
+            out.append(f'[{s1} "{sub}"]\n\t{name} = {v}')
+        else:
+            out.append(f'[{sec}]\n\t{name} = {v}')
+    with open(ISOLATED, 'w') as fh:
+        fh.write('# Night Shift: your global git settings minus url rewrites and credential helpers (made automatically)\n'
+                 + '\n'.join(out) + '\n')
+    os.environ['GIT_CONFIG_GLOBAL'] = ISOLATED
+    os.environ['GIT_CONFIG_NOSYSTEM'] = '1'             # the system config adds the macOS keychain helper
+
+
+def rewrites():
+    """Address-rewrite rules in the person's own git config (for the log)."""
+    try:
+        r = subprocess.run(['git', 'config', '--global', '--get-regexp', r'^url\..*\.insteadof$'], capture_output=True, text=True,
+                           timeout=10, env={k: v for k, v in os.environ.items() if k not in ('GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')})
+        return [l for l in r.stdout.splitlines() if 'bitbucket' in l.lower()]
+    except Exception:
+        return []
+
+
 def base():
     """'git@bitbucket.org:<ws>/' or 'https://x-bitbucket-api-token-auth@bitbucket.org/<ws>/'."""
+    isolate()
     os.environ['GIT_TERMINAL_PROMPT'] = '0'
     ws = _workspace()
     if ssh_ok():
