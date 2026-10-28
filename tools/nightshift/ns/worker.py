@@ -51,6 +51,7 @@ def _now():
 #                  worker.serve_others: true      -> also the jobs of people whose own worker is not online (the lab host)
 # No owner set = the old behaviour: this worker runs every job.
 SHARED_ACTIONS = ('sync', 'sync-full', 'audio-branches')       # board-wide work: whichever worker is online first
+SHIP_ACTIONS = ('bb-comments', 'crash-pr', 'jira-create')       # post to Bitbucket / Jira: the board host only
 PHONE_ACTIONS = ('reproduce', 'draft-fix', 'audio-check')
 WORKER_ALIVE_S = 180
 
@@ -987,6 +988,15 @@ class Worker:
             # 26 Oct: release builds are PairIP-protected: an adb-installed APK is killed ~0.1 s after launch
             # (LicenseActivity), so the real app must come from the Play Store (internal-test track), never adb
             st = fullapp.ensure_play_build(config.app_package(getattr(self, 'cfg', None)), log=lambda t: self.log(ref, t))
+            try:                                      # the facts the repro author must not argue with
+                _d = subprocess.run(['adb', 'shell', 'dumpsys', 'package', config.app_package(getattr(self, 'cfg', None))],
+                                    capture_output=True, text=True, timeout=60).stdout
+                _sdk = subprocess.run(['adb', 'shell', 'getprop', 'ro.build.version.sdk'], capture_output=True, text=True, timeout=30).stdout.strip()
+                _inst = (re.search(r'installerPackageName=(\S+)', _d) or [None, '?'])[1]
+                self._play_info = (f"com.myzesty versionCode {st.get('version')} installed by {_inst} (the Play Store), "
+                                   f"not debuggable, phone API {_sdk}")
+            except Exception:
+                self._play_info = ''
             if vc and str(st.get('version')) != str(vc):
                 self.log(ref, f'note: the Play Store has build {st.get("version")}; the crash came from {vc}')
             return 0
@@ -2067,6 +2077,8 @@ class Worker:
         serve = bool((self.cfg.get('worker') or {}).get('serve_others'))
         if job.get('action') in ('sync', 'sync-full') or '@' not in who:
             return serve                                    # board-wide gathering / scheduled work: the board host only
+        if job.get('action') in SHIP_ACTIONS:
+            return serve                                    # "ship it": the lab Mac has the verified fixes, reviews and write tokens
         return who == me                                    # everything else: the requester's own computer, nobody else's
 
     def handle(self, snap):
@@ -2111,6 +2123,47 @@ class Worker:
                     print(f'[worker] could not close stale lab jobs: {e}', flush=True)
             self._watch_cancel(ref)
             self._pin_phone()                         # every adb call of this job goes to the physical lab phone
+            if job.get('action') in ('bb-comments', 'crash-pr', 'jira-create'):   # "ship it" buttons (shipit.py): only on a click
+                issue = str(job.get('issue') or '').strip()
+                who = str(job.get('requestedBy') or '').lower()
+                who = who if re.fullmatch(r'[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,100}', who) else ''
+                env = f'NS_REQUESTED_BY="{who}" ' if who else ''
+                dd = os.path.join(config.REPO, 'tools/nightshift/out/shipit')
+                os.makedirs(dd, exist_ok=True)
+                pf = os.path.join(dd, f'{job["action"]}-payload-{ref.id}.json')    # the texts shown on the board, as a file
+                payload = {}
+                if job.get('comments') is not None or job.get('description') or job.get('summary'):
+                    payload = {'comments': [x for x in (job.get('comments') or []) if isinstance(x, dict)][:20],
+                               'summary': str(job.get('summary') or job.get('description') if job['action'] == 'bb-comments' else job.get('summary') or '')[:30000],
+                               'description': str(job.get('description') or '')[:30000]}
+                    json.dump(payload, open(pf, 'w'))
+                popt = f' --payload "{pf}"' if payload else ''
+                try:
+                    if job['action'] == 'bb-comments':
+                        if not re.fullmatch(r'([A-Za-z0-9_.-]{1,80}-)?\d{1,7}', issue):
+                            raise RuntimeError(f'bad PR key {issue!r}')
+                        self.log(ref, f'Ship it: posting the Night Shift review of PR {issue} to Bitbucket')
+                        cmd = f'{env}{PY} tools/nightshift/shipit.py pr-comments --pr {issue}' + popt
+                    elif job['action'] == 'crash-pr':
+                        cid, _, base = issue.partition('|')
+                        if not re.fullmatch(r'[0-9a-f]{32}(~[0-9a-f]{8})?', cid) or (base and not re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', base)):
+                            raise RuntimeError(f'bad case id or branch {issue!r}')
+                        self.log(ref, f'Ship it: draft PR for the verified fix of {cid[:8]}' + (f' into {base}' if base else ''))
+                        cmd = f'{env}{PY} tools/nightshift/shipit.py crash-pr --case "{cid}"' + (f' --base "{base}"' if base else '') + popt
+                    else:
+                        if not re.fullmatch(r'[0-9a-f]{32}(~[0-9a-f]{8})?', issue):
+                            raise RuntimeError(f'bad case id {issue!r}')
+                        df = os.path.join(dd, f'jira-draft-{ref.id}.json')       # the edited text goes as a file (no shell quoting)
+                        json.dump({'summary': str(job.get('summary') or '')[:250], 'description': str(job.get('description') or '')[:30000],
+                                   'type': 'Bug'}, open(df, 'w'))
+                        self.log(ref, f'Ship it: creating the Jira card drafted for {issue[:8]}')
+                        cmd = f'{env}{PY} tools/nightshift/shipit.py jira-create --case "{issue}" --draft "{df}"'
+                    rc = self.run_cmd(ref, cmd, 1800)
+                    ref.update({'status': 'cancelled' if getattr(self, 'cancelled', False) else ('done' if rc == 0 else 'failed'), 'finishedAt': _now()})
+                except Exception as e:
+                    self.log(ref, f'ERROR {e}')
+                    ref.update({'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:500]})
+                return
             if job.get('action') == 'card-read':         # Card Issue: read a Jira card, watch its video frame by frame, write steps
                 parts = str(job.get('issue') or '').split('|', 2)     # KEY | branch | note  (old form: KEY | note)
                 key = parts[0].strip().upper()
@@ -2566,22 +2619,24 @@ class Worker:
             if time.time() - last_poll < 60:
                 continue
             last_poll = time.time()
-            try:
+            queued = []
+            try:                                       # ONE read of the queued jobs per minute (free plan quota)
                 if getattr(watch, '_closed', False) or not getattr(watch, 'is_active', True):
                     print('[worker] job listener ended; subscribing again', flush=True)
                     watch = q.on_snapshot(on_snapshot)
-                for d in q.stream():
+                queued = list(q.stream())
+                for d in queued:
                     if time.time() - seen.get(d.id, 0) > 600:      # not dispatched by this process in the last 10 min
                         print(f'[worker] poll found queued job {d.id[:8]} the listener missed', flush=True)
                         fire(d)
             except Exception as e:
                 print(f'[worker] poll for queued jobs failed: {str(e)[:150]}', flush=True)
-            try:
-                self.daily_sync()
-            except Exception as e:
-                print(f'[worker] daily sync scheduling failed: {e}', flush=True)
-            try:                                   # pick up jobs that waited for the phone lock
-                for doc in q.get():
+            if time.time() - getattr(self, '_sync_check_at', 0) > 900:   # the daily sync booking: every 15 min is enough
+                self._sync_check_at = time.time()
+                try:
+                    self.daily_sync()
+                except Exception as e:
+                    print(f'[worker] daily sync scheduling failed: {e}', flush=True)
+            for doc in queued:                         # pick up jobs that waited for the phone lock (same read as above)
+                if time.time() - seen.get(doc.id, 0) > 55:
                     threading.Thread(target=dispatch, args=(doc,), daemon=True).start()
-            except Exception as e:
-                print(f'[worker] rescan failed: {e}', flush=True)

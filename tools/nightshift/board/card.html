@@ -231,6 +231,8 @@ dialog::backdrop{background:rgba(15,23,42,.35)}
 pre.snip{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 0;overflow-x:auto;font:12px/1.6 var(--mono)}
 pre.snip span{display:block;padding:0 10px;white-space:pre}pre.snip .a{background:#ecfdf3}
 .files{display:flex;flex-direction:column;gap:10px}
+.rcsince{font-size:13px;color:var(--mut,#777);margin:6px 0}.rcsince em{font-style:normal;font-weight:600}
+.rcev{margin:10px 0;padding:0}.rcev img{display:block;max-width:100%;height:auto;border-radius:8px;border:1px solid rgba(127,127,127,.3);background:#222}.rcev figcaption{font-size:12px;color:var(--mut,#777);margin-top:4px;line-height:1.4}
 .file{border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .fh{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 14px;background:var(--soft);border-bottom:1px solid var(--line)}
 .fh b{font-size:13px;overflow-wrap:anywhere}
@@ -949,6 +951,10 @@ var FB = /*__NS_FIREBASE__*/null;
       .then(function(){
         firebase.initializeApp(FB);
         var auth = firebase.auth(), db = firebase.firestore(), first = null, firstDraw = '';
+        try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch (e) {}
+        // free plan: a hidden tab stops streaming after 2 min (no reads), and catches up when shown again; the local
+        // cache (persistence) means a reload or return within 30 min reads only the records that changed
+        var __nsOff = null; document.addEventListener('visibilitychange', function(){ if (document.hidden) { __nsOff = setTimeout(function(){ db.disableNetwork().catch(function(){}); }, 120000); } else { clearTimeout(__nsOff); db.enableNetwork().catch(function(){}); } });
         auth.onAuthStateChanged(function(user){
           var dom = (FB.domain || 'msd-my.com').toLowerCase();
           if (!(user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + dom))) {
@@ -1204,6 +1210,13 @@ var FB = /*__NS_FIREBASE__*/null;
         if (x.actual) { var sm = mk('span'); sm.appendChild(mk('em', null, 'User sees ')); sm.appendChild(document.createTextNode(cut(x.actual, 110))); meta.appendChild(sm); }
         if (f && f.file && st.status === 'explained') { var wm = mk('span'); wm.appendChild(mk('em', null, 'Bug at ')); wm.appendChild(mk('code', 'loc', base(f.file, f.line))); meta.appendChild(wm); }
         if (meta.childNodes.length) bd.appendChild(meta);
+        if (st.since) { var sn = mk('div', 'rcsince'); sn.appendChild(mk('em', null, 'In the code since ')); sn.appendChild(document.createTextNode(cut(st.since, 200))); bd.appendChild(sn); }
+        (st.evidence || []).slice(0, 4).forEach(function(ev){
+          if (!ev || !ev.url) return;
+          var fig = mk('figure', 'rcev'), a = mk('a'); a.href = ev.url; a.target = '_blank'; a.rel = 'noopener';
+          var im = mk('img'); im.src = ev.url; im.alt = 'Evidence: ' + (ev.item || ''); im.loading = 'lazy'; a.appendChild(im); fig.appendChild(a);
+          fig.appendChild(mk('figcaption', null, 'Evidence · ' + cut(ev.caption || '', 260))); bd.appendChild(fig);
+        });
         var rf = (st.refFrames || [])[0] || (x.ref_frames || [])[0], bf0 = (x.bug_frames || [])[0] || (st.frames || [])[0];
         if (rf && bf0) {
           var ra = (VID[(FR[rf] || {}).v] || {}).app || 'Reference', ba = (VID[(FR[bf0] || {}).v] || {}).app || 'MyZesty';

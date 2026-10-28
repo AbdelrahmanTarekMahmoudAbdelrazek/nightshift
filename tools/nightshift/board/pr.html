@@ -483,9 +483,19 @@ svg.seq .ghost{opacity:.28}
 <div class="wrap" id="app" hidden>
   <div class="top"><a class="mono" href="/#prs" style="color:var(--accent-ink);text-decoration:none">← Night Shift · PR Review</a></div>
   <div class="top"><span class="num" id="h-num"></span><h1 id="h-title"></h1><span id="h-pills" style="display:contents"></span>
-    <span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" id="h-bb" target="_blank" rel="noopener">Open in Bitbucket ↗</a><button class="btn soft" type="button" id="h-rerun">Re-review</button></span></div>
+    <span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" id="h-bb" target="_blank" rel="noopener">Open in Bitbucket ↗</a><button class="btn soft" type="button" id="h-rerun">Re-review</button><button class="btn pri" type="button" id="h-post" title="Post the verified findings as comments on the Bitbucket PR (Night Shift edits its own comments on a re-run)">Post to Bitbucket</button></span></div>
   <p class="sub mono" id="h-meta"></p>
   <p class="note" id="h-status" role="status"></p>
+  <dialog id="shipdlg" style="max-width:880px;width:calc(100% - 32px);border:1px solid var(--line);border-radius:16px;padding:0;color:var(--ink);background:var(--card)">
+    <form method="dialog" style="padding:18px;display:flex;flex-direction:column;gap:12px">
+      <b style="font-size:16px">Ready to post to Bitbucket</b>
+      <p class="sub" id="ship-sub"></p>
+      <div id="ship-list" style="display:flex;flex-direction:column;gap:12px"></div>
+      <div class="st">Summary comment (top of the PR)</div>
+      <textarea id="ship-sum" rows="10" style="width:100%;box-sizing:border-box;font:12.5px/1.45 var(--mono);border:1px solid var(--line);border-radius:10px;padding:10px"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" value="cancel">Cancel</button><button class="btn pri" type="button" id="ship-go">Post to Bitbucket</button></div>
+    </form>
+  </dialog>
 
   <div class="tabs" role="tablist" aria-label="Review pages">
     <button role="tab" id="t-story" aria-controls="p-story" aria-selected="true"><span class="no">1</span>Summary</button>
@@ -828,6 +838,10 @@ var FB = /*__NS_FIREBASE__*/null;
       .then(function(){
         firebase.initializeApp(FB);
         var auth = firebase.auth(), db = firebase.firestore(), first = null, firstDraw = '';
+        try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch (e) {}
+        // free plan: a hidden tab stops streaming after 2 min (no reads), and catches up when shown again; the local
+        // cache (persistence) means a reload or return within 30 min reads only the records that changed
+        var __nsOff = null; document.addEventListener('visibilitychange', function(){ if (document.hidden) { __nsOff = setTimeout(function(){ db.disableNetwork().catch(function(){}); }, 120000); } else { clearTimeout(__nsOff); db.enableNetwork().catch(function(){}); } });
         auth.onAuthStateChanged(function(user){
           var dom = (FB.domain || 'msd-my.com').toLowerCase();
           if (!(user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + dom))) {
@@ -888,6 +902,54 @@ var FB = /*__NS_FIREBASE__*/null;
       .catch(function(e){ $('h-status').textContent = 'Could not queue: ' + (e.message || e); });
   }
 
+  // ---------- Ship it: the comments are prepared here from the review; one click posts exactly this text ----------
+  var SEVN = { blocker: 'Blocker', major: 'Major', minor: 'Minor', suggestion: 'Suggestion' };
+  function shipPlan(rec){
+    var link = location.origin + '/pr.html?id=' + encodeURIComponent(rec.id);
+    var fs = (rec.findings || []).filter(function(f){ return f && f.tier === 'verified'; });
+    var ord = { blocker: 0, major: 1, minor: 2, suggestion: 3 };
+    fs.sort(function(a, b){ return (ord[a.severity] ?? 9) - (ord[b.severity] ?? 9); });
+    var sus = (rec.findings || []).filter(function(f){ return f && f.tier === 'suspected' && (f.severity === 'blocker' || f.severity === 'major'); });
+    var comments = fs.slice(0, 20).map(function(f){
+      return { file: f.file || '', line: f.line, title: f.title || '', severity: f.severity || '',
+        body: '**Night Shift · ' + (SEVN[f.severity] || f.severity || '') + ' · verified**\n\n**' + String(f.title || '').trim() + '**\n\n'
+          + String(f.problem || '').trim() + '\n\n' + (f.fix ? '**Suggested fix:** ' + String(f.fix).trim() + '\n\n' : '')
+          + '[Proof, replay and the judges\' votes on Night Shift →](' + link + ')' };
+    });
+    var head = { blocking: 'Blocking issue found', changes: 'Changes suggested', approve: 'Looks good' }[rec.verdict] || String(rec.verdict || '');
+    var s = ['### Night Shift review: ' + head, '', String(rec.headline || '').trim(), '',
+      '**' + fs.length + ' verified** · ' + sus.length + ' suspected major/blocker · reviewed commit `' + String(rec.head || '?').slice(0, 12) + '`'];
+    if (sus.length) { s.push('', '**Worth a look (not proven):**'); sus.slice(0, 5).forEach(function(f){ s.push('- ' + (SEVN[f.severity] || '') + ' `' + f.file + ':' + f.line + '` — ' + String(f.title || '').trim()); }); }
+    s.push('', '[Full review on Night Shift: replays, scenarios, proof →](' + link + ')');
+    return { comments: comments, summary: s.join('\n') };
+  }
+  function openShip(rec){
+    if (!live) { $('h-status').textContent = 'Open this page from the live board to post to Bitbucket.'; return; }
+    var plan = shipPlan(rec), list = $('ship-list'); list.innerHTML = '';
+    $('ship-sub').textContent = plan.comments.length + ' comment(s) on the code lines + 1 summary. Edit anything you like; untick what should not be posted. '
+      + 'A comment whose line is not part of the PR changes is listed in the summary instead. Posting again later edits these same comments.';
+    plan.comments.forEach(function(c, i){
+      var box = document.createElement('div'); box.style.cssText = 'border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px';
+      var lab = document.createElement('label'); lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:700';
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = true; cb.id = 'ship-on-' + i;
+      lab.appendChild(cb); lab.appendChild(document.createTextNode((SEVN[c.severity] || c.severity) + ' · ' + c.file + ':' + c.line));
+      var ta = document.createElement('textarea'); ta.id = 'ship-body-' + i; ta.rows = 7; ta.value = c.body;
+      ta.style.cssText = 'width:100%;box-sizing:border-box;font:12.5px/1.45 var(--mono);border:1px solid var(--line);border-radius:10px;padding:10px';
+      box.appendChild(lab); box.appendChild(ta); list.appendChild(box);
+    });
+    $('ship-sum').value = plan.summary;
+    $('ship-go').disabled = false; $('ship-go').textContent = 'Post to Bitbucket';
+    $('ship-go').onclick = function(){
+      var out = plan.comments.map(function(c, i){ return $('ship-on-' + i).checked ? { file: c.file, line: c.line, title: c.title, severity: c.severity, body: $('ship-body-' + i).value.slice(0, 20000) } : null; }).filter(Boolean);
+      $('ship-go').disabled = true; $('ship-go').textContent = 'Queued…';
+      live.db.collection('jobs').add({ action: 'bb-comments', issue: String(rec.id), requestedBy: live.user.email.toLowerCase(), status: 'queued',
+        queuedAt: firebase.firestore.FieldValue.serverTimestamp(), comments: out, description: $('ship-sum').value.slice(0, 30000) })
+        .then(function(){ $('shipdlg').close(); $('h-status').textContent = 'Posting ' + out.length + ' comment(s) + the summary to Bitbucket. Watch the Jobs tab on the board.'; })
+        .catch(function(e){ $('ship-go').disabled = false; $('ship-go').textContent = 'Post to Bitbucket'; $('h-status').textContent = 'Could not queue: ' + (e.message || e); });
+    };
+    $('shipdlg').showModal();
+  }
+
   // ---------- render ----------
   function render(rec){
     $('loading').hidden = true; $('app').hidden = false;
@@ -922,6 +984,11 @@ var FB = /*__NS_FIREBASE__*/null;
     if (rec.noRerun) $('h-rerun').hidden = true;
     $('h-rerun').onclick = function(){ queueReview(String(rec.id).replace(/^local-.*/, '')); };
     if (String(rec.id).indexOf('local-') === 0) $('h-rerun').hidden = true;
+    $('h-post').hidden = String(rec.id).indexOf('local-') === 0 || !(rec.findings || []).length;
+    $('h-post').onclick = function(){ openShip(rec); };
+    var nReady = (rec.findings || []).filter(function(f){ return f && f.tier === 'verified'; }).length;
+    $('h-post').textContent = (rec.bbPosted && rec.bbPosted.at ? 'Update on Bitbucket' : 'Post to Bitbucket') + ' (' + (nReady + 1) + ' ready)';
+    $('h-post').title = (rec.bbPosted && rec.bbPosted.at ? 'Posted ' + rec.bbPosted.at + '. ' : '') + nReady + ' comment(s) + 1 summary are prepared: open them, edit if you like, one click posts.';
     if (rec.stage === 'reviewing') $('h-status').textContent = rec.early ? 'Early look: these scenarios passed the line check but the judges have not decided yet. This page tells you when the full review is ready.' : 'A review is running now. This page updates when it is done.';
     if (!view) { renderOld(rec); return; }
     app(rec, view, claims);

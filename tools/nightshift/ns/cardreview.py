@@ -9,9 +9,11 @@ Out: the same visual review as the PR page: a replay from the video to the code,
 Stages: Kotlin side -> card map (Sonnet) -> hunt (3 seats: root cause, user flow, threads) -> merge -> line check
 -> 2 judges -> tiers -> replays + fix (card-visual) -> issue status (code) -> chair. Nothing is written to the repos."""
 import datetime as dt
+import hashlib
 import json
 import os
 import shutil
+import subprocess
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -197,6 +199,7 @@ class Review:
         self.model = (cfg.get('llm') or {}).get('model_card') or 'opus'
         self.small = (cfg.get('llm') or {}).get('model_card_small') or 'sonnet'
         self.block = [f'{t}(/{config.REPO.strip("/")}/**)' for t in ('Read', 'Grep', 'Glob')] + ['Bash', 'WebFetch', 'WebSearch']
+        self.sdir, self.kpaths, self.ev_req = None, [], []
 
     def call(self, skill, prompt, tag, model=None, timeout=1800, tools='Read,Grep,Glob'):
         u = {}
@@ -235,11 +238,13 @@ class Review:
                 "You are in a read-only checkout of that branch (the native app). Read, Grep and Glob only.\n\n")
         self.progress('reading the Kotlin side')
         kpaths, klabel = self.kotlin()
+        self.kpaths = list(kpaths or [])
         try:                                              # effects, frames, transitions... the card names: fetched read-only
             from . import servercontent
             self.st.start('Server content', 'no AI')
             smd, sdir = servercontent.collect(doc, self.key, log=self.log,
                                               endpoints=(self.cfg.get('server_content') or {}).get('endpoints'))
+            self.sdir = sdir
             if sdir:                                    # the video frames around each bug, as images next to the thumbnails
                 pub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'board', 'public')
                 want = sorted({int(b) + d for x in issues for b in (x.get('bug_frames') or []) if str(b).isdigit() for d in (-2, 0, 2)})[:12]
@@ -415,6 +420,7 @@ class Review:
                                              'line': f.get('line'), 'tier': f.get('tier')} for i, f in enumerate(findings[:40])], 12000)
                                       + '\n```\n', 'visual', timeout=1800))
                 dropped = view.get('dropped') or []
+                self.ev_req = [r for r in (vis or {}).get('evidence') or [] if isinstance(r, dict)]
                 view2, _ = prvisual.build(vis or {}, self.wt, '', findings[:40], given=keep)
                 view2['dropped'] = dropped
                 for k in ('tldr', 'before', 'adds', 'heads'):
@@ -433,6 +439,17 @@ class Review:
         nfr = len(doc.get('frames') or [])
         self._frames_ok(view, nfr)
         status = self.issue_status(view, findings, issues)
+        self.st.start('Evidence + history', 'no AI')
+        n_ev = n_age = 0
+        try:
+            n_ev = self.evidence(status, issues)
+        except Exception as e:
+            self.log(f'evidence pictures skipped ({str(e)[:150]})')
+        try:
+            n_age = self.since(status, view)
+        except Exception as e:
+            self.log(f'line history skipped ({str(e)[:150]})')
+        self.st.end(f'{n_ev} evidence picture(s) · {n_age} fix line(s) dated with git blame')
         if view is not None:
             view['ready'] = self.ready_cards(status)
             view['issues'] = status
@@ -472,6 +489,109 @@ class Review:
         self.save(rec)
         self.log(f"card review {self.key}: {verdict} · {n_ex}/{len(status)} issue(s) verified · {rec['how']}")
         return rec
+
+    # ---------------------------------------------------------------- evidence + history (no AI)
+    def evidence(self, status, issues):
+        """Picture evidence per issue: each server item's replay (its thumbnail next to its shader at the item's JSON
+        params), plus the rows the visual stage asked for (e.g. the value the app really passes), published under
+        board/public/v/<token>/ like the card's video frames. Returns how many pictures were attached."""
+        if not self.sdir or not os.path.exists(os.path.join(self.sdir, 'evidence.json')):
+            return 0
+        from . import contentaudit, servercontent
+        nn = servercontent._norm
+        specs = json.load(open(os.path.join(self.sdir, 'evidence.json')))
+        text = {x.get('n'): ' ' + nn(f"{x.get('title', '')} {x.get('actual', '')} {x.get('expected', '')} {x.get('compare', '')}") + ' '
+                for x in issues}
+        tok = hashlib.sha256(f'{self.key}:{self.t0.isoformat()}'.encode()).hexdigest()[:20]
+        dst = os.path.join(config.REPO, 'tools', 'nightshift', 'board', 'public', 'v', tok)
+        byn = {s_['n']: s_ for s_ in status}
+        n = 0
+        for sp in specs:
+            name = nn(sp.get('name'))
+            mine = [r for r in self.ev_req if nn(r.get('item')) == name]
+            extra = []
+            for r in mine[:3]:
+                ps = {}
+                for k, v in (r.get('params') or {}).items():
+                    try:
+                        ps[str(k)] = [float(z) for z in (v if isinstance(v, list) else [v])][:4]
+                    except (TypeError, ValueError):
+                        continue
+                lab = str(r.get('label') or 'App now')[:34]
+                extra.append({'label': lab + '\n' + ', '.join(f"{k} {'/'.join(f'{z:g}' for z in vs)}" for k, vs in ps.items()),
+                              'params': ps, 'color': '#f88'})
+            png = contentaudit.evidence(sp, self.sdir, log=self.log, extra=extra) if extra else sp.get('png')
+            if not png or not os.path.exists(png):
+                continue
+            nums = {self._int(r.get('issue')) for r in mine if self._int(r.get('issue')) in byn}
+            nums |= {k for k, t in text.items() if name and f' {name} ' in t}
+            if not nums:
+                continue
+            os.makedirs(dst, exist_ok=True)
+            fn = f"ev_{sp.get('slug') or 'item'}.png"
+            shutil.copyfile(png, os.path.join(dst, fn))
+            cap = (f"{sp.get('name')} ({sp.get('category', '')} {sp.get('i_id', '')}): row 1 is the thumbnail frame by frame; "
+                   "the next rows replay the live server shader on the thumbnail's own first and last frame"
+                   + (' at the value the app passes now (red) and at the item JSON value (green).' if extra else ' at the item JSON params.'))
+            for k in sorted(nums):
+                byn[k].setdefault('evidence', []).append({'url': f'/v/{tok}/{fn}', 'caption': cap, 'item': sp.get('name')})
+            n += 1
+        return n
+
+    def since(self, status, view):
+        """For each issue's suggested fix line: the commit that last changed it (git blame), so the card says whether
+        the bug is a recent regression or has been there since the code was written."""
+        scs = {s_['id']: s_ for s_ in (view or {}).get('scenarios') or []}
+        n = 0
+        for st in status:
+            fc = (scs.get(st.get('scenario')) or {}).get('fixCode') or {}
+            f, ln = str(fc.get('file') or ''), self._int(fc.get('line'))
+            if not f or not ln:
+                continue
+            # the Kotlin copies the review read come first (the main repo may hold an older java-common of its own)
+            roots = self.kpaths + sorted({os.path.dirname(k) for k in self.kpaths}) + [self.wt]
+            cands = [f] if os.path.isabs(f) else [os.path.join(r, f) for r in roots]
+            path = next((c for c in cands if os.path.exists(c)), None)
+            if not path:
+                continue
+            cwd = os.path.dirname(path)
+            blame = lambda: subprocess.run(['git', 'blame', '-L', f'{ln},{ln}', '--porcelain', 'HEAD', '--', os.path.basename(path)],
+                                           cwd=cwd, capture_output=True, text=True, timeout=60).stdout
+            try:
+                out = blame()
+                # Night Shift's own Kotlin copies are shallow (depth 1): fetch their history once and ask again
+                if re.search(r'^boundary$', out or '', re.M) and os.path.realpath(path).startswith(os.path.realpath(os.path.expanduser('~/.nightshift_kotlin'))):
+                    subprocess.run(['git', 'fetch', '-q', '--unshallow'], cwd=cwd, capture_output=True, timeout=240)
+                    out = blame() or out
+            except Exception:
+                continue
+            if not out:
+                continue
+            sha = out.split()[0]
+            meta = dict(re.findall(r'^(author|author-time|summary) (.*)$', out, re.M))
+            when = dt.datetime.fromtimestamp(int(meta.get('author-time', '0') or 0)).strftime('%Y-%m-%d') if meta.get('author-time') else ''
+            if set(sha) == {'0'}:
+                continue
+            if re.search(r'^boundary$', out, re.M):
+                st['since'] = (f"Older than this checkout's history (shallow clone): the line is in the oldest commit "
+                               f"available here ({when}), so it was written on {when} or earlier.")
+            else:
+                st['since'] = f"Line last changed {when} in {sha[:9]} by {meta.get('author', '?')}: {meta.get('summary', '')[:90]}"
+                try:                                     # and when its code first appeared (survives later reformatting)
+                    code = open(path, errors='replace').read().splitlines()[ln - 1].strip()
+                    if len(code) >= 12:
+                        # --follow: through renames and package moves (it cannot be combined with --reverse: oldest is last)
+                        first = subprocess.run(['git', 'log', '--follow', '--date=short', '--format=%h|%ad|%an|%s', '-S', code,
+                                                'HEAD', '--', os.path.basename(path)], cwd=cwd, capture_output=True, text=True,
+                                               timeout=120).stdout.splitlines()
+                        if first:
+                            h, d, a, subj = (first[-1].split('|', 3) + ['', '', '', ''])[:4]
+                            if d != when:
+                                st['since'] = f"Added {d} in {h} by {a} ({subj[:70]}); last changed {when} in {sha[:9]}"
+                except Exception:
+                    pass
+            n += 1
+        return n
 
     # ---------------------------------------------------------------- helpers
     @staticmethod

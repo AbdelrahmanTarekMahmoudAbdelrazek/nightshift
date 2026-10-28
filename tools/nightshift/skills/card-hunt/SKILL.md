@@ -98,6 +98,23 @@ that does it right. Claim "verified" when those lines force what the video shows
 file (show it as a diff of the downloaded file) and the note says it is a content upload, not an app release. If the
 file is missing from the section, say so and title the scenario "Not in the app code: ..." (suspected).
 
+Go one level deeper than "the content is wrong", with the extra sections the prompt gives you:
+1. WHY it is wrong ("Where these files came from"): an upload-date outlier, a BYTE-IDENTICAL file of another item or
+   folder, or a FOLDER MISMATCH means the content was replaced or mixed up. Say what happened, with the date and the
+   files ("on 2025-03-26 Split's snapl.webp was replaced by Classic's copy, same SHA-256"), as a proof step.
+2. REACH of the fix ("Reach of a fix" and server_all_items.jsonl): before you call a change safe, count what it
+   touches. A change to how the app reads a param or field touches every item that carries it: Grep the jsonl and write
+   the number ("only Sketch 1 and Sketch 2 of 464 transitions carry an intensity param") in the fix. If you flag a risk
+   for other items, check it there instead of leaving it as a question.
+3. EVIDENCE replays: open each evidence picture. Row 1 is the item's thumbnail, the next row the live server shader
+   at the item's JSON params on the same frames. Cite what you see ("evidence row 2 matches the thumbnail: the shader
+   is right, the app passes another value").
+4. The SMALLEST fix that makes the card's Expected true: prefer a content fix (a thumbnail, a param, a path) over an
+   app release, and keep item ids and the animation users already have (saved drafts store the id): changing an id or
+   swapping the shader changes what existing projects play. Give the bigger change in the note as the alternative.
+5. EVERY affected item: when two or more items have the same problem (Snap I and Snap II), the fix covers all of them
+   in the same diff, not one in the diff and "do the same for the other" in the note.
+
 ## A reference video from another app (e.g. CapCut)
 Some cards have two videos: one from another app (CapCut, InShot, VN...) showing the RIGHT behaviour, and one from
 MyZesty showing the wrong one ("mask applied wrong, not as CapCut"). The other app is only the expected result: never

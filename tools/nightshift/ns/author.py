@@ -989,6 +989,10 @@ def run(worker, ref, case, merged, tried=None):
                 f'instances show (e.g. one per instance group); its docstring starts with the instances it recreates. '
                 f'Each runs once; a recipe that comes close (the field error lines appear in the lab log) is repeated.\n'
                 f'Level rule: {rule}\n\n'
+                + (f'VERIFIED BY NIGHT SHIFT BEFORE THIS RUN: {worker._play_info}. This IS the real shipped app the crash came from; '
+                   'its launcher com.myzesty/.MainActivity is the full app\'s own MainActivity, not video_gles3jni\'s developer menu, '
+                   'so never conclude "wrong build" from the video_gles3jni sources.\n'
+                   if getattr(worker, '_play_mode', False) and getattr(worker, '_play_info', '') else '')
                 + ('IMPORTANT: the lab phone runs the PLAY internal-test build (the full app, release): there are NO debug hooks '
                    '(debug.zesty.hook.*) and no lab remote-control broadcasts; use only real taps (ed.ui, ed.tap_tool, ed.open_* '
                    'blocks that tap the real UI) and phone-level conditions (rotate, network, kill_bg, slow_phone).\n\n'

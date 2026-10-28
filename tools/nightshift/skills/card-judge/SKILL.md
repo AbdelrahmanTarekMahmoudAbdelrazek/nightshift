@@ -84,3 +84,9 @@ wrong, give the corrected condition in "when" (widen or narrow it) and name the 
 ONLY a ```json block: {"votes": [{"id": "s1", "vote": "confirmed|refuted|unsure", "kind": "always|timing|condition",
 "evidence": ["File.cpp:123"], "severity": "blocker|major|minor|suggestion", "note": "", "title"?: "", "q"?: "",
 "problem"?: "", "same_as"?: ""}]}
+
+## Server content evidence
+When the prompt has "Where these files came from", "Reach of a fix" or "Evidence replays": a claim about server
+content counts as proven when the downloaded file's lines, the upload dates/SHA-256 notes or an evidence picture (open
+it with Read) show it. Refute a fix that touches more items than it says (check server_all_items.jsonl), that covers
+only one of several affected items, or that changes an item id or animation when a content-only fix would do.

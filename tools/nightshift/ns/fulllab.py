@@ -60,7 +60,8 @@ def ensure(cfg, version=None, log=print):
         raise RuntimeError('no myzesty_mobile checkout on this computer (nightshift.yaml full_app.path)')
     branch = branch_for(cfg, src, version)
     safe = re.sub(r'[^A-Za-z0-9._-]', '_', branch)
-    _sh(['git', 'fetch', '--no-tags', 'origin', f'+refs/heads/{branch}:refs/nightshift/full/{safe}'], src, 900, check=False)
+    # shallow: a checkout cloned with --depth 1 (the full history is several GB) stays small
+    _sh(['git', 'fetch', '--depth', '1', '--no-tags', 'origin', f'+refs/heads/{branch}:refs/nightshift/full/{safe}'], src, 1800, check=False)
     sha = _sh(['git', 'rev-parse', f'refs/nightshift/full/{safe}'], src).strip()
     wt = os.path.join(ROOT, f'full-{safe}')
     if not os.path.isdir(os.path.join(wt, 'android')):
@@ -83,7 +84,7 @@ def ensure(cfg, version=None, log=print):
             _sh(['git', '-C', d, 'checkout', '-q', '-f', pin, '--', '.'], d, check=False)
             continue
         if _sh(['git', '-C', s, 'cat-file', '-t', pin], s, 60, check=False).strip() != 'commit':
-            _sh(['git', '-C', s, 'fetch', '--no-tags', 'origin', pin], s, 900, check=False)
+            _sh(['git', '-C', s, 'fetch', '--depth', '1', '--no-tags', 'origin', pin], s, 1800, check=False)
         if os.path.isdir(d) and os.listdir(d):
             _sh(['git', '-C', s, 'worktree', 'remove', '--force', d], s, check=False)
         if os.path.isdir(d) and not os.listdir(d):

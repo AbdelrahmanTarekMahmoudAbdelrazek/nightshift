@@ -10,6 +10,8 @@ import struct
 import urllib.parse
 import urllib.request
 
+from . import contentaudit
+
 ROOT = os.path.expanduser('~/.nightshift_server')
 HOSTS = ('api-v2.myzesty.com', 'd2y0wswd79h3fh.cloudfront.net')
 DEFAULT_ENDPOINTS = ['https://api-v2.myzesty.com/api/v2/resources/ve/effect?p=0', 'https://api-v2.myzesty.com/api/v2/resources/ve/transition?p=0']
@@ -139,7 +141,7 @@ def collect(doc, key, log=print, endpoints=None, max_items=8):
     hit = hit[:max_items]
     folder = os.path.join(ROOT, re.sub(r'[^\w-]', '_', key))
     os.makedirs(folder, exist_ok=True)
-    shaders, lines = {}, []
+    shaders, lines, thumbs, specs = {}, [], {}, []
     for x in hit:
         f = x.get('files') or {}
         slug = re.sub(r'[^\w]+', '_', x['name']).strip('_') or 'item'
@@ -159,12 +161,16 @@ def collect(doc, key, log=print, endpoints=None, max_items=8):
         elif sh.strip():                               # the shader text itself in the JSON
             shp = os.path.join(folder, f'server_{slug}_shader.glsl')
             open(shp, 'w', encoding='utf-8').write(sh)
-        imgs = []
+        imgs, webp_local = [], []
         for w in (f.get('webp') or [])[:3]:
             p = (w or {}).get('path') if isinstance(w, dict) else w
             if p and _ok(p):
-                try:
-                    sz = webp_size(_get(p, limit=64, rng='bytes=0-63'))
+                try:                                     # the whole overlay: the evidence replay draws it frame by frame
+                    wb = _get(p, limit=8_000_000)
+                    wl = os.path.join(folder, f'webp_{slug}_{len(webp_local)}' + (os.path.splitext(p.rsplit('/', 1)[-1])[1][:6] or '.webp'))
+                    open(wl, 'wb').write(wb)
+                    webp_local.append(wl)
+                    sz = webp_size(wb[:64])
                 except Exception:
                     sz = None
                 imgs.append(f"{p.rsplit('/', 1)[-1]} " + (f"{sz[0]}x{sz[1]} ({'portrait' if sz[1] > sz[0] else 'landscape' if sz[0] > sz[1] else 'square'}, w/h {sz[0] / sz[1]:.2f})" if sz else 'size unknown'))
@@ -175,6 +181,7 @@ def collect(doc, key, log=print, endpoints=None, max_items=8):
             try:
                 tp = os.path.join(folder, f'thumb_{slug}' + os.path.splitext(th.rsplit('/', 1)[-1])[1][:6])
                 open(tp, 'wb').write(_get(th, limit=6_000_000))
+                thumbs[x['name']] = tp
                 th_strip = strip(tp, os.path.join(folder, f'thumb_{slug}_frames.jpg')) or ''
             except Exception as e:
                 log(f'server content: thumbnail of {x["name"]} not read ({str(e)[:80]})')
@@ -193,10 +200,42 @@ def collect(doc, key, log=print, endpoints=None, max_items=8):
                      + (f"; images: {'; '.join(imgs)}" if imgs else '')
                      + (f"; thumbnail {th.rsplit('/', 1)[-1]}" if th else '') + th_note
                      + (f"; thumbnail animation frames (open with Read, left to right): `{th_strip}`" if th_strip else ''))
+        specs.append({'name': x['name'], 'slug': slug, 'category': x.get('category', ''), 'i_id': x.get('i_id', ''),
+                      'thumb': thumbs.get(x['name']), 'shader': shp, 'webp': webp_local, 'params': contentaudit.json_params(x)})
     log(f'server content: {len(hit)} item(s) fetched read-only: {", ".join(x["name"] for x in hit)}')
+    audit = ''
+    try:                                               # where the files came from, the reach of a fix, picture evidence
+        hist = contentaudit.history(items, hit, thumbs, _get, _ok, log=log)
+        if hist:
+            audit += ("## Where these files came from (CDN upload dates and SHA-256 of the files, checked read-only)\n"
+                      "Use this to say WHY the content is wrong, not only THAT it is: a file uploaded on another day than the "
+                      "rest of its folder, a file byte-identical to another item's file, or an item pointing into another "
+                      "category's folder means the content was replaced or mixed up (name the date and the file).\n"
+                      + '\n'.join(hist) + '\n\n')
+        bl = contentaudit.blast(items, hit)
+        ip = contentaudit.index(items, folder)
+        audit += ("## Reach of a fix (how many live items carry the same params)\n" + '\n'.join(bl)
+                  + f"\nAll {len(items)} live items, one JSON per line: `{ip}`. Before you call a fix safe, Grep it for the "
+                  "field the fix changes and say how many items the fix touches.\n\n")
+        ev = []
+        for sp in specs:
+            png = contentaudit.evidence(sp, folder, log=log)
+            if png:
+                sp['png'] = png
+                ev.append(f"- {sp['name']}: `{png}`")
+        json.dump(specs, open(os.path.join(folder, 'evidence.json'), 'w'), indent=1)
+        if ev:
+            audit += ("## Evidence replays (OPEN each with Read)\nRow 1 = the item's thumbnail, frame by frame. The next row = "
+                      "the downloaded server shader replayed with the item's JSON params, on the thumbnail's own first and "
+                      "last frame. If they match, the shader and the thumbnail belong together and a different look in the app "
+                      "comes from what the app passes; if they do not match, the thumbnail and the shader belong to different "
+                      "animations.\n" + '\n'.join(ev) + '\n\n')
+        log(f'server content audit: {len(hist)} history note(s), {len(ev)} evidence replay(s)')
+    except Exception as e:
+        log(f'server content audit skipped ({str(e)[:150]})')
     md = ("## Server content (downloaded read-only from the live content API for this card)\n"
           "The app downloads these files and runs them as they are; they are NOT in the checkout. Read/Grep them at the paths "
           "below and cite their lines like code (path:line, the code copied exactly). Compare them with the app's own shaders and "
           "the code that loads them. Where a thumbnail strip is listed, OPEN it with Read and compare the animation it shows "
-          "with what the video's preview frames show (listed below when available).\n" + '\n'.join(lines) + '\n\n')
+          "with what the video's preview frames show (listed below when available).\n" + '\n'.join(lines) + '\n\n' + audit)
     return md, folder

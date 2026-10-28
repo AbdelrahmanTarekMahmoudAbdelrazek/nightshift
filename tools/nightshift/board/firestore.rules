@@ -77,8 +77,22 @@ service cloud.firestore {
       allow read: if reader() || guest();
       // The browser may only queue a job: one of the known actions, on an existing case, status 'queued', as itself.
       allow create: if reader()
-        && request.resource.data.keys().hasOnly(['action', 'issue', 'requestedBy', 'status', 'queuedAt'])
-        && request.resource.data.action in ['start', 'triage', 'analyse', 'reproduce', 'draft-fix', 'pull', 'sync', 'sync-full', 'pr-review', 'audio-branches', 'audio-check', 'card-read', 'symbols-rebuild', 'build-mode', 'symbols-hide']
+        && request.resource.data.keys().hasOnly(['action', 'issue', 'requestedBy', 'status', 'queuedAt', 'summary', 'description', 'comments'])
+        && request.resource.data.action in ['start', 'triage', 'analyse', 'reproduce', 'draft-fix', 'pull', 'sync', 'sync-full', 'pr-review', 'audio-branches', 'audio-check', 'card-read', 'symbols-rebuild', 'build-mode', 'symbols-hide', 'bb-comments', 'crash-pr', 'jira-create']
+        // only the "ship it" jobs carry text: exactly what the developer saw (and maybe edited) on the board
+        && (request.resource.data.action == 'jira-create'
+              ? (request.resource.data.summary is string && request.resource.data.summary.size() > 0 && request.resource.data.summary.size() <= 250
+                 && request.resource.data.description is string && request.resource.data.description.size() > 0 && request.resource.data.description.size() <= 30000
+                 && !request.resource.data.keys().hasAny(['comments']))
+           : request.resource.data.action == 'crash-pr'
+              ? ((!request.resource.data.keys().hasAny(['summary']) || (request.resource.data.summary is string && request.resource.data.summary.size() <= 250))
+                 && (!request.resource.data.keys().hasAny(['description']) || (request.resource.data.description is string && request.resource.data.description.size() <= 30000))
+                 && !request.resource.data.keys().hasAny(['comments']))
+           : request.resource.data.action == 'bb-comments'
+              ? ((!request.resource.data.keys().hasAny(['description']) || (request.resource.data.description is string && request.resource.data.description.size() <= 30000))
+                 && (!request.resource.data.keys().hasAny(['comments']) || (request.resource.data.comments is list && request.resource.data.comments.size() <= 20))
+                 && !request.resource.data.keys().hasAny(['summary']))
+           : !request.resource.data.keys().hasAny(['summary', 'description', 'comments']))
         && request.resource.data.status == 'queued'
         && request.resource.data.requestedBy == request.auth.token.email.lower()
         && request.resource.data.queuedAt == request.time
@@ -86,6 +100,12 @@ service cloud.firestore {
               ? (request.resource.data.issue.matches('^([a-z0-9._-]{1,60}-)?[0-9]{0,6}$')   // '' = all open PRs, or one PR (number, or <repo>-<number> for another repo),
                  || (request.resource.data.issue.size() <= 700                      // or redraw one diagram: id|flow or sN|note
                      && request.resource.data.issue.matches('^([a-z0-9._-]{1,60}-)?[0-9]{1,6}[|](flow|s[0-9]{1,3})([|].*)?$')))
+              : request.resource.data.action == 'bb-comments'
+              ? request.resource.data.issue.matches('^([a-z0-9._-]{1,60}-)?[0-9]{1,6}$')     // post one PR's Night Shift review to Bitbucket
+              : request.resource.data.action == 'crash-pr'
+              ? request.resource.data.issue.matches('^[0-9a-f]{32}(~[0-9a-f]{8})?([|][A-Za-z0-9._/-]{1,100})?$')   // case|base branch
+              : request.resource.data.action == 'jira-create'
+              ? request.resource.data.issue.matches('^[0-9a-f]{32}(~[0-9a-f]{8})?$')
               : request.resource.data.action == 'card-read'
               ? (request.resource.data.issue.matches('^[A-Z][A-Z0-9]{1,9}-[0-9]{1,7}([|].+)?$') && request.resource.data.issue.size() <= 1600)   // a Jira key, optional |developer note
               : request.resource.data.action == 'audio-check'

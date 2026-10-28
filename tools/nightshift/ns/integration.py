@@ -82,7 +82,14 @@ def _files_with(repo, sha, name):
 
 def _strip_comments(s):
     s = re.sub(r'/\*.*?\*/', lambda c: '\n' * c.group(0).count('\n'), s, flags=re.S)
-    return re.sub(r'//[^\n]*', '', s)
+    s = re.sub(r'//[^\n]*', '', s)
+    # type arguments (HashMap<String, String>, mapOf<A, B>()): their commas are not parameter separators
+    g = re.compile(r'(?<=[\w?])<[\w\s,.?*]*>')
+    while True:
+        t = g.sub(lambda c: '\n' * c.group(0).count('\n'), s)
+        if t == s:
+            return s
+        s = t
 
 
 def _args(s, i):

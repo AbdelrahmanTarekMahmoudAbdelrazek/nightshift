@@ -1619,6 +1619,93 @@ function nxFix(m, a, c) {
     ${issues.length ? `<p class="nx-callout nx-warnbox">Review still asks for ${issues.length} change${issues.length > 1 ? 's' : ''}: ${issues.map(i => rich(i.fix || i.problem || '')).join(' · ')}</p>` : ''}`;
 }
 
+// ---------- Ship it (26 Oct): a verified fix -> draft PR; the Jira card as an editable draft -> a real card ----------
+function hoOf(c) {                                   // an older hand-over kept the model's raw JSON answer in pr_body
+  const ho = Object.assign({}, (c && c.handover) || {}), b = String(ho.pr_body || '');
+  if (/```json|^\s*\{/.test(b)) { try { Object.assign(ho, JSON.parse(b.slice(b.indexOf('{'), b.lastIndexOf('}') + 1))); } catch (e) {} }
+  return ho;
+}
+function jiraDraft(m, c) {
+  const a = m.analysis || {}, ho = hoOf(c), b = location.origin, kind = m.kind === 'ANR' ? 'ANR' : 'Crash';
+  const first = s => String(s || '').split(/(?<=[.!?])\s/)[0].slice(0, 180);
+  const summary = ho.jira_summary || `[Android] ${kind}: ${first(a.summary) || m.title || ''}`;
+  const L = [];
+  if (ho.jira_description) L.push(String(ho.jira_description).trim(), '');
+  else {
+    L.push('What users hit:', `${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${m.fb?.events ?? m.events ?? '?'} events, ${m.fb?.users ?? '?'} users. Builds: ${(m.builds || []).slice(0, 4).join(', ') || '?'}.`);
+    if (a.summary) L.push('', 'Root cause:', String(a.summary));
+    if ((a.located || []).length) L.push('', 'Where in the code:', ...a.located.slice(0, 5).map(x => '- ' + x));
+  }
+  const rp = String(a.repro || c?.repro_scenario || '').trim();
+  if (rp) L.push('', 'Steps to reproduce:', ...rp.split(/\s(?=\d+\)\s)|\n+/).map(s => s.trim()).filter(Boolean).map(s => /^\d+[.)]\s/.test(s) ? s.replace(/^(\d+)\)/, '$1.') : s));
+  if (c?.reproVideoUrl) L.push('', 'Repro video:', `- Attached to this card (recorded on the lab phone). Also here: ${b}${c.reproVideoUrl}`);
+  if (c?.fixNote || c?.patch) L.push('', 'Fix:', `- ${c.fixVerified ? 'Verified on the lab phone' : 'Proposed, not verified yet'}${c.fixNote ? ': ' + c.fixNote : ''}`);
+  if (c?.fixPr?.url) L.push(`- Draft PR: ${c.fixPr.url}`);
+  L.push('', 'Links:', `- Night Shift: ${b}/#problems/${m.id}`);
+  if (m.fb?.url) L.push(`- Crashlytics: ${m.fb.url}`);
+  if (m.play?.url) L.push(`- Google Play: ${m.play.url}`);
+  return { summary: summary.slice(0, 250), description: L.join('\n').slice(0, 30000) };
+}
+function crashPrDraft(m, c) {               // the draft PR text, prepared from the verified fix (posted as shown)
+  const a = m.analysis || {}, ho = hoOf(c), b = location.origin, kind = m.kind === 'ANR' ? 'ANR' : 'Crash';
+  const files = [...new Set((String(c?.patch || '').match(/^\+\+\+ b\/(\S+)/gm) || []).map(x => x.slice(6)))];
+  const title = String(ho.pr_title || `Fix ${kind.toLowerCase()}: ${String(a.summary || m.title || '').split(/(?<=[.!?])\s/)[0]}`).slice(0, 200);
+  const L = [`## ${kind}: ${m.title || ''}`, '',
+    `**What users hit:** ${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${m.fb?.events ?? m.events ?? '?'} events, ${m.fb?.users ?? '?'} users, builds ${(m.builds || []).slice(0, 4).join(', ') || '?'}.`, ''];
+  if (ho.pr_body) L.push(String(ho.pr_body).trim(), '');
+  else if (a.root_cause || a.summary) L.push('### Root cause', String(a.root_cause || a.summary), '');
+  L.push('### Proof', `- **Verified on the lab phone:** ${String(c?.fixNote || '').trim() || 'see the Night Shift case'}`);
+  if (c?.reproVideoUrl) L.push(`- **Repro video (before the fix):** ${b}${c.reproVideoUrl}`);
+  L.push(`- **Night Shift case:** ${b}/#problems/${m.id}`);
+  if (m.fb?.url) L.push(`- **Crashlytics:** ${m.fb.url}`);
+  const rv = c?.review || {};
+  if (rv.verdict) L.push(`- **Night Shift code review of this patch:** ${rv.verdict} — ${String(rv.summary || '').slice(0, 300)}`);
+  if (files.length) L.push('', '### Files', ...files.map(f => '- `' + f + '`'));
+  L.push('', '_Draft opened by Night Shift from a fix verified A/B on the lab phone. A person reviews and merges it._');
+  return { title, description: L.join('\n').slice(0, 30000) };
+}
+function shipPanel(m, c, fbId) {
+  if (!fbId) return '';
+  const fixed = !!(c && (c.fixVerified || /fix-verified/.test(c.status || '')));
+  const pr = c?.fixPr || {}, jr = c?.jira || {}, d = jiraDraft(m, c);
+  const pd = crashPrDraft(m, c);
+  const prText = `<div class="edit"><input id="ship-ptitle" value="${esc(pd.title)}" maxlength="200"><textarea id="ship-pdesc" rows="14">${esc(pd.description)}</textarea>`;
+  const prBox = !fixed && !pr.url
+    ? `<p class="muted">A draft PR needs a fix verified on the lab phone first (▶ Start, or Propose + verify fix). Night Shift prepares the PR text as soon as that passes.</p>`
+    : (pr.url ? `<p>Draft PR open: <a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.url.replace(/^https:\/\/bitbucket.org\//, ''))} ↗</a> <span class="muted small">${esc(pr.branch || '')} → ${esc(pr.base || '')} · ${esc(pr.at || '')}</span></p>` : '')
+      + `<p class="note">Prepared from the verified fix: this is exactly what is sent. Edit freely.</p>${prText}
+       ${pr.url ? '' : `<input id="ship-base" placeholder="Base branch (empty = the lab's base branch, e.g. CPP-1.25.2)">`}
+       <div><button class="btn primary" onclick="shipPr('${esc(fbId)}', '${esc(pr.base || '')}')">${pr.url ? 'Update the draft PR' : 'Create draft PR in Bitbucket'}</button>
+       <span class="note">pushes branch nightshift/… with the verified fix and opens a <b>draft</b> PR. Nobody is notified until a person publishes it.</span></div></div>`;
+  const jBox = jr.key
+    ? `<p>Jira card created: <a href="${esc(jr.url)}" target="_blank" rel="noopener">${esc(jr.key)} ↗</a> <span class="muted small">${esc(jr.at || '')}</span></p>`
+    : `<p class="note">Draft only: nothing is in Jira until you press the button. Edit freely; the card is created exactly as written, with the repro video attached.</p>
+       <div class="edit"><input id="ship-jsum" value="${esc(d.summary)}" maxlength="250"><textarea id="ship-jdesc" rows="14">${esc(d.description)}</textarea>
+       <div><button class="btn primary" onclick="shipJira('${esc(fbId)}')">Create Jira card</button></div></div>`;
+  return `<div class="panel"><div class="ph">Ship it <span class="muted small">real Bitbucket and Jira items, only when you click</span></div>
+    <div class="ph" style="margin-top:6px">Draft pull request</div>${prBox}
+    <div class="ph" style="margin-top:14px">Jira card</div>${jBox}</div>`;
+}
+async function shipQueue(action, issue, extra) {
+  if (!live || live.guest) { $('#dlg-title').textContent = 'Sign in to ship'; $('#dlg-body').innerHTML = '<p>Sign in with your company address.</p>'; dlg.showModal(); return; }
+  // no extra confirm: the developer is looking at exactly what will be sent; this click is the decision
+  try {
+    await live.db.collection('jobs').add(Object.assign({ action, issue, requestedBy: live.user.email.toLowerCase(), status: 'queued',
+      queuedAt: firebase.firestore.FieldValue.serverTimestamp() }, extra || {}));
+    $('#dlg-title').textContent = 'Queued'; $('#dlg-body').innerHTML = '<p>The worker does it within a minute. Watch the <b>Jobs</b> tab; the link appears here when it is done.</p>'; dlg.showModal();
+  } catch (e) { $('#dlg-title').textContent = 'Could not queue'; $('#dlg-body').innerHTML = `<pre>${esc(e.message || e)}</pre>`; dlg.showModal(); }
+}
+function shipPr(fbId, base) {
+  const title = ($('#ship-ptitle')?.value || '').trim(), description = ($('#ship-pdesc')?.value || '').trim();
+  const br = (base || ($('#ship-base')?.value || '')).trim();
+  if (br && !/^[A-Za-z0-9._\/-]{1,100}$/.test(br)) { $('#dlg-title').textContent = 'Bad branch name'; $('#dlg-body').innerHTML = '<p>Letters, digits, . _ / - only.</p>'; dlg.showModal(); return; }
+  shipQueue('crash-pr', fbId + (br ? '|' + br : ''), { summary: title.slice(0, 250), description: description.slice(0, 30000) });
+}
+function shipJira(fbId) {
+  const summary = ($('#ship-jsum')?.value || '').trim(), description = ($('#ship-jdesc')?.value || '').trim();
+  if (!summary || !description) { $('#dlg-title').textContent = 'Empty draft'; $('#dlg-body').innerHTML = '<p>Write a summary and a description first.</p>'; dlg.showModal(); return; }
+  shipQueue('jira-create', fbId, { summary: summary.slice(0, 250), description: description.slice(0, 30000) });
+}
 function fixPanel(c) {
   if (!c || !(c.fixRounds || c.patch || c.authorAttempts)) return '';
   const ho = c.handover || {}, rv = c.review || {};
@@ -2112,6 +2199,7 @@ function devicesTable(m) {
       <td class="muted">${esc(d.os || '')}</td><td><span class="dot ${d.src === 'play' ? 'd-play' : 'd-fb'}"></span>${d.src === 'play' ? 'Play' : 'Firebase'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No samples.</td></tr>'}</tbody></table>`;
 }
 function openProblem(id, keep) {
+  if (!DATA || !DATA.merged) { selProblem = id; return; }   // deep link before sign-in/data: renderProblems reopens it once 'merged' arrives
   const famRow = FAM_ROWS.get(id); if (famRow) id = famRow.id;        // any stack of a confirmed family opens the one family card
   selProblem = id;
   const m = famRow || (DATA.merged || []).find(x => x.id === id); if (!m) return;
@@ -2124,7 +2212,7 @@ function openProblem(id, keep) {
   if (dTab === 'auto') { dAuto = true; dTab = 'overview'; }       // the case record may arrive after the page:
   if (dAuto && caseDoc) { dAuto = false; if (repd) dTab = 'lab'; }  // pick the tab once it is here
   const tabs = [['lab', repd ? 'Lab repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Lab repro'], ['overview', 'Overview'], ['cause', 'Root cause'], ['diagrams', 'Diagrams'], ['symbols', 'Symbolized'], ['stack', 'Stack traces'],
-    ['devices', m.instanceSummary ? `Instances <span class="cnt">${m.instanceSummary.crashes}</span>` : `Devices <span class="cnt">${uniqDevices(m).length}</span>`], ['fix', 'Fix & reproduce'], ['notes', 'PR & notes']];
+    ['devices', m.instanceSummary ? `Instances <span class="cnt">${m.instanceSummary.crashes}</span>` : `Devices <span class="cnt">${uniqDevices(m).length}</span>`], ['fix', 'Fix & reproduce'], ['notes', 'Ship it · PR & Jira']];
   const stat = (lbl, val, sub, cls = '') => `<div class="dstat ${cls}"><div class="dl">${lbl}</div><div class="dv">${val}</div><div class="ds">${sub}</div></div>`;
   let body = '';
   const F = m._family;
@@ -2198,7 +2286,7 @@ function openProblem(id, keep) {
       ${fbId ? `<div class="actions"><button class="btn" onclick="queue('reproduce','${esc(fbId)}')">Reproduce on lab phone</button>
         <button class="btn" onclick="queue('draft-fix','${esc(fbId)}')">Propose + verify fix</button></div>` : ''}</div>`;
   if (dTab === 'fix') body = nxFix(m, a, caseDoc) + `<details class="panel"><summary class="ph" style="cursor:pointer">Lab record: fix direction, repro ladder, rounds, review, hand-over texts</summary>` + body + fixPanel(caseDoc) + '</details>';
-  if (dTab === 'notes') body = `<div class="panel"><div class="ph">PR &amp; note <span class="muted small">saved for the whole team</span></div>
+  if (dTab === 'notes') body = shipPanel(m, caseDoc, fbId) + `<div class="panel"><div class="ph">PR &amp; note <span class="muted small">saved for the whole team</span></div>
     <div class="edit"><input id="d-pr" placeholder="Bitbucket PR link" value="${esc(m.pr || '')}"><textarea id="d-note" rows="5" placeholder="Cause, owner, status…">${esc(m.note || '')}</textarea>
       <div><button class="btn primary" onclick="saveProblem('${esc(m.id)}')">Save</button> <span class="note" id="d-saved">${m.noteBy ? 'last edit ' + esc(m.noteBy) : ''}</span></div></div></div>`;
   const ov = $('#repro-vid'), vstate = ov ? { src: ov.dataset.src, t: ov.currentTime, play: !ov.paused } : null;
@@ -2852,6 +2940,10 @@ async function bootLive() {
   // 26 Oct: some networks/extensions/VPNs block Firestore's streaming channel; the board then stayed at 0 for one
   // person while working for others. Long polling is picked automatically when streaming does not get through.
   try { db.settings({ experimentalAutoDetectLongPolling: true, merge: true }); } catch (e) {}
+  try { await db.enablePersistence({ synchronizeTabs: true }); } catch (e) {}
+  // free plan: a hidden tab stops streaming after 2 min (no reads), and catches up when shown again; the local
+  // cache (persistence) means a reload or return within 30 min reads only the records that changed
+  var __nsOff = null; document.addEventListener('visibilitychange', function(){ if (document.hidden) { __nsOff = setTimeout(function(){ db.disableNetwork().catch(function(){}); }, 120000); } else { clearTimeout(__nsOff); db.enableNetwork().catch(function(){}); } });
   const domain = (FB.domain || 'msd-my.com').toLowerCase();
   $('#gate-domain').textContent = '@' + domain;
   document.querySelector('main').classList.add('hidden'); document.querySelector('.side').classList.add('hidden'); document.body.classList.add('gated');

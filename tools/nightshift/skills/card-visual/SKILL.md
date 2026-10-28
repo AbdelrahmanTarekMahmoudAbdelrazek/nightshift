@@ -53,6 +53,20 @@ often caused upstream: a handler that never seeks, an exit that forgets to sync.
 4. When both layers could change, give the primary fix in fixCode and the other one in the note as "defence in depth".
 5. A "Server content: ..." cause: fixCode is a diff of the downloaded server file (its path as the file), and the note
    says it is a content upload (no app release needed).
+6. The smallest change that makes Expected true wins: a content fix over an app release; keep item ids and existing
+   animations (saved drafts store the id). The fix covers EVERY affected item in one diff (Snap I AND Snap II).
+   When the prompt shows how many live items a change touches ("Reach of a fix"), put that number in the note.
+
+## Evidence pictures ("evidence" key)
+When the prompt lists "Evidence replays" (a server item's thumbnail next to its shader replayed at the item's JSON
+params), the card page shows those pictures as proof. A picture must show the bug next to the right look:
+- REQUIRED: when a cause is that the APP passes a different value to a server item's shader (it overrides, scales,
+  drops or defaults a param), add one row per affected item with the value the code really passes, worked out from
+  the lines you cite: {"item": "the item name exactly as in the server content", "issue": n, "label": "App now",
+  "params": {"intensity": 0.01}}. Without it the picture only shows the right look and proves nothing. Every item the
+  cause affects (Sketch 1 AND Sketch 2), each with its own value.
+- Optional: other values that help (e.g. "Fixed", or the built-in shader's value). Max 3 rows per item.
+- Not needed when the item's JSON params already show the problem (the content itself is wrong).
 
 ## Replay steps (flow and scenarios)
 cols: [[name, sub], ...]. Each step: {"from": col, "to": col, "label": "...", "c": "ink|ok|risk|bad|mut",
@@ -65,6 +79,7 @@ Colours: "bad" = the step that breaks, "risk" = the step that sets it up, "ok" =
 
 ## Answer
 ONLY a ```json block with keys: tldr, before {title, text, mini}, adds {title, text, snippet}, heads,
-flow {title, lead, modes, cols, bug {bars, steps}, fix {bars, steps}}, scenarios [{id, modes, cols, bug, fix?, fixCode?}].
+flow {title, lead, modes, cols, bug {bars, steps}, fix {bars, steps}}, scenarios [{id, modes, cols, bug, fix?, fixCode?}],
+evidence [{item, issue, label, params}] (optional).
 
 Answer with exactly ONE ```json block. If you notice a mistake, fix it inside that block before answering; never add a second "corrected" block after it.
