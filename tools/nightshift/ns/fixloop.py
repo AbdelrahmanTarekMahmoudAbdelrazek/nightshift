@@ -26,7 +26,88 @@ ROUNDS = 3
 
 
 def _git(args, timeout=120):
+    # 28 Oct: a fix may be Kotlin/Java in a module repo (android-video-editor-module/, java-common/, gallerypicker/...),
+    # which is its own git repo inside the lab folder: apply/check/revert each part of the patch in its own repo
+    if args and args[0] == 'apply' and len(args) > 1 and os.path.isfile(str(args[-1])):
+        parts = _split_patch(args[-1])
+        if any(parts):
+            return _apply_multi(list(args[1:-1]), parts, timeout)
     return subprocess.run(['git', '--no-optional-locks'] + args, cwd=config.LAB, capture_output=True, text=True, timeout=timeout)
+
+
+def _subrepos():
+    """Module repos inside the lab folder (a folder with its own .git), longest name first."""
+    out = []
+    try:
+        for d in os.listdir(config.LAB):
+            p = os.path.join(config.LAB, d)
+            if os.path.isdir(p) and os.path.exists(os.path.join(p, '.git')):
+                out.append(d)
+    except OSError:
+        pass
+    return sorted(out, key=len, reverse=True)
+
+
+def _split_patch(patch):
+    """{'' or module folder: the patch text for that repo, paths made relative to it}."""
+    text = open(patch, errors='replace', newline='').read()
+    blocks = re.split(r'(?m)^(?=diff --git )', text) if re.search(r'(?m)^diff --git ', text) else \
+        re.split(r'(?m)^(?=--- (?:a/|/dev/null))', text)
+    subs, out = _subrepos(), {}
+    for b in blocks:
+        m = re.search(r'(?m)^\+\+\+ b/(\S+)', b) or re.search(r'(?m)^--- a/(\S+)', b)
+        if not m:
+            continue
+        sub = next((x for x in subs if m.group(1).startswith(x + '/')), '')
+        if sub:                                      # strip the module folder from the header lines only
+            b = re.sub(r'(?m)^(diff --git a/|--- a/|\+\+\+ b/)' + re.escape(sub) + '/', r'\1', b)
+            b = re.sub(r'(?m)^(diff --git a/\S+ b/)' + re.escape(sub) + '/', r'\1', b)
+        out[sub] = out.get(sub, '') + b
+    return out
+
+
+def _apply_multi(flags, parts, timeout):
+    """git apply across the main repo and module repos as ONE step: all parts are checked first, and if a part fails
+    the parts already applied are reverted. Returns a CompletedProcess-like result."""
+    import tempfile
+    inc = [flags[i + 1] for i, f in enumerate(flags) if f == '--include' and i + 1 < len(flags)]
+    base = [f for i, f in enumerate(flags) if f != '--include' and (i == 0 or flags[i - 1] != '--include')]
+    jobs = []
+    for sub, text in parts.items():
+        mine = [x[len(sub) + 1:] if sub and x.startswith(sub + '/') else x for x in inc
+                if (x.startswith(sub + '/') if sub else not any(x.startswith(s + '/') for s in parts if s))]
+        if inc and not mine:
+            continue                                 # --include limited this apply to other repos
+        fd, tf = tempfile.mkstemp(suffix='.patch')
+        with os.fdopen(fd, 'w', newline='') as fh:
+            fh.write(text)
+        jobs.append((os.path.join(config.LAB, sub) if sub else config.LAB, tf, [a for x in mine for a in ('--include', x)]))
+
+    def run(cwd, a):
+        return subprocess.run(['git', '--no-optional-locks'] + a, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    try:
+        if '--check' not in base:
+            for cwd, tf, ia in jobs:                 # all or nothing
+                r = run(cwd, ['apply', '--check', *base, *ia, tf])
+                if r.returncode:
+                    return subprocess.CompletedProcess(r.args, r.returncode, r.stdout, f'{os.path.basename(cwd)}: {r.stderr}')
+        done = []
+        for cwd, tf, ia in jobs:
+            r = run(cwd, ['apply', *base, *ia, tf])
+            if r.returncode:
+                rev = [x for x in base if x != '-R'] if '-R' in base else ['-R', *base]
+                for c2, t2, i2 in reversed(done):
+                    run(c2, ['apply', *rev, *i2, t2])
+                return subprocess.CompletedProcess(r.args, r.returncode, r.stdout, f'{os.path.basename(cwd)}: {r.stderr}')
+            if '--check' not in base:
+                done.append((cwd, tf, ia))
+        return subprocess.CompletedProcess(['git', 'apply'], 0, '', '')
+    finally:
+        for _, tf, _ in jobs:
+            try:
+                os.remove(tf)
+            except OSError:
+                pass
 
 
 def _ctx(case, merged):
@@ -88,7 +169,15 @@ def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
               'reached the crash moment, and the fix would stay unverified.\n'
               'IMPORTANT: the diff must apply to the CURRENT working copy (that is what gets built and tested). Line '
               'numbers in the analysis are from the shipped commit and may be shifted, so Read the file as it is now '
-              'and copy context lines exactly from it.\n\n'
+              'and copy context lines exactly from it.\n'
+              'WHERE THE FIX GOES (team rule): fix the side that made the WRONG call. If the Kotlin/Java app calls the '
+              'engine wrongly (wrong order, a call after destroy or before create, a wrong id/clip/time, a value the engine '
+              'does not accept), the fix is in Kotlin/Java even though the crash is in C++. The Kotlin code is in the module '
+              'folders under the repo root (android-video-editor-module/, java-common/, gallerypicker/, overlay_collage/...): '
+              'Read/Grep them like the C++; diff paths include that folder (b/android-video-editor-module/src/main/java/...). '
+              'A Kotlin fix may also add the matching engine guard (one C++ check + LOGE) as defence in depth, in the same '
+              'diff. Log a skipped Kotlin call with Log.w("NightShift", "<function>: <reason>, call skipped") so the lab '
+              'sees it ran.\n\n'
               f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:30000]}\n```\n{_lab_dump(case)}\n'
               + ('# Previous rounds (fix what they say)\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
               + (lessons or '')
@@ -510,7 +599,9 @@ def _guard_hits(patch, dirs):
     for l in open(patch, errors='replace').read().replace('\r\n', '\n').split('\n'):
         if not l.startswith('+') or l.startswith('+++'):
             continue
-        m = re.search(r'\b(?:LOG[EWIDV]|TRACE|Log\.[ewidv]|__android_log_print)\s*\([^"]*"([^"]{8,})"', l)
+        # Kotlin/Java Log.x(tag, "message"): the message is the SECOND argument (the tag would match unrelated lines)
+        m = re.search(r'\bLog\.[ewidv]\s*\(\s*(?:"[^"]*"|[\w.]+)\s*,\s*"([^"]{8,})"', l) or \
+            re.search(r'\b(?:LOG[EWIDV]|TRACE|__android_log_print)\s*\([^"]*"([^"]{8,})"', l)
         if not m:
             continue
         parts = [re.escape(x) for x in re.split(r'%[-+ #0-9.]*[a-zA-Z]+|\$\{?\w+\}?', m.group(1)) if len(x.strip()) >= 4]
@@ -541,7 +632,9 @@ def _guard_runs_without_crash(patch, dirs):
     hit = _guard_hits(patch, [])  # compile check only
     pats = []
     for l in open(patch, errors='replace').read().replace('\r\n', '\n').split('\n'):
-        m = re.search(r'\b(?:LOG[EWIDV]|TRACE|Log\.[ewidv]|__android_log_print)\s*\([^"]*"([^"]{8,})"', l) if l.startswith('+') else None
+        # Kotlin/Java Log.x(tag, "message"): the message is the SECOND argument (the tag would match unrelated lines)
+        m = re.search(r'\bLog\.[ewidv]\s*\(\s*(?:"[^"]*"|[\w.]+)\s*,\s*"([^"]{8,})"', l) or \
+            re.search(r'\b(?:LOG[EWIDV]|TRACE|__android_log_print)\s*\([^"]*"([^"]{8,})"', l) if l.startswith('+') else None
         if m:
             parts = [re.escape(x) for x in re.split(r'%[-+ #0-9.]*[a-zA-Z]+|\$\{?\w+\}?', m.group(1)) if len(x.strip()) >= 4]
             if parts:

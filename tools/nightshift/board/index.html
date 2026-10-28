@@ -1082,7 +1082,7 @@ function openIssue(id) {
       <button class="btn" onclick="queue('triage','${esc(i.id)}')">Re-run triage</button>
       <button class="btn primary" ${canRepro ? '' : 'disabled title="only for engine / mixed verdicts"'} onclick="queue('reproduce','${esc(i.id)}')">Reproduce on lab phone</button>
       ${i.status === 'reproduced' ? `<span class="badge b-engine" title="${esc(i.labMatch || '')}">reproduced · ${esc(i.repro_scenario)} seed ${esc(i.repro_seed)}</span>` : i.status === 'not-reproduced' ? `<span class="badge b-queued">not reproduced (${i.labRuns || 0} runs)</span>` : ''}
-      <button class="btn" ${i.verdict === 'engine' ? '' : 'disabled title="engine cases only"'} onclick="queue('draft-fix','${esc(i.id)}')">Propose + verify fix</button>
+      <button class="btn" title="Writes the fix where the wrong call is (C++ engine or Kotlin), then verifies it A/B on the lab phone" onclick="queue('draft-fix','${esc(i.id)}')">Propose + verify fix</button>
       <a class="btn" href="../${esc(i.case_file || '')}" target="_blank">Case file (.md)</a>
     </div>
     <h3>Evidence in numbers</h3>
@@ -1678,7 +1678,9 @@ function shipPanel(m, c, fbId) {
        <button class="btn" onclick="queue('draft-fix','${esc(fbId)}')">Propose + verify fix again</button>`
     : !fixed && !pr.url
     ? `<p class="muted">A draft PR needs a fix verified on the lab phone first (▶ Start, or Propose + verify fix). Night Shift prepares the PR text as soon as that passes.</p>`
-    : (pr.url ? `<p>Draft PR open: <a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.url.replace(/^https:\/\/bitbucket.org\//, ''))} ↗</a> <span class="muted small">${esc(pr.branch || '')} → ${esc(pr.base || '')} · ${esc(pr.at || '')}</span></p>` : '')
+    : (pr.url ? ((pr.parts || []).length > 1
+        ? `<p>Draft PRs open (merge together): ${pr.parts.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.repo)} → ${esc(x.base)} ↗</a>`).join(' · ')} <span class="muted small">${esc(pr.at || '')}</span></p>`
+        : `<p>Draft PR open: <a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.url.replace(/^https:\/\/bitbucket.org\//, ''))} ↗</a> <span class="muted small">${esc(pr.branch || '')} → ${esc(pr.base || '')} · ${esc(pr.at || '')}</span></p>`) : '')
       + `<p class="note">Prepared from the verified fix: this is exactly what is sent. Edit freely.</p>${prText}
        ${pr.url ? '' : `<input id="ship-base" placeholder="Base branch (empty = the lab's base branch, e.g. CPP-1.25.2)">`}
        <div><button class="btn primary" onclick="shipPr('${esc(fbId)}', '${esc(pr.base || '')}')">${pr.url ? 'Update the draft PR' : 'Create draft PR in Bitbucket'}</button>

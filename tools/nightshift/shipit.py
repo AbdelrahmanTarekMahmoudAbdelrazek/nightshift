@@ -245,7 +245,87 @@ def _repo_slug(cwd):
     return m.group(1), m.group(2)
 
 
+def _module_dirs():
+    """Module repos inside the main repo (android-video-editor-module, java-common, ...): folders with their own .git."""
+    out = []
+    for d in os.listdir(REPO):
+        p = os.path.join(REPO, d)
+        if os.path.isdir(p) and os.path.exists(os.path.join(p, '.git')) and d not in ('tools', 'extra'):
+            out.append(d)
+    return sorted(out, key=len, reverse=True)
+
+
+def _split(patch):
+    """{'' (main repo) or module folder: that repo's part of the patch, paths relative to it}."""
+    blocks = re.split(r'(?m)^(?=diff --git )', patch) if re.search(r'(?m)^diff --git ', patch) else \
+        re.split(r'(?m)^(?=--- (?:a/|/dev/null))', patch)
+    subs, out = _module_dirs(), {}
+    for b in blocks:
+        m = re.search(r'(?m)^\+\+\+ b/(\S+)', b) or re.search(r'(?m)^--- a/(\S+)', b)
+        if not m:
+            continue
+        sub = next((x for x in subs if m.group(1).startswith(x + '/')), '')
+        if sub:
+            b = re.sub(r'(?m)^(diff --git a/|--- a/|\+\+\+ b/)' + re.escape(sub) + '/', r'\1', b)
+            b = re.sub(r'(?m)^(diff --git a/\S+ b/)' + re.escape(sub) + '/', r'\1', b)
+        out[sub] = out.get(sub, '') + b
+    return out
+
+
+def _module_base(rdir, cfg):
+    """The branch a module repo's fix goes to: nightshift.yaml ship.module_base, else its newest sprintNNN branch."""
+    want = str((cfg.get('ship') or {}).get('module_base') or '').strip()
+    if want:
+        return want
+    heads = _git(['ls-remote', '--heads', 'origin', 'refs/heads/sprint*'], rdir, check=False)
+    names = [l.split('refs/heads/', 1)[1] for l in heads.splitlines() if 'refs/heads/' in l]
+    names = [n for n in names if re.fullmatch(r'sprint\d+', n)]
+    return max(names, key=lambda n: int(n[6:])) if names else 'development'
+
+
+def _ship_repo(rdir, text, base, branch, msg, dry):
+    """Apply one repo's part on the latest `base` in a throw-away worktree, commit and push `branch`. -> sha."""
+    wt = tempfile.mkdtemp(prefix='ns_pr_')
+    shutil.rmtree(wt)
+    files = sorted(set(re.findall(r'^\+\+\+ b/(\S+)', text, re.M)))
+    try:
+        _git(['fetch', '--no-tags', 'origin', f'+refs/heads/{base}:refs/nightshift/base/{base}'], rdir)
+        _git(['worktree', 'add', '--detach', wt, f'refs/nightshift/base/{base}'], rdir)
+        pf = os.path.join(wt, '.ns_fix.patch')
+        open(pf, 'w').write(text if text.endswith('\n') else text + '\n')
+        applied = False
+        for extra in ([], ['--ignore-whitespace'], ['--3way']):
+            if subprocess.run(['git', 'apply', '--check'] + extra + [pf], cwd=wt, capture_output=True).returncode == 0:
+                _git(['apply'] + extra + [pf], wt)
+                applied = True
+                break
+        same = not applied and subprocess.run(['git', 'apply', '--reverse', '--check', '--ignore-whitespace', pf], cwd=wt,
+                                              capture_output=True).returncode == 0
+        os.remove(pf)
+        if same:
+            raise AlreadyFixed(f'the same change is already on {base}', [])
+        if not applied:
+            fixes = _fix_commits(wt, files, text)
+            if fixes:
+                raise AlreadyFixed(f'{base} already has a fix in the same code', fixes)
+            raise RuntimeError(f'the verified patch does not apply on the latest {base} of {os.path.basename(rdir)}: '
+                               'the code changed since; re-run the fix')
+        _git(['add', '-A'] + files, wt)
+        who = os.environ.get('NS_REQUESTED_BY') or 'nightshift@localhost'
+        _git(['-c', 'user.name=Night Shift', '-c', f'user.email={who}', 'commit', '-q', '-m', msg], wt)
+        sha = _git(['rev-parse', 'HEAD'], wt)
+        if dry:
+            say(f'dry run: would push {sha[:10]} to {branch} (not pushed)')
+        else:
+            _git(['push', '-q', '--force-with-lease', 'origin', f'HEAD:refs/heads/{branch}'], wt, timeout=900)
+        return sha
+    finally:
+        subprocess.run(['git', 'worktree', 'remove', '--force', wt], cwd=rdir, capture_output=True)
+        subprocess.run(['git', 'worktree', 'prune'], cwd=rdir, capture_output=True)
+
+
 def crash_pr(cid, cfg, base=None, dry=False, payload=None):
+    """The verified fix -> one draft PR per repo it touches (engine in video_gles3jni, Kotlin in its module repo)."""
     if not re.fullmatch(r'[0-9a-f]{32}(~[0-9a-f]{8})?', cid):
         fail(f'bad case id {cid!r}')
     fx, case = _fix(cid), _case(cid)
@@ -258,76 +338,61 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
     base = base or (cfg.get('lab') or {}).get('base_branch') or 'development'
     if not re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', base):
         fail(f'bad base branch {base!r}')
-    ws, repo = _repo_slug(REPO)
-    branch = 'nightshift/' + ('anr' if case.get('kind') == 'ANR' else 'crash') + '-' + cid.replace('~', '-')[:41]
     kind = 'ANR' if case.get('kind') == 'ANR' else 'Crash'
+    branch = 'nightshift/' + kind.lower() + '-' + cid.replace('~', '-')[:41]
     title = str((fx.get('handover') or {}).get('pr_title') or f"Fix {kind.lower()}: {case.get('title', '')} ({case.get('subtitle', '')})").strip()[:200]
     if payload and str(payload.get('summary') or '').strip():
         title = str(payload['summary']).strip()[:200]
-    say(f'{kind} {cid[:8]}: verified fix ({status}) -> {branch} on {ws}/{repo}, draft PR into {base}')
-    wt = tempfile.mkdtemp(prefix='ns_pr_')
-    shutil.rmtree(wt)
-    files = sorted(set(re.findall(r'^\+\+\+ b/(\S+)', patch, re.M)))
-    already, sha = None, ''
-    try:
-        _git(['fetch', '--no-tags', 'origin', f'+refs/heads/{base}:refs/nightshift/base/{base}'], REPO)
-        _git(['worktree', 'add', '--detach', wt, f'refs/nightshift/base/{base}'], REPO)
-        pf = os.path.join(wt, '.ns_fix.patch')
-        open(pf, 'w').write(patch if patch.endswith('\n') else patch + '\n')
-        applied = False
-        for extra in ([], ['--ignore-whitespace'], ['--3way']):
-            if subprocess.run(['git', 'apply', '--check'] + extra + [pf], cwd=wt, capture_output=True).returncode == 0:
-                _git(['apply'] + extra + [pf], wt)
-                applied = True
-                say('patch applied on ' + base + (f' ({extra[0]})' if extra else ''))
-                break
-        same = not applied and subprocess.run(['git', 'apply', '--reverse', '--check', '--ignore-whitespace', pf], cwd=wt,
-                                              capture_output=True).returncode == 0
-        os.remove(pf)
-        if same:
-            raise AlreadyFixed(f'the same change is already on {base}', [])
-        if not applied:
-            fixes = _fix_commits(wt, files, patch)
-            if fixes:
-                raise AlreadyFixed(f'{base} already has a fix in the same code', fixes)
-            raise RuntimeError(f'the verified patch does not apply on the latest {base}: the code changed since; re-run the fix')
-        _git(['add', '-A'] + files, wt)
-        msg = f"{title}\n\nNight Shift case {cid}\n{board_url(cfg)}/#problems/m-{cid}\n\nVerified on the lab phone: {str(fx.get('note') or '')[:400]}"
-        who = os.environ.get('NS_REQUESTED_BY') or 'nightshift@localhost'
-        _git(['-c', 'user.name=Night Shift', '-c', f'user.email={who}', 'commit', '-q', '-m', msg], wt)
-        sha = _git(['rev-parse', 'HEAD'], wt)
-        if dry:
-            say(f'dry run: would push {sha[:10]} to {branch} (not pushed)')
-        else:
-            _git(['push', '-q', '--force-with-lease', 'origin', f'HEAD:refs/heads/{branch}'], wt, timeout=900)
-            say(f'pushed {sha[:10]} to {branch}')
-    except AlreadyFixed as e:
-        already = e
-    finally:
-        subprocess.run(['git', 'worktree', 'remove', '--force', wt], cwd=REPO, capture_output=True)
-        subprocess.run(['git', 'worktree', 'prune'], cwd=REPO, capture_output=True)
-    if already is not None:
-        prs = sorted({c['pr'] for c in already.commits if c.get('pr')})
-        shas = ', '.join(c['sha'][:7] for c in already.commits)
+    msg = f"{title}\n\nNight Shift case {cid}\n{board_url(cfg)}/#problems/m-{cid}\n\nVerified on the lab phone: {str(fx.get('note') or '')[:400]}"
+    files_all = sorted(set(re.findall(r'^\+\+\+ b/(\S+)', patch, re.M)))
+    parts, done, already = _split(patch), [], []
+    for sub, text in parts.items():
+        rdir = os.path.join(REPO, sub) if sub else REPO
+        ws, repo = _repo_slug(rdir)
+        rbase = base if not sub else _module_base(rdir, cfg)
+        say(f'{kind} {cid[:8]}: {"engine" if not sub else "Kotlin"} part -> {branch} on {ws}/{repo}, draft PR into {rbase}')
+        try:
+            sha = _ship_repo(rdir, text, rbase, branch, msg, dry)
+            done.append({'repo': repo, 'sub': sub, 'base': rbase, 'sha': sha,
+                         'files': sorted(set(re.findall(r'^\+\+\+ b/(\S+)', text, re.M)))})
+        except AlreadyFixed as e:
+            already.append({'repo': repo, 'base': rbase, 'how': e.how, 'commits': e.commits})
+    if already and not done:
+        commits = [c for a in already for c in a['commits']]
+        prs = sorted({c['pr'] for c in commits if c.get('pr')})
+        shas = ', '.join(c['sha'][:7] for c in commits)
+        where = ', '.join(sorted({f"{a['repo']} {a['base']}" for a in already}))
         by = (f"PR #{prs[0]}" if len(prs) == 1 else 'PRs ' + ', '.join('#' + str(p) for p in prs)) if prs else ''
-        say(f"ALREADY FIXED on {base}" + (f" by {by}" if by else '') + (f" (commits {shas})" if shas else ' (same change)')
+        say(f"ALREADY FIXED on {where}" + (f" by {by}" if by else '') + (f" (commits {shas})" if shas else ' (same change)')
             + ': no new PR needed.')
         say('If Crashlytics still shows this crash in builds made after these commits, run "Propose + verify fix" again.')
-        res = {'case': cid, 'base': base, 'state': 'already-fixed', 'how': already.how, 'commits': already.commits, 'prs': prs}
+        res = {'case': cid, 'base': base, 'state': 'already-fixed', 'how': already[0]['how'], 'commits': commits, 'prs': prs}
         keep(f'crash-{cid}.json', res)
         if not dry:
-            fire_update('cases', cid, {'fixPr': {'state': 'already-fixed', 'base': base, 'how': already.how,
-                                                 'commits': already.commits[:6], 'prs': prs, 'at': _now()}})
+            fire_update('cases', cid, {'fixPr': {'state': 'already-fixed', 'base': where, 'how': already[0]['how'],
+                                                 'commits': commits[:6], 'prs': prs, 'at': _now()}})
         return res
-    desc = pr_description(cid, case, fx, cfg, files)
+    desc = pr_description(cid, case, fx, cfg, files_all)
     if payload and str(payload.get('description') or '').strip():   # the text the developer saw (and maybe edited)
         desc = str(payload['description']).strip()[:30000]
-    act, url, prid = bbwrite.create_or_update_pr(repo, branch, base, title, desc, dry=dry)
-    say(f'{act} draft PR {url or ""}')
-    res = {'case': cid, 'branch': branch, 'base': base, 'sha': sha, 'pr': url, 'prId': prid, 'action': act, 'dry': dry}
+    if already:
+        desc += '\n\n_Part of the fix is already on ' + ', '.join(f"{a['repo']} {a['base']}" for a in already) + '._'
+    for d in done:
+        act, url, prid = bbwrite.create_or_update_pr(d['repo'], branch, d['base'], title, desc, dry=dry)
+        d.update({'url': url, 'id': prid, 'action': act})
+        say(f"{act} draft PR in {d['repo']}: {url or ''}")
+    if len(done) > 1 and not dry:                    # a fix across repos: each PR links the others (merge together)
+        for d in done:
+            others = '\n'.join(f"- {o['repo']}: {o['url']}" for o in done if o is not d)
+            bbwrite.create_or_update_pr(d['repo'], branch, d['base'], title,
+                                        desc + '\n\n### Merge together with\n' + others, dry=dry)
+    res = {'case': cid, 'branch': branch, 'prs': done, 'dry': dry}
     keep(f'crash-{cid}.json', res)
     if not dry:
-        fire_update('cases', cid, {'fixPr': {'url': url, 'branch': branch, 'base': base, 'sha': sha[:12], 'at': _now()}})
+        first = done[0] if done else {}
+        fire_update('cases', cid, {'fixPr': {'url': first.get('url', ''), 'branch': branch, 'base': first.get('base', ''),
+                                             'sha': str(first.get('sha', ''))[:12], 'at': _now(),
+                                             'parts': [{k: d.get(k) for k in ('repo', 'base', 'url')} for d in done]}})
     return res
 
 
