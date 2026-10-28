@@ -95,7 +95,7 @@ def run(db, cfg, case_id, log=print, deny=None):
         log('lab update: no usable answer (root cause unchanged)')
         return None
     new = dict(a)
-    for k in ('summary', 'root_cause', 'confidence', 'fix_direction', 'trigger', 'timeline', 'hypotheses', 'evidence',
+    for k in ('summary', 'root_cause', 'confidence', 'fix_direction', 'trigger', 'timeline', 'hypotheses', 'evidence', 'owner', 'owner_why',
               'diagram_cause', 'diagram_fix', 'lab_update', 'claims'):
         if u.get(k):
             new[k] = u[k]

@@ -579,6 +579,18 @@ class Worker:
         st = analyse.run_all(self.db, self.cfg, log=lambda l: self.log(ref, l), only={case['id']}, force=True,   # asked for this one: always rewrite
                              stop=lambda: getattr(self, 'cancelled', False))
         self.log(ref, f'analysis finished: {st}')
+        # 28 Oct: a field-only re-analysis must never replace what the lab PROVED. When this crash was reproduced or its fix
+        # verified on the phone, put the lab's proof back on top right away (labupdate rewrites the root cause from it).
+        try:
+            c = self.db.collection('cases').document(case['id']).get().to_dict() or {}
+            if (c.get('fixVerified') or c.get('labCrash') or c.get('reproLevel') or str(c.get('status', '')).startswith(('reproduced', 'fix-'))) \
+                    and not analyse.BLIND_DENY:
+                from . import labupdate
+                importlib.reload(labupdate)
+                self.log(ref, 'this crash has lab proof (reproduced / fix verified): applying it on top of the field analysis')
+                labupdate.run(self.db, self.cfg, case['id'], log=lambda l: self.log(ref, l))
+        except Exception as e:
+            self.log(ref, f'lab proof not re-applied ({str(e)[:150]})')
 
     def do_start(self, ref, case):
         """One click, the whole pipeline: pull fresh details -> root cause -> a queued Reproduce on the lab phone, which

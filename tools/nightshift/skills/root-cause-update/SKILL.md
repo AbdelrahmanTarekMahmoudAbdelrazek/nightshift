@@ -28,3 +28,10 @@ Answer ONLY:
  "diagram_cause": "flowchart TD ...", "diagram_fix": "flowchart TD ...",
  "lab_update": "2-4 sentences: what the lab changed in the understanding", "lab_confirmed": true}
 ```
+
+## Owner (team rule, 28 Oct)
+Keep or set "owner" to the side that made the WRONG call, not the side where it crashed: a wrong Kotlin/Java call
+(wrong order, after destroy, a wrong id/clip/time, a value the engine does not accept) is "app-java" even when every
+crashing frame is C++; "engine" only when the engine mishandles a valid call. Add "owner_why": which call was wrong,
+with file:line. Lab proof (a reproduction, a verified fix whose guard fired) outranks any field-only theory: never
+drop a cause the lab proved; list a field-only theory as a hypothesis next to it.
