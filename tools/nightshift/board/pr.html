@@ -904,23 +904,58 @@ var FB = /*__NS_FIREBASE__*/null;
 
   // ---------- Ship it: the comments are prepared here from the review; one click posts exactly this text ----------
   var SEVN = { blocker: 'Blocker', major: 'Major', minor: 'Minor', suggestion: 'Suggestion' };
+  function shortPath(p){ return String(p || '').replace(/^.*?\.nightshift_kotlin\//, '').replace(/^.*?video_gles3jni\//, ''); }
+  function langOf(p){ var m = String(p || '').match(/\.([A-Za-z0-9]+)(:\d+)?$/); var e = m ? m[1].toLowerCase() : '';
+    return { cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp', c: 'c', kt: 'kotlin', java: 'java', json: 'json', glsl: 'glsl', py: 'python', js: 'javascript' }[e] || (/kotlin|\.kt/.test(p) ? 'kotlin' : 'cpp'); }
+  function dedent(code){ var ls = String(code || '').replace(/\s+$/, '').split('\n');
+    var ind = ls.filter(function(l){ return l.trim(); }).map(function(l){ return l.match(/^\s*/)[0].length; });
+    var n = ind.length ? Math.min.apply(null, ind) : 0; return ls.map(function(l){ return l.slice(n); }).join('\n'); }
+  var TICKS = String.fromCharCode(96, 96, 96);
+  function fence(lang, code){ return TICKS + lang + '\n' + String(code).split(TICKS).join("'''") + '\n' + TICKS; }
   function shipPlan(rec){
     var link = location.origin + '/pr.html?id=' + encodeURIComponent(rec.id);
-    var fs = (rec.findings || []).filter(function(f){ return f && f.tier === 'verified'; });
+    var all = rec.findings || [], scs = ((rec.view || {}).scenarios || []);
+    var idx = all.map(function(f, i){ return i; }).filter(function(i){ return all[i] && all[i].tier === 'verified'; });
     var ord = { blocker: 0, major: 1, minor: 2, suggestion: 3 };
-    fs.sort(function(a, b){ return (ord[a.severity] ?? 9) - (ord[b.severity] ?? 9); });
-    var sus = (rec.findings || []).filter(function(f){ return f && f.tier === 'suspected' && (f.severity === 'blocker' || f.severity === 'major'); });
-    var comments = fs.slice(0, 20).map(function(f){
-      return { file: f.file || '', line: f.line, title: f.title || '', severity: f.severity || '',
-        body: '**Night Shift · ' + (SEVN[f.severity] || f.severity || '') + ' · verified**\n\n**' + String(f.title || '').trim() + '**\n\n'
-          + String(f.problem || '').trim() + '\n\n' + (f.fix ? '**Suggested fix:** ' + String(f.fix).trim() + '\n\n' : '')
-          + '[Proof, replay and the judges\' votes on Night Shift →](' + link + ')' };
+    idx.sort(function(a, b){ return (ord[all[a].severity] ?? 9) - (ord[all[b].severity] ?? 9); });
+    var sus = all.filter(function(f){ return f && f.tier === 'suspected' && (f.severity === 'blocker' || f.severity === 'major'); });
+    var comments = idx.slice(0, 20).map(function(i){
+      var f = all[i], sc = scs.filter(function(s){ return String(s.finding) === String(i) && s.verdict === 'verified'; })[0] || {};
+      var L = ['#### ' + (SEVN[f.severity] || f.severity || 'Issue') + ': ' + String(f.title || '').trim(),
+        '`Verified by Night Shift`' + (f.confidence ? ' · confidence ' + f.confidence + '%' : '') + ' · confirmed by two independent reviewers', '',
+        '**What happens**', String(f.problem || '').trim(), ''];
+      var steps = ((sc.proof || {}).steps || []).filter(function(st){ return st && (st[3] || st[1]); }).slice(0, 4);
+      if (steps.length || f.evidence) {
+        L.push('**Evidence**');
+        if (!steps.length && f.evidence) L.push('`' + shortPath(f.file) + ':' + f.line + '`', fence(langOf(f.file), dedent(f.evidence)));
+        steps.forEach(function(st){
+          if (st[3]) L.push('`' + st[0] + '`' + (st[1] ? ': ' + st[1] : ''), fence(langOf(st[0]), dedent(st[3])));
+          else L.push('- ' + st[1]);
+        });
+        L.push('');
+      }
+      var fc = sc.fixCode;
+      if (fc && fc.diff) {
+        L.push('**Suggested fix**' + (fc.file ? ' in `' + shortPath(fc.file) + (fc.line ? ':' + fc.line : '') + '`' : ''),
+          fence('diff', dedent(String(fc.diff).split('\n').map(function(l){ return l.replace(/^([-+ ]) ?/, '$1'); }).join('\n'))));
+        if (fc.note) L.push(String(fc.note).trim());
+        L.push('');
+      } else if (f.fix) { L.push('**Suggested fix**', String(f.fix).trim(), ''); }
+      L.push('---', '[Full Night Shift review](' + link + '): replay, scenarios and the reviewers\' votes. Reply here if this is wrong.');
+      return { file: f.file || '', line: f.line, title: f.title || '', severity: f.severity || '', body: L.join('\n') };
     });
     var head = { blocking: 'Blocking issue found', changes: 'Changes suggested', approve: 'Looks good' }[rec.verdict] || String(rec.verdict || '');
-    var s = ['### Night Shift review: ' + head, '', String(rec.headline || '').trim(), '',
-      '**' + fs.length + ' verified** · ' + sus.length + ' suspected major/blocker · reviewed commit `' + String(rec.head || '?').slice(0, 12) + '`'];
-    if (sus.length) { s.push('', '**Worth a look (not proven):**'); sus.slice(0, 5).forEach(function(f){ s.push('- ' + (SEVN[f.severity] || '') + ' `' + f.file + ':' + f.line + '` — ' + String(f.title || '').trim()); }); }
-    s.push('', '[Full review on Night Shift: replays, scenarios, proof →](' + link + ')');
+    var vs = idx.map(function(i){ return all[i]; });
+    var cnt = function(list){ var c = {}; list.forEach(function(f){ c[f.severity] = (c[f.severity] || 0) + 1; });
+      return Object.keys(c).sort(function(a, b){ return (ord[a] ?? 9) - (ord[b] ?? 9); }).map(function(k){ return c[k] + ' ' + (SEVN[k] || k).toLowerCase(); }).join(', '); };
+    var s = ['## Night Shift review: ' + head, '', '> ' + String(rec.headline || '').trim().replace(/\n+/g, ' '), '',
+      '| | |', '|---|---|',
+      '| **Verified issues** | ' + (vs.length ? vs.length + ' (' + cnt(vs) + ')' : 'none') + ' |',
+      '| **Worth a look** | ' + (sus.length ? sus.length + ' (' + cnt(sus) + ', not proven)' : 'none') + ' |',
+      '| **Reviewed commit** | `' + String(rec.head || '?').slice(0, 12) + '` |', ''];
+    if (vs.length) { s.push('### Verified'); vs.forEach(function(f, k){ s.push((k + 1) + '. **' + (SEVN[f.severity] || '') + '**: ' + String(f.title || '').trim() + ' (`' + shortPath(f.file) + ':' + f.line + '`, see the inline comment)'); }); s.push(''); }
+    if (sus.length) { s.push('### Worth a look (not proven)'); sus.slice(0, 5).forEach(function(f){ s.push('- **' + (SEVN[f.severity] || '') + '**: ' + String(f.title || '').trim() + ' (`' + shortPath(f.file) + ':' + f.line + '`)'); }); s.push(''); }
+    s.push('---', '[Open the full Night Shift review](' + link + '): replay of each scenario, proof chains and the reviewers\' votes.');
     return { comments: comments, summary: s.join('\n') };
   }
   function openShip(rec){

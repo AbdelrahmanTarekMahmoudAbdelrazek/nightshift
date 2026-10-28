@@ -27,6 +27,9 @@ import tempfile
 import urllib.error
 import urllib.request
 import uuid
+import warnings
+
+warnings.filterwarnings('ignore')                      # old-Python notices from the Google libraries are not job news
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -195,20 +198,43 @@ def _git(args, cwd, timeout=600, check=True):
     return r.stdout.strip()
 
 
-def _fix_commits(wt, files, days=90):
-    """Recent commits on the base that touched the fix's files and say they fix something: who already solved it."""
+def _idents(diff_text):
+    """The code names a diff changes (identifiers of 4+ characters on its -/+ lines), e.g. Looper, getLooper."""
+    words = set()
+    for ln in (diff_text or '').splitlines():
+        if ln[:1] in '+-' and not ln.startswith(('+++', '---')):
+            words |= set(re.findall(r'[A-Za-z_][A-Za-z0-9_]{3,}', ln))
+    return words - {'return', 'const', 'static', 'void', 'bool', 'true', 'false', 'std', 'auto', 'else', 'null', 'nullptr',
+                    'this', 'override', 'virtual', 'include', 'define', 'LOGE', 'LOGD', 'LOGI', 'shared_ptr', 'unique_ptr'}
+
+
+def _fix_commits(wt, files, patch='', days=120):
+    """Commits on the base that already fixed the same code: they touched the fix's files AND changed the same code
+    names the verified fix changes. Best match first; unrelated fixes in the same files are left out."""
     if not files:
         return []
-    out = _git(['log', f'--since={days}.days', '--no-merges', '-i', '-E', '--grep=fix|crash|anr|null|dead|hang|freeze',
-                '--format=%h|%ad|%an|%s', '--date=short', 'HEAD', '--'] + files, wt, check=False)
+    want = _idents(patch)
+    out = _git(['log', f'--since={days}.days', '--no-merges', '--format=%h|%ad|%an|%s', '--date=short', 'HEAD', '--'] + files,
+               wt, check=False)
     rows = []
-    for ln in out.splitlines()[:6]:
+    for ln in out.splitlines()[:40]:
         h, d, a, subj = (ln.split('|', 3) + ['', '', '', ''])[:4]
+        got = _idents(_git(['show', '--format=', h, '--'] + files, wt, check=False))
+        common = want & got
+        if len(common) < 3:                            # shares too little code with the fix: not the same fix
+            continue
         pr = _git(['log', '--merges', '--ancestry-path', '--reverse', '--format=%s', f'{h}..HEAD', '--grep=pull request #'],
                   wt, check=False).splitlines()
         m = re.search(r'pull request #(\d+)', pr[0]) if pr else None
-        rows.append({'sha': h, 'date': d, 'author': a, 'subject': subj[:140], 'pr': int(m.group(1)) if m else None})
-    return rows
+        rows.append({'sha': h, 'date': d, 'author': a, 'subject': subj[:140], 'pr': int(m.group(1)) if m else None,
+                     'score': len(common), 'shared': sorted(common)[:8]})
+    if not rows:
+        return []
+    by_pr = {}
+    for r in rows:                                     # the PR that shares the most code with the fix wins
+        by_pr[r['pr']] = by_pr.get(r['pr'], 0) + r['score']
+    best = max(by_pr, key=by_pr.get)
+    return sorted([r for r in rows if r['pr'] == best], key=lambda r: -r['score'])
 
 
 def _repo_slug(cwd):
@@ -261,7 +287,7 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
         if same:
             raise AlreadyFixed(f'the same change is already on {base}', [])
         if not applied:
-            fixes = _fix_commits(wt, files)
+            fixes = _fix_commits(wt, files, patch)
             if fixes:
                 raise AlreadyFixed(f'{base} already has a fix in the same code', fixes)
             raise RuntimeError(f'the verified patch does not apply on the latest {base}: the code changed since; re-run the fix')
@@ -282,11 +308,11 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
         subprocess.run(['git', 'worktree', 'prune'], cwd=REPO, capture_output=True)
     if already is not None:
         prs = sorted({c['pr'] for c in already.commits if c.get('pr')})
-        say(f'ALREADY FIXED: {already.how}' + (f" (PR {', '.join('#' + str(p) for p in prs)})" if prs else '') + ': no PR needed')
-        for c in already.commits:
-            say(f"  {c['sha']} {c['date']} {c['author']}: {c['subject']}" + (f" (PR #{c['pr']})" if c.get('pr') else ''))
-        say('Check Crashlytics for new events of this crash in builds made after those commits: if it still happens, '
-            'run "Propose + verify fix" again so Night Shift fixes the remaining path on top of the current code.')
+        shas = ', '.join(c['sha'][:7] for c in already.commits)
+        by = (f"PR #{prs[0]}" if len(prs) == 1 else 'PRs ' + ', '.join('#' + str(p) for p in prs)) if prs else ''
+        say(f"ALREADY FIXED on {base}" + (f" by {by}" if by else '') + (f" (commits {shas})" if shas else ' (same change)')
+            + ': no new PR needed.')
+        say('If Crashlytics still shows this crash in builds made after these commits, run "Propose + verify fix" again.')
         res = {'case': cid, 'base': base, 'state': 'already-fixed', 'how': already.how, 'commits': already.commits, 'prs': prs}
         keep(f'crash-{cid}.json', res)
         if not dry:
