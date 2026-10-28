@@ -368,3 +368,108 @@ def auto_import_debug(version_codes, lib='libMYJNILIB26.so', log=print):
                     log(f'symbols: {os.path.basename(f)} not usable for {vc}: {str(e)[:150]}')
             if os.path.exists(store_path(vc, lib) + '.dbg'):
                 break
+
+
+APP_LIB_PATH = 'android/app/src/main/jniLibs/arm64-v8a/{lib}'
+
+
+def import_from_app_repo(cfg, version_codes, version_name=None, lib='libMYJNILIB26.so', log=print, max_downloads=12):
+    """28 Oct: full debug symbols with no .aab and no rebuild. The app repo (myzesty_mobile) commits the engine library
+    UNSTRIPPED (with debug_info) under android/app/src/main/jniLibs; a release ships exactly one of those versions.
+    For each build without full symbols, walk the history of that file on the release branch, download each version
+    (git LFS, read-only: nothing in the checkout changes) and keep the one whose BuildId equals the shipped .so's.
+    Every version already read is remembered (out of the store, app_lfs.json), so each one is downloaded once."""
+    import glob
+    import subprocess
+    import tempfile
+    from . import fulllab
+    repo = fulllab.checkout(cfg)
+    if not repo:
+        return []
+    need = {}                                        # build id -> [version codes]
+    for vc in version_codes:
+        if os.path.exists(store_path(vc, lib) + '.dbg'):
+            continue
+        mp = os.path.join(STORE, str(vc), 'meta.json')
+        bid = (json.load(open(mp)).get('build_id') or '') if os.path.exists(mp) else ''
+        if bid:
+            need.setdefault(bid.lower(), []).append(str(vc))
+    if not need:
+        return []
+
+    def git(*a, timeout=300):
+        return subprocess.run(['git', '--no-optional-locks', *a], cwd=repo, capture_output=True, text=True, timeout=timeout)
+    path = APP_LIB_PATH.format(lib=lib)
+    refs = []
+    for br in ([f'release/{version_name}'] if version_name else []) + ['development']:
+        if git('fetch', '-q', '--no-tags', 'origin', f'+refs/heads/{br}:refs/nightshift/app/{br}').returncode == 0:
+            refs.append(f'refs/nightshift/app/{br}')
+    if not refs:
+        log('symbols: app repo branches not reachable; skipped')
+        return []
+    cache_p = os.path.join(STORE, 'app_lfs.json')
+    try:
+        cache = json.load(open(cache_p))
+    except Exception:
+        cache = {}                                   # LFS oid -> build id
+    commits = []
+    for r in refs:
+        commits += [c for c in git('log', '--format=%H', '-n', '60', r, '--', path).stdout.split() if c not in commits]
+    found, downloads = [], 0
+    for c in commits:
+        if not need:
+            break
+        ptr = git('show', f'{c}:{path}').stdout
+        m = re.search(r'oid sha256:([0-9a-f]{64})', ptr)
+        if not m:
+            continue
+        oid = m.group(1)
+        bid = cache.get(oid)
+        if bid is None:
+            if downloads >= max_downloads:
+                continue
+            downloads += 1
+            fd, tmp = tempfile.mkstemp(suffix='.so')
+            os.close(fd)
+            try:
+                with open(tmp, 'wb') as fo:
+                    subprocess.run(['git', 'lfs', 'smudge'], cwd=repo, input=ptr.encode(), stdout=fo,
+                                   stderr=subprocess.DEVNULL, timeout=900)
+                bid = (Elf(tmp).build_id() or '').lower() if os.path.getsize(tmp) > 1000 else ''
+                cache[oid] = bid
+                hit = next((k for k in need if bid and (bid.startswith(k) or k.startswith(bid))), None)
+                if hit:
+                    vcs = need.pop(hit)
+                    first = None
+                    for vc in vcs:                   # same BuildId = byte-identical library: one file, linked
+                        dst = store_path(vc, lib) + '.dbg'
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        if first is None:
+                            shutil.move(tmp, dst)
+                            first = dst
+                        else:
+                            try:
+                                os.link(first, dst)
+                            except OSError:
+                                shutil.copy(first, dst)
+                        e = Elf(dst)
+                        syms, table = e.symbols()
+                        mp = os.path.join(STORE, str(vc), 'meta.json')
+                        meta = json.load(open(mp)) if os.path.exists(mp) else {}
+                        meta.update({'debug_symbols': f'{os.path.basename(repo)}@{c[:10]}:{path}', 'debug_member': path,
+                                     'debug_table': table, 'debug_functions': len(syms), 'debug_build_id': bid})
+                        json.dump(meta, open(mp, 'w'), indent=1)
+                        found.append(vc)
+                    log(f"symbols: full debug symbols for {', '.join(vcs)} from {os.path.basename(repo)} commit {c[:10]} "
+                        f"(the engine library committed for the release; BuildId {bid[:16]} matches)")
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+    try:
+        json.dump(cache, open(cache_p, 'w'), indent=1)
+    except OSError:
+        pass
+    if need:
+        log(f"symbols: no committed engine library in {os.path.basename(repo)} matches "
+            f"{', '.join(v for vs in need.values() for v in vs)} (checked {len(commits)} commit(s), {downloads} downloaded)")
+    return found

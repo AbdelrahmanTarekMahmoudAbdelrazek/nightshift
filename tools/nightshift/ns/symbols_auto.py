@@ -99,6 +99,11 @@ def ensure(cfg, codes, version_name=None, log=print):
         symbolize.auto_import_debug(have + added, log=log)
     except Exception as e:
         log(f'symbols: debug-symbol import skipped: {str(e)[:150]}')
+    try:                                             # no .aab: the engine library the app repo committed for the release
+        from . import config as _c
+        symbolize.import_from_app_repo(cfg or _c.load(), have + added, version_name, log=log)
+    except Exception as e:
+        log(f'symbols: app-repo import skipped: {str(e)[:150]}')
     full = [vc for vc in have + added if os.path.exists(symbolize.store_path(vc, 'libMYJNILIB26.so') + '.dbg')]
     log(f'symbols: full debug symbols (function names + file:line) for {len(full)}/{len(have + added)} builds')
     return {'have': have, 'added': added, 'failed': failed, 'debug': full}
