@@ -2011,7 +2011,9 @@ class Worker:
             return
         self._pin_phone()                             # every adb command of this job (and its scripts) goes to the lab phone
         # 2026-10-21: an Audio Check ran beside a Reproduce; the Reproduce install killed the export. Phone jobs share one lock.
-        self.busy = _stable_lock('_ns_lab_lock' if action in ('reproduce', 'draft-fix', 'audio-check') else '_ns_other_lock')
+        # ship-it jobs take seconds and touch no phone or build: their own slot, so they never wait behind a sync
+        self.busy = _stable_lock('_ns_lab_lock' if action in ('reproduce', 'draft-fix', 'audio-check')
+                                 else '_ns_ship_lock' if action in SHIP_ACTIONS else '_ns_other_lock')
         if action in ('reproduce', 'draft-fix'):        # lane runs left by a cancelled job would block the prebuild
             subprocess.run(['pkill', '-f', 'stress_results/lanes/'], capture_output=True)
             subprocess.run('adb shell \'pkill -f "# nsload"; pkill -f "# nsio"; rm -f /sdcard/Download/ns_io_*.tmp\'',
@@ -2128,17 +2130,18 @@ class Worker:
                 who = str(job.get('requestedBy') or '').lower()
                 who = who if re.fullmatch(r'[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,100}', who) else ''
                 env = f'NS_REQUESTED_BY="{who}" ' if who else ''
-                dd = os.path.join(config.REPO, 'tools/nightshift/out/shipit')
-                os.makedirs(dd, exist_ok=True)
-                pf = os.path.join(dd, f'{job["action"]}-payload-{ref.id}.json')    # the texts shown on the board, as a file
-                payload = {}
-                if job.get('comments') is not None or job.get('description') or job.get('summary'):
-                    payload = {'comments': [x for x in (job.get('comments') or []) if isinstance(x, dict)][:20],
-                               'summary': str(job.get('summary') or job.get('description') if job['action'] == 'bb-comments' else job.get('summary') or '')[:30000],
-                               'description': str(job.get('description') or '')[:30000]}
-                    json.dump(payload, open(pf, 'w'))
-                popt = f' --payload "{pf}"' if payload else ''
+                import json as _js                         # (handle() imports json further down: a plain `json` here is unbound)
                 try:
+                    dd = os.path.join(config.REPO, 'tools/nightshift/out/shipit')
+                    os.makedirs(dd, exist_ok=True)
+                    pf = os.path.join(dd, f'{job["action"]}-payload-{ref.id}.json')    # the texts shown on the board, as a file
+                    payload = {}
+                    if job.get('comments') is not None or job.get('description') or job.get('summary'):
+                        payload = {'comments': [x for x in (job.get('comments') or []) if isinstance(x, dict)][:20],
+                                   'summary': str(job.get('summary') or job.get('description') if job['action'] == 'bb-comments' else job.get('summary') or '')[:30000],
+                                   'description': str(job.get('description') or '')[:30000]}
+                        _js.dump(payload, open(pf, 'w'))
+                    popt = f' --payload "{pf}"' if payload else ''
                     if job['action'] == 'bb-comments':
                         if not re.fullmatch(r'([A-Za-z0-9_.-]{1,80}-)?\d{1,7}', issue):
                             raise RuntimeError(f'bad PR key {issue!r}')
@@ -2154,8 +2157,8 @@ class Worker:
                         if not re.fullmatch(r'[0-9a-f]{32}(~[0-9a-f]{8})?', issue):
                             raise RuntimeError(f'bad case id {issue!r}')
                         df = os.path.join(dd, f'jira-draft-{ref.id}.json')       # the edited text goes as a file (no shell quoting)
-                        json.dump({'summary': str(job.get('summary') or '')[:250], 'description': str(job.get('description') or '')[:30000],
-                                   'type': 'Bug'}, open(df, 'w'))
+                        _js.dump({'summary': str(job.get('summary') or '')[:250], 'description': str(job.get('description') or '')[:30000],
+                                  'type': 'Bug'}, open(df, 'w'))
                         self.log(ref, f'Ship it: creating the Jira card drafted for {issue[:8]}')
                         cmd = f'{env}{PY} tools/nightshift/shipit.py jira-create --case "{issue}" --draft "{df}"'
                     rc = self.run_cmd(ref, cmd, 1800)
