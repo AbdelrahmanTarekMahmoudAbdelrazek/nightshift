@@ -491,7 +491,10 @@ def analyse_one(db, cfg, m, log):
     mdl = _model_for(m, cfg, (rec or {}).get('frames') or [])
     if mdl:
         log(f'  {m.get("title", "")[:60]}: not our code (third-party/system), analysed with {mdl}')
-    txt = llm.run('crash-analysis', prompt, cfg, OUT, tag, model=mdl, deny=BLIND_DENY)
+    # 28 Oct: the model may open the code itself (C++ AND the Kotlin module folders) to check who made the wrong call,
+    # e.g. a Kotlin caller passing arguments in the wrong order; read-only, in the working copy
+    rd = dict(tools='Read,Grep,Glob', cwd=config.REPO, timeout=1200)
+    txt = llm.run('crash-analysis', prompt, cfg, OUT, tag, model=mdl, deny=BLIND_DENY, **rd)
     a = _json(txt)
     if not a:                                        # the CLI sometimes dies on one input every time: retry smaller
         small = _shrink(ev)
@@ -526,7 +529,7 @@ def analyse_one(db, cfg, m, log):
                        '\n\nA reviewer checked your previous answer against this evidence and found these problems. Fix every one, '
                        'keep what was right, answer with the full JSON object again.\nPROBLEMS:\n' + json.dumps(issues, indent=1) +
                        '\nPREVIOUS ANSWER:\n' + json.dumps(a, indent=1, default=str))
-        b = _json(llm.run('crash-analysis', redo_prompt, cfg, OUT, f'{tag}.redo{rnd + 1}', model=mdl, deny=BLIND_DENY))
+        b = _json(llm.run('crash-analysis', redo_prompt, cfg, OUT, f'{tag}.redo{rnd + 1}', model=mdl, deny=BLIND_DENY, **rd))
         if not b:
             break
         a = {k: b.get(k) for k in keep}
