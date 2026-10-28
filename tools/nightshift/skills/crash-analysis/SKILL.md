@@ -48,6 +48,13 @@ Method:
    knowledge; a cause seen in a single event is at most "medium".
 6. If evidence is missing (unsymbolized frames, code not in this repo, third-party SDK) say exactly what is
    missing and lower the confidence. Never invent frames, lines, logs or numbers.
+7. Owner = the side whose code made the WRONG decision, not the side where it crashed (team rule, 28 Oct). If the
+   native engine crashes because the Kotlin/Java app called it wrongly (wrong order, a call after destroy or before
+   create, a wrong id / clip / layer / time, a value the engine API does not accept), owner is "app-java" even when
+   every crashing frame is C++. Owner is "engine" only when the engine does the wrong thing with a valid call (its
+   own bug: a missing return, a race inside the engine, its own rounding). When both are wrong (the app sends a bad
+   call AND the engine has no guard for it), owner is the side that made the wrong call; fix_direction names that
+   fix first and the engine guard as defence in depth. owner_why says which call was wrong, with file:line.
 
 Answer with ONE JSON object, no prose around it:
 {
@@ -57,7 +64,8 @@ Answer with ONE JSON object, no prose around it:
  "timeline": ["4-8 key moments in order, each 'T-0.2s: what happened (seen in N/M events)'"],
  "hypotheses": [{"h": "candidate cause", "verdict": "kept | rejected", "why": "which events support or refute it"}],
  "evidence": ["3-6 short bullet facts taken from the input"],
- "owner": "engine | app-java | third-party | system | unknown",
+ "owner": "engine | app-java | third-party | system | unknown  (the side that made the wrong call, rule 7)",
+ "owner_why": "one sentence: which call or decision was wrong and where (file:line), e.g. 'CoverActivity.kt:282 seeks after PlayerActivity destroyed the engine'",
  "confidence": "high | medium | low",
  "severity": "high | medium | low  (users hit, crash vs ANR, data loss)",
  "fix_direction": "<= 80 words, in words only, NO code",

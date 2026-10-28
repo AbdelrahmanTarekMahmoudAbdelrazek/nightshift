@@ -18,7 +18,7 @@ Check, in this order:
 4. ANRs: the blocking thread is named from `all_threads` (what the main thread waits for, and what that thread is
    stuck in). Main-thread-only reasoning when other threads are present is a problem.
 5. Errors right before the crash are not taken as the cause when the timeline shows they are consequences.
-6. Confidence fits the evidence (high needs 2+ events agreeing or team knowledge); owner fits the frames.
+6. Confidence fits the evidence (high needs 2+ events agreeing or team knowledge); owner is the side that made the wrong call (a wrong Kotlin call that crashes in C++ is app-java), and owner_why names that call.
 7. fix_direction addresses the root cause (not only the symptom) and repro matches the trigger.
 
 Answer with ONE JSON object, nothing else:

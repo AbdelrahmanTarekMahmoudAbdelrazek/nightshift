@@ -2299,7 +2299,7 @@ function openProblem(id, keep) {
   $('#drawer').innerHTML = `<div class="dv-wrap">
     <div class="dv-head">
       <div class="dv-badges"><span class="mbadge ${mc}">${ml}</span><span class="kind k-${esc(m.kind)}">${m.kind === 'ANR' ? 'ANR' : 'Crash'}</span>
-        ${a.owner ? `<span class="own o-${esc(a.owner)}">${esc(a.owner)}</span>` : ''}${a.confidence ? `<span class="conf">confidence <b>${esc(a.confidence)}</b></span>` : ''}
+        ${a.owner ? `<span class="own o-${esc(a.owner)}" title="${esc(a.owner_why || 'the side whose code made the wrong call')}">${esc({ 'app-java': 'Kotlin/Java', engine: 'Engine (C++)', 'third-party': 'Third-party', system: 'System' }[a.owner] || a.owner)}</span>` : ''}${a.confidence ? `<span class="conf">confidence <b>${esc(a.confidence)}</b></span>` : ''}
         ${a.severity ? `<span class="conf">severity <b>${esc(a.severity)}</b></span>` : ''}
         <div class="dv-act">
           ${m.play?.url ? `<a class="iconbtn" href="${esc(m.play.url)}" target="_blank" title="Open in Google Play Console">Play ↗</a>` : ''}

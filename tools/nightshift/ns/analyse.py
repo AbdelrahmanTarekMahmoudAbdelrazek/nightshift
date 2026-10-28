@@ -501,7 +501,7 @@ def analyse_one(db, cfg, m, log):
         a = _json(txt)
     if not a:
         return None, rec
-    keep = ('summary', 'root_cause', 'trigger', 'timeline', 'hypotheses', 'evidence', 'owner', 'confidence',
+    keep = ('summary', 'root_cause', 'trigger', 'timeline', 'hypotheses', 'evidence', 'owner', 'owner_why', 'confidence',
             'severity', 'fix_direction', 'repro', 'diagram_cause', 'diagram_fix', 'open_questions')
     a = {k: a.get(k) for k in keep}
     # ---- self-check: deterministic checks + independent reviewer; redo with the problems listed (max 2 rounds)
