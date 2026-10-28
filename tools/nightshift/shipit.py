@@ -36,6 +36,12 @@ OUT = os.path.join(HERE, 'out')
 REPO = config.REPO
 
 
+class AlreadyFixed(Exception):
+    def __init__(self, how, commits):
+        super().__init__(how)
+        self.how, self.commits = how, commits
+
+
 def say(msg):                                          # the worker shows lines starting with ▶ / ✖ in the job log
     print(f'▶ {msg}', flush=True)
 
@@ -189,6 +195,22 @@ def _git(args, cwd, timeout=600, check=True):
     return r.stdout.strip()
 
 
+def _fix_commits(wt, files, days=90):
+    """Recent commits on the base that touched the fix's files and say they fix something: who already solved it."""
+    if not files:
+        return []
+    out = _git(['log', f'--since={days}.days', '--no-merges', '-i', '-E', '--grep=fix|crash|anr|null|dead|hang|freeze',
+                '--format=%h|%ad|%an|%s', '--date=short', 'HEAD', '--'] + files, wt, check=False)
+    rows = []
+    for ln in out.splitlines()[:6]:
+        h, d, a, subj = (ln.split('|', 3) + ['', '', '', ''])[:4]
+        pr = _git(['log', '--merges', '--ancestry-path', '--reverse', '--format=%s', f'{h}..HEAD', '--grep=pull request #'],
+                  wt, check=False).splitlines()
+        m = re.search(r'pull request #(\d+)', pr[0]) if pr else None
+        rows.append({'sha': h, 'date': d, 'author': a, 'subject': subj[:140], 'pr': int(m.group(1)) if m else None})
+    return rows
+
+
 def _repo_slug(cwd):
     url = _git(['remote', 'get-url', 'origin'], cwd)
     m = re.search(r'bitbucket\.org[:/]([^/]+)/([^/.]+?)(?:\.git)?$', url)
@@ -220,6 +242,7 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
     wt = tempfile.mkdtemp(prefix='ns_pr_')
     shutil.rmtree(wt)
     files = sorted(set(re.findall(r'^\+\+\+ b/(\S+)', patch, re.M)))
+    already, sha = None, ''
     try:
         _git(['fetch', '--no-tags', 'origin', f'+refs/heads/{base}:refs/nightshift/base/{base}'], REPO)
         _git(['worktree', 'add', '--detach', wt, f'refs/nightshift/base/{base}'], REPO)
@@ -236,8 +259,11 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
                                               capture_output=True).returncode == 0
         os.remove(pf)
         if same:
-            raise RuntimeError(f'this fix is ALREADY on the latest {base} (someone landed the same change): no PR needed')
+            raise AlreadyFixed(f'the same change is already on {base}', [])
         if not applied:
+            fixes = _fix_commits(wt, files)
+            if fixes:
+                raise AlreadyFixed(f'{base} already has a fix in the same code', fixes)
             raise RuntimeError(f'the verified patch does not apply on the latest {base}: the code changed since; re-run the fix')
         _git(['add', '-A'] + files, wt)
         msg = f"{title}\n\nNight Shift case {cid}\n{board_url(cfg)}/#problems/m-{cid}\n\nVerified on the lab phone: {str(fx.get('note') or '')[:400]}"
@@ -249,9 +275,24 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
         else:
             _git(['push', '-q', '--force-with-lease', 'origin', f'HEAD:refs/heads/{branch}'], wt, timeout=900)
             say(f'pushed {sha[:10]} to {branch}')
+    except AlreadyFixed as e:
+        already = e
     finally:
         subprocess.run(['git', 'worktree', 'remove', '--force', wt], cwd=REPO, capture_output=True)
         subprocess.run(['git', 'worktree', 'prune'], cwd=REPO, capture_output=True)
+    if already is not None:
+        prs = sorted({c['pr'] for c in already.commits if c.get('pr')})
+        say(f'ALREADY FIXED: {already.how}' + (f" (PR {', '.join('#' + str(p) for p in prs)})" if prs else '') + ': no PR needed')
+        for c in already.commits:
+            say(f"  {c['sha']} {c['date']} {c['author']}: {c['subject']}" + (f" (PR #{c['pr']})" if c.get('pr') else ''))
+        say('Check Crashlytics for new events of this crash in builds made after those commits: if it still happens, '
+            'run "Propose + verify fix" again so Night Shift fixes the remaining path on top of the current code.')
+        res = {'case': cid, 'base': base, 'state': 'already-fixed', 'how': already.how, 'commits': already.commits, 'prs': prs}
+        keep(f'crash-{cid}.json', res)
+        if not dry:
+            fire_update('cases', cid, {'fixPr': {'state': 'already-fixed', 'base': base, 'how': already.how,
+                                                 'commits': already.commits[:6], 'prs': prs, 'at': _now()}})
+        return res
     desc = pr_description(cid, case, fx, cfg, files)
     if payload and str(payload.get('description') or '').strip():   # the text the developer saw (and maybe edited)
         desc = str(payload['description']).strip()[:30000]

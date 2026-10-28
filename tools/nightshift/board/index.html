@@ -1670,7 +1670,13 @@ function shipPanel(m, c, fbId) {
   const pr = c?.fixPr || {}, jr = c?.jira || {}, d = jiraDraft(m, c);
   const pd = crashPrDraft(m, c);
   const prText = `<div class="edit"><input id="ship-ptitle" value="${esc(pd.title)}" maxlength="200"><textarea id="ship-pdesc" rows="14">${esc(pd.description)}</textarea>`;
-  const prBox = !fixed && !pr.url
+  const bbRepo = 'https://bitbucket.org/mitrotek/' + ((FB && FB.profile && FB.profile.main_repo) || 'video_gles3jni');
+  const prBox = pr.state === 'already-fixed'
+    ? `<p><span class="badge b-done">Already fixed on ${esc(pr.base || '')}</span> ${esc(pr.how || '')}${(pr.prs || []).length ? ': ' + pr.prs.map(n => `<a href="${bbRepo}/pull-requests/${esc(n)}" target="_blank" rel="noopener">PR #${esc(n)} ↗</a>`).join(', ') : ''}. No new PR needed.</p>
+       ${(pr.commits || []).length ? `<ul class="small">${pr.commits.map(c => `<li><span class="mono">${esc(c.sha)}</span> ${esc(c.date)} · ${esc(c.author)}: ${esc(c.subject)}</li>`).join('')}</ul>` : ''}
+       <p class="note">If Crashlytics still shows this crash in builds made after those commits, run <b>Propose + verify fix</b> again: Night Shift fixes the remaining path on top of the current code.</p>
+       <button class="btn" onclick="queue('draft-fix','${esc(fbId)}')">Propose + verify fix again</button>`
+    : !fixed && !pr.url
     ? `<p class="muted">A draft PR needs a fix verified on the lab phone first (▶ Start, or Propose + verify fix). Night Shift prepares the PR text as soon as that passes.</p>`
     : (pr.url ? `<p>Draft PR open: <a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.url.replace(/^https:\/\/bitbucket.org\//, ''))} ↗</a> <span class="muted small">${esc(pr.branch || '')} → ${esc(pr.base || '')} · ${esc(pr.at || '')}</span></p>` : '')
       + `<p class="note">Prepared from the verified fix: this is exactly what is sent. Edit freely.</p>${prText}
