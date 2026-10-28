@@ -81,3 +81,11 @@ Mermaid rules (the board renders them, keep them valid):
 - Mark the crash node with `:::bad` and the fix node with `:::good`; end the source with
   `classDef bad fill:#fde8e8,stroke:#a32d2d` and `classDef good fill:#e8f5e9,stroke:#2e7d32` lines.
 - Use `\n` only through the JSON string escaping; one statement per line.
+
+## Check the Kotlin caller's arguments (28 Oct, SpeedFragment lesson)
+When a lab or field log shows an engine message whose ids or values do not match the user's state (e.g.
+`MsgSetMediaCurveSpeed layer 0 media_id 0 index 1` while clip 1 is selected, a seek past the timeline end, a layer
+or media id that does not exist), do not leave it as an open question: find every Kotlin/Java caller of that call
+(Grep `Player.<method>(` in android-video-editor-module/, java-common/, gallerypicker/) and compare each call's
+argument ORDER and values with the `external fun` declaration in java-common Player.kt. A swapped or wrong argument
+is a wrong call from the app: owner "app-java", cite caller file:line and the declaration line.

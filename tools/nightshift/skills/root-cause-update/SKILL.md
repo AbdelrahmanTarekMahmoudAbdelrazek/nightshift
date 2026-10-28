@@ -35,3 +35,11 @@ Keep or set "owner" to the side that made the WRONG call, not the side where it 
 crashing frame is C++; "engine" only when the engine mishandles a valid call. Add "owner_why": which call was wrong,
 with file:line. Lab proof (a reproduction, a verified fix whose guard fired) outranks any field-only theory: never
 drop a cause the lab proved; list a field-only theory as a hypothesis next to it.
+
+## Check the Kotlin caller's arguments (28 Oct, SpeedFragment lesson)
+When a lab or field log shows an engine message whose ids or values do not match the user's state (e.g.
+`MsgSetMediaCurveSpeed layer 0 media_id 0 index 1` while clip 1 is selected, a seek past the timeline end, a layer
+or media id that does not exist), do not leave it as an open question: find every Kotlin/Java caller of that call
+(Grep `Player.<method>(` in android-video-editor-module/, java-common/, gallerypicker/) and compare each call's
+argument ORDER and values with the `external fun` declaration in java-common Player.kt. A swapped or wrong argument
+is a wrong call from the app: owner "app-java", cite caller file:line and the declaration line.
