@@ -1574,6 +1574,7 @@ class Editor:
         self.idle(1)
         self._picker_confirm()
         end = time.time() + 150                  # transcode of a long clip
+        fe_taps = 0
         while time.time() < end:
             sc = self.screen()
             if sc is not None and self.in_editor(sc) and not sc.has(T.LOADER):
@@ -1584,12 +1585,53 @@ class Editor:
                 time.sleep(2)
                 continue
             if sc is not None and sc.has('id:full_editor'):     # new projects open in the wizard editor first
+                if fe_taps >= 2 and not sc.has(T.LOADER):
+                    # 2 Nov: on sprint217 builds 'Full Editor' does nothing (app bug, also by hand; suspect MZ-16223
+                    # a35eb44b: the wizard tool column on the back stack). The project is saved: leave the wizard and
+                    # open it again from My Projects, which goes straight to the full editor.
+                    self.log('    Full Editor did nothing after 2 taps (app bug on this build): reopening the saved project from My Projects')
+                    self.mon.notes.append('app bug: wizard "Full Editor" button does nothing; the project was reopened from My Projects')
+                    return self._reopen_newest_draft()
                 self.log('    wizard editor: switching to Full Editor')
                 self.dev.tap(*sc.find('id:full_editor').center)
+                fe_taps += 1
                 time.sleep(3)
                 continue
             time.sleep(2)
         raise UIError('the new project did not open in the editor')
+
+    def _reopen_newest_draft(self, timeout=90):
+        """Leave the wizard (the project is saved as the newest draft) and open that draft from My Projects."""
+        for _ in range(3):                       # BACK out of the wizard; a 'save / discard' sheet keeps the project
+            self.dev.key('KEYCODE_BACK')
+            time.sleep(2.5)
+            s = self.screen()
+            if s is None or s.has(T.DRAFT_FIRST) or s.has(('textc:my projects', 'textc:new project')):
+                break
+            if s.has(('textc:save',)):
+                self.ui.tap(('textc:save',), timeout=3)
+                time.sleep(2)
+        if not self.lab('open_draft', index=0):  # the debug build's lab control: same code as tapping the draft
+            s = self.screen()
+            if s is not None and s.has(T.HOME_TO_PROJECTS) and not s.has(T.DRAFT_FIRST):
+                self.dev.tap(*s.find(T.HOME_TO_PROJECTS).center)
+                time.sleep(2)
+            s = self.ui.wait(T.DRAFT_FIRST, timeout=20)
+            if s is None:
+                raise UIError('Full Editor does nothing (app bug) and the saved project is not in My Projects')
+            self.dev.tap(*s.find(T.DRAFT_FIRST).center)
+        end = time.time() + timeout
+        while time.time() < end:
+            sc = self.screen()
+            if sc is not None and self.in_editor(sc) and not sc.has(T.LOADER):
+                self.log('    draft reopened in the full editor')
+                return
+            if sc is not None and sc.has(T.DISMISS):
+                self.dev.tap(*sc.find(T.DISMISS).center)
+            elif sc is not None and sc.has('id:full_editor'):
+                raise UIError('Full Editor does nothing (app bug on this build) and the saved project opens in the wizard too')
+            time.sleep(2)
+        raise UIError('the reopened project did not reach the full editor')
 
     def open_slideshow(self, n=3, wait=180):
         """Cold start -> SlideShow -> pick n clips -> Done; returns once the slideshow screen is up (ids: add_video = add media, rvMedias = clip strip, play, seekBar, export, back)."""

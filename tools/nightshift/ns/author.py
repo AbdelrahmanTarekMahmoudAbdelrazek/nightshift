@@ -307,6 +307,19 @@ def start_level(ctx):
     for w, label in (('download', 'a download'), ('transcod', 'a transcode'), ('configurationchanged', 'a configuration change')):
         if w in tl:
             why.append(f'{label} in progress before the crash')
+    # 2 Nov (2fe03193): the root cause said the crash needs a flag with NO starting value ('missing from the init
+    # list'). Whether it crashes depends on leftover memory: a lab phone (fresh debug app, zeroed memory) almost never
+    # has it, so levels 2-4 spent an hour on runs that could not crash. Such a condition is forced, not waited for:
+    # start at the hook level (a hook that sets exactly that value; the run counts as hook-assisted).
+    a = ctx.get('analysis') or {}
+    txt = ' '.join(str(a.get(k) or '') for k in ('root_cause', 'cause', 'summary', 'trigger', 'mechanism', 'why')).lower()
+    if not txt.strip():
+        txt = json.dumps(a, default=str)[:20000].lower()
+    m = re.search(r'uninitiali[sz]ed|no (?:starting|initial) value|not initiali[sz]ed|missing from the init(?:ialiser|ializer)? list|'
+                  r'indeterminate value|garbage value|leftover (?:memory|value)|undefined value|whatever (?:was|is) in memory', txt)
+    if m:
+        return (5, f'the root cause depends on an uninitialised value ("{m.group(0)}"): leftover memory decides it, '
+                   f'which a lab phone cannot be made to have naturally; a hook forces it (hook-assisted)')
     return (3, '; '.join(why)) if why else (2, '')
 
 
@@ -999,8 +1012,8 @@ def run(worker, ref, case, merged, tried=None):
         tried = set()                                 # never end with nothing to run: start the ladder again
     start = start_level(ctx)
     if start[0] > 2 and 2 not in tried:
-        tried.add(2)
-        worker.log(ref, f'repro author: starting at level {start[0]} (environment): {start[1]}')
+        tried.update(lv for lv, _n, _r in LEVELS if 2 <= lv < start[0])
+        worker.log(ref, f'repro author: starting at level {start[0]} ({"hook" if start[0] >= 5 else "environment"}): {start[1]}')
     if tried:
         worker.log(ref, f'repro author: levels already tried on this crash, skipped: {sorted(tried)}')
     for level, lname, rule in LEVELS:
@@ -1080,6 +1093,9 @@ def run(worker, ref, case, merged, tried=None):
                    + ('The SAME checkpoint was missed twice: change the approach completely (different media, screen path or '
                       'trigger), do not vary the same recipe.\n' if len(misses) >= 2 and misses[-1] == misses[-2] and misses[-1] else '')
                    + '\n' if diag else '')
+                + (f'# Ready-made debug hooks already in this lab build (default off; set before the trigger, reset in a '
+                   f'finally). A run that uses one counts as HOOK-ASSISTED, so use one only at the hook level or when the '
+                   f'root cause names exactly the condition it forces:\n{hook_catalog()}\n\n' if hook_catalog() else '')
                 + (f'# Your previous attempts and what the lab phone did\n' + '\n\n'.join(history[-3:]) + '\n\n' if history else '')
                 + '# Answer format\n'
                 f'1. ONE ```python``` block with the recipes `def {name}_a(ed, r):`, `def {name}_b(ed, r):` [, `_c`], each '
@@ -1295,3 +1311,23 @@ def _finish(worker, ref, case, attempts, hit):
     if not hit:
         worker.log(ref, f'repro author: no level reproduced it in {len(attempts)} lab attempts')
     return hit
+
+
+def hook_catalog():
+    """2 Nov: the ready-made lab hooks (tools/nightshift/hooklib/*.diff) are in EVERY lab debug build, default off.
+    Before, only tapflow's prompt named slow_audio; the repro author and the engine replay did not know a hook for
+    their crash already existed. -> text lines 'ed.dev.setprop(...)  what it does', read from each diff's header."""
+    import glob as _g
+    out = []
+    for f in sorted(_g.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'hooklib', '*.diff'))):
+        cur = None
+        for ln in open(f, errors='replace'):
+            m = re.match(r'^\+//\s+adb shell setprop (debug\.zesty\.hook\.\w+) (\S+)\s*->\s*(.*)$', ln.rstrip())
+            if m:
+                cur = [f"  ed.dev.setprop('{m.group(1)}', '{m.group(2)}')   {m.group(3).strip()}"]
+                out.append(cur)
+            elif cur is not None and re.match(r'^\+//\s{6,}\S', ln):
+                cur.append('      ' + ln[3:].strip())
+            elif not ln.startswith('+//'):
+                cur = None
+    return '\n'.join('\n'.join(x) for x in out)

@@ -118,7 +118,7 @@ def _prompt(case, merged, rp, ctx, api, examples, smap, kmap, facts, history, k8
             f'# FIELD TIMELINE (the user, oldest first; [TAP/EVENT] = a tap or screen event; [File.cpp] = engine log)\n```\n{field_timeline(case)}\n```\n\n'
             f'{kmap}\n'
             f'# HARNESS API\n```\n{api}\n```\n# Examples of working scenarios\n```python\n{examples[:9000]}\n```\n'
-            f'# SCREEN MAP (ids and texts per screen)\n{smap}\n\n{SWITCHES}\n\n'
+            f'# SCREEN MAP (ids and texts per screen)\n{smap}\n\n{SWITCHES}\n{_hooklib()}\n\n'
             + ('# Facts about the lab phone and app\n' + '\n'.join(f'- {f}' for f in facts[-25:]) + '\n\n' if facts else '')
             + (f'# Case context\n```json\n{json.dumps(ctx, default=str)[:12000]}\n```\n')
             + ('# Earlier attempts (fix exactly what they say)\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
@@ -229,3 +229,13 @@ def run(worker, ref, case, merged, rp=None):
     author._finish(worker, ref, case, attempts, None)
     worker.log(ref, f'tap repro: no real-tap repro in {(dt.datetime.now() - t0).total_seconds() / 60:.0f} min')
     return None
+
+
+def _hooklib():
+    """Every ready-made hook in hooklib/ (2 Nov), not only the two listed in SWITCHES."""
+    try:
+        from . import author as _a
+        hc = _a.hook_catalog()
+        return ('All ready-made hooks in this build (hook-assisted when used):\n' + hc) if hc else ''
+    except Exception:
+        return ''

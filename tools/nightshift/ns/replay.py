@@ -111,10 +111,13 @@ def run(worker, ref, case, merged):
             f'Setup before the calls: the fastest real app state the crash needs, with the lab shortcuts '
             f'(ed.open_slideshow(n) for a slideshow; the default runner opens the first draft in the editor unless the '
             f'recipe is decorated \'nodraft\'). Keep each recipe under 60 s. After the calls, ed.idle(5).\n'
-            f'No code changes, no hooks. Read the JNI side (app/src/main/cpp/JNI/JNI.cpp) and the engine to know what each '
+            f'No code changes and no NEW hooks (the ready-made switches listed below are allowed). Read the JNI side (app/src/main/cpp/JNI/JNI.cpp) and the engine to know what each '
             f'call does and which thread runs it (a Get through MsgLooper is synchronous).\n\n'
             f'# Engine methods you can call (Player.kt)\n```\n{api}\n```\n\n'
             f'# Root cause and field evidence\n```json\n{json.dumps({"analysis": analysis, "field": ctx}, indent=1, default=str)[:45000]}\n```\n\n'
+            + (lambda hc: f'# Ready-made switches already in this build (not code changes; a replay that needs one is a '
+                          f'hook-assisted lead): use one when the root cause names the condition it forces (e.g. an '
+                          f'uninitialised flag the field phone had by chance)\n{hc}\n\n' if hc else '')(_hooks())
             + (f'# Your previous replays and what the lab did\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
             + f'# Answer format\n1. ONE ```python``` block: `def {name}_a(ed, r):` ... each decorated '
             f'`@scenario(\'nightshift\', \'auto\', \'replay\'[, \'nodraft\'])` with a one-line docstring; use only ed / time / r.\n'
@@ -191,3 +194,11 @@ def hint(rp):
             f'Replay {rp["scenario"]}: {" | ".join(rp.get("calls") or [])}\nWhy: {rp.get("why", "")}\n'
             'Your recipes must make the REAL app send this order through the UI (real taps / real device events), '
             'not call ed.jni: a replay is a lead, the repro must be natural.\n\n')
+
+
+def _hooks():
+    try:
+        from . import author as _a
+        return _a.hook_catalog()
+    except Exception:
+        return ''
