@@ -93,6 +93,9 @@ def at_build(repos, when, log=print):
             return None, f'{r["repo"]}: skipped (fetch timed out in the last 6 h)'
         try:
             f = kotlinctx._git(['fetch', '-q', f'--shallow-since={since}', 'origin', r['branch']], cwd=src, timeout=180)
+            if f.returncode and 'no commits selected' in (f.stderr or ''):
+                # 2 Nov: a quiet repo (image_editor_java) had no commits in that 90-day window: take its last 50 instead
+                f = kotlinctx._git(['fetch', '-q', '--depth', '50', 'origin', r['branch']], cwd=src, timeout=180)
             if f.returncode:
                 return None, f'{r["repo"]}: {f.stderr.strip()[:120]}'
             sha = kotlinctx._git(['rev-list', '-1', f'--before={when}', 'FETCH_HEAD'], cwd=src).stdout.strip()

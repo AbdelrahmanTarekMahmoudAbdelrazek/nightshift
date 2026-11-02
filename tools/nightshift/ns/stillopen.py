@@ -262,7 +262,7 @@ def _fetch(gd, branch, ref, log):
     return _git(['rev-parse', ref], gd).stdout.strip()
 
 
-def targets_live(rec, days, log):
+def targets_live(rec, days, log, extra=()):
     """Branch heads (target + newer releases) and recent PRs into them, from Bitbucket; commits fetched into git."""
     from . import bitbucket
     gd = config.REPO
@@ -270,6 +270,12 @@ def targets_live(rec, days, log):
     dests = release_after(rec.get('dest') or '', names)
     out = []
     for b in dests:
+        h = _fetch(gd, b, f'refs/nightshift/so/{b}', log)
+        if h:
+            out.append({'kind': 'branch', 'label': b, 'branch': b, 'commit': h})
+    for b in extra or ():                              # 2 Nov: a branch the watcher saw change watched code (no PR yet)
+        if b in dests or any(t.get('branch') == b for t in out):
+            continue
         h = _fetch(gd, b, f'refs/nightshift/so/{b}', log)
         if h:
             out.append({'kind': 'branch', 'label': b, 'branch': b, 'commit': h})
@@ -352,14 +358,14 @@ def action_anchors(item, src, files):
     return out
 
 
-def check(rec, cfg, log=print, targets=None, gd=None, days=14, walk=True, field=None):
+def check(rec, cfg, log=print, targets=None, gd=None, days=14, walk=True, field=None, extra=()):
     """Still-open result for every verified finding of `rec` (a saved PR review). targets/gd given -> no Bitbucket
     (tests); walk=False -> no model (changed code says 'changed, needs a look')."""
     items = items_of(rec)
     if not items:
         return {'at': _now(), 'items': [], 'targets': [], 'note': 'no verified findings'}
     if targets is None:
-        gd, targets = targets_live(rec, days, log)
+        gd, targets = targets_live(rec, days, log, extra)
     base = GitSrc(gd, rec['head'])
     cache = {}
     try:
@@ -484,7 +490,9 @@ def check(rec, cfg, log=print, targets=None, gd=None, days=14, walk=True, field=
 
 def run(db, cfg, arg, log=print):
     """Worker entry: arg = '<pr id>|still' (one PR) or 'all|still' (every PR row with a verified finding)."""
-    pid = str(arg).split('|', 1)[0]
+    parts = str(arg).split('|')
+    pid = parts[0]
+    extra = [x for x in (parts[2].split(',') if len(parts) > 2 else []) if x]
     ids = [d.id for d in db.collection('prs').stream()] if pid == 'all' else [pid]
     done = 0
     for i in ids:
@@ -507,8 +515,11 @@ def run(db, cfg, arg, log=print):
         except Exception as e:
             field = None
             log(f'field index skipped: {str(e)[:160]}')
-        res = check(rec, cfg, log, field=field)
-        upd = {'stillOpenJson': json.dumps(res, ensure_ascii=False), 'stillOpenAt': res['at']}
+        res = check(rec, cfg, log, field=field, extra=extra)
+        # 2 Nov: keep Firestore writes low: the full result only when it changed, else just the time of the check
+        strip = lambda r: json.dumps([{k: v for k, v in it.items()} for it in (r or {}).get('items') or []], sort_keys=True, default=str)
+        same = strip(res) == strip(rec.get('stillOpen'))
+        upd = {'stillOpenAt': res['at']} if same else {'stillOpenJson': json.dumps(res, ensure_ascii=False), 'stillOpenAt': res['at']}
         if res.get('field') is not None and rec.get('view'):
             upd['viewJson'] = json.dumps(rec['view'], ensure_ascii=False)
             try:                                     # the local copy too (a later redraw starts from it)
@@ -535,3 +546,146 @@ def run(db, cfg, arg, log=print):
             f"changed, needs a look {n['changed']} ({res['walks']} Simulator re-walk(s))")
         done += 1
     return done
+
+
+# ---------------------------------------------------------------- the watcher (2 Nov)
+WATCH = os.path.join(OUT, 'still_watch.json')
+
+
+def _short_fn(fn):
+    return str(fn or '').split('::')[-1].split('(')[0].strip()
+
+
+def watch_list(log=print):
+    """{pr id: {'head', 'dest', 'fns': {short function names}}} for every reviewed PR on THIS computer with open findings.
+    Read from the local saved reviews only (no Firestore read). Cached per PR head."""
+    try:
+        cache = json.load(open(WATCH)).get('anchors', {})
+    except Exception:
+        cache = {}
+    out = {}
+    for f in os.listdir(OUT) if os.path.isdir(OUT) else []:
+        m = re.fullmatch(r'(\d+)\.json', f)
+        if not m:
+            continue
+        try:
+            rec = json.load(open(os.path.join(OUT, f)))
+        except Exception:
+            continue
+        if rec.get('stage') not in (None, 'reviewed') or not rec.get('head'):
+            continue
+        ra = str(rec.get('reviewedAt') or '')[:10]
+        if ra and ra < (dt.datetime.now() - dt.timedelta(days=21)).strftime('%Y-%m-%d'):
+            continue                                   # reviews older than 3 weeks are not watched
+        so = rec.get('stillOpen') or {}
+        if so and so.get('items') and all(x.get('summary') == 'fixed' for x in so['items']):
+            continue                                   # everything already fixed on its own branch
+        pid, head = m.group(1), rec['head']
+        c = cache.get(pid)
+        if not c or c.get('head') != head:
+            try:
+                items = items_of(rec)
+                if not items:
+                    continue
+                base = GitSrc(config.REPO, head)
+                eng = [x for x in base.files() if x.endswith(('player/VideoEngine.cpp', 'player/VisualTimeLine.cpp'))]
+                fns = set()
+                for it in items:
+                    a = anchors(it, base)
+                    a |= action_anchors(it, base, sorted({p for p, _ in a} | set(eng)))
+                    fns |= {_short_fn(fn) for _, fn in a}
+                bad = _GENERIC | {'apply', 'activate', 'get_frame', 'JNI_OnLoad', 'run', 'init'}
+                c = {'head': head, 'dest': rec.get('dest', ''), 'fns': sorted(
+                    x for x in fns if len(x) > 5 and x not in bad
+                    and not re.fullmatch(r'[A-Z][A-Z0-9_]+', x)          # macros (STROKE_LOG, TLLOG)
+                    and not re.fullmatch(r'[A-Z][a-z]+(?:[A-Z][a-z]+)+', x))}  # a class name (a constructor) touches everything
+            except Exception as e:
+                log(f'still-watch: PR #{pid}: no watch list ({str(e)[:100]})')
+                continue
+        cache[pid] = c
+        out[pid] = c
+    return out, cache
+
+
+def watch(db, cfg, log=print, every_branches=40):
+    """Every ~30 min on the board host: which branches got new commits that change a function an open finding depends
+    on? Only those PRs get a still-open check (a queued job), with that branch added even when it has no PR yet.
+    Cost: one Bitbucket call for the branch list, a git fetch per CHANGED branch, no model call, no Firestore read;
+    one Firestore write per PR that really needs a re-check."""
+    from . import bitbucket
+    try:
+        st = json.load(open(WATCH))
+    except Exception:
+        st = {}
+    seen = st.get('branches', {})
+    wl, cache = watch_list(log)
+    if not wl:
+        return 0
+    rows = bitbucket.branches(limit=every_branches)
+    first = not seen
+    gd = config.REPO
+    hits = {}                                          # pid -> {branch: [functions]}
+    rel = [b['name'] for b in rows if REL.match(b['name'])]
+    for b in rows:
+        name, h = b['name'], b.get('hash', '')
+        if not h or seen.get(name) == h:
+            continue
+        old = seen.get(name)
+        seen[name] = h
+        if first:
+            continue                                   # first run: remember where every branch is, judge from the next push
+        full = _fetch(gd, name, f'refs/nightshift/so/{name}', log)
+        if not full:
+            continue
+        base = None
+        if old and _git(['cat-file', '-e', old + '^{commit}'], gd).returncode == 0:
+            base = old
+        else:                                          # a new branch: compare with the release branch it grew from
+            best = None
+            for r in rel:
+                if r == name:
+                    continue
+                rh = _fetch(gd, r, f'refs/nightshift/so/{r}', log)
+                mb = _git(['merge-base', full, rh], gd).stdout.strip() if rh else ''
+                if mb:
+                    t = int(_git(['show', '-s', '--format=%ct', mb], gd).stdout.strip() or 0)
+                    if best is None or t > best[0]:
+                        best = (t, mb)
+            base = best[1] if best else None
+        if not base:
+            continue
+        diff = _git(['diff', '-U0', base, full, '--', '*.cpp', '*.h', '*.kt', '*.java'], gd).stdout
+        if not diff:
+            continue
+        try:
+            changed = {_short_fn(fn) for _, fn in touched(diff, GitSrc(gd, full))}
+        except Exception:
+            changed = set()
+        for pid, w in wl.items():
+            hit = sorted(changed & set(w['fns']))
+            if hit:
+                hits.setdefault(pid, {})[name] = hit
+    queued = 0
+    day = dt.datetime.now().strftime('%Y-%m-%d')
+    if st.get('day') != day:
+        st.update(day=day, queued_today=0)
+    cap = int((cfg.get('worker') or {}).get('still_watch_daily_max', 6))   # cost guard: at most N automatic checks a day
+    for pid, br in hits.items():
+        if st.get('queued_today', 0) >= cap:
+            log(f'still-watch: daily limit of {cap} automatic checks reached; PR #{pid} waits for tomorrow or a Check again')
+            continue
+        st['queued_today'] = st.get('queued_today', 0) + 1
+        log(f"still-watch: PR #{pid}: " + '; '.join(f"{b} changed {', '.join(f[:3])}" for b, f in br.items()))
+        if db is not None:
+            from firebase_admin import firestore as _fs
+            db.collection('jobs').add({'action': 'pr-review', 'issue': f"{pid}|still|{','.join(sorted(br))[:400]}",
+                                       'requestedBy': 'Night Shift watch', 'status': 'queued', 'queuedAt': _fs.SERVER_TIMESTAMP,
+                                       'why': '; '.join(f"{b}: {', '.join(f[:4])}" for b, f in br.items())[:500]})
+            queued += 1
+    st.update(branches=seen, anchors=cache, at=_now())
+    try:
+        os.makedirs(OUT, exist_ok=True)
+        json.dump(st, open(WATCH, 'w'), indent=0)
+    except Exception:
+        pass
+    return queued

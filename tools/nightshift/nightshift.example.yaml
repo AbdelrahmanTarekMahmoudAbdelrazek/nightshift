@@ -128,7 +128,8 @@ server_content:                    # card reviews: content the app downloads (re
 
 worker:                                   # shared board: whose jobs this worker runs
   owner: a.tarek@msd-my.com
-  serve_others: true                      # lab host: also runs jobs of people whose own worker is offline
+  serve_others: true                      # board host: daily sync, scheduled checks, Ship it (teammates repros stay on their own Mac)
+  still_watch_minutes: 5                  # check Bitbucket for new commits every 5 min (free: 1 API call, no Firestore read)
 
 symbols:
   github_repo: AbdelrahmanTarekMahmoudAbdelrazek/nightshift   # the team's private kit repo: each build's symbols go to its Releases

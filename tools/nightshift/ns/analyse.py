@@ -472,6 +472,7 @@ def _model_for(m, cfg, frames=None):
 
 
 def field_file(mid):
+    os.makedirs(OUT, exist_ok=True)                  # 28 Oct: a teammate's first analysis had no out/analysis folder yet
     return os.path.join(OUT, f'{mid}.field.json')
 
 

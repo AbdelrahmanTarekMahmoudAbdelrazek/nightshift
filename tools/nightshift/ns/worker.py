@@ -283,7 +283,8 @@ def git_over_ssh():
 def _ns_version():
     """The Night Shift version this worker runs (the kit's commit), shown on the board so support can see who updated."""
     v = getattr(threading, '_ns_version', None)
-    if v is None:
+    if v is None or time.time() - getattr(threading, '_ns_version_at', 0) > 300:
+        threading._ns_version_at = time.time()
         try:
             d = os.path.realpath(os.path.join(config.REPO, 'tools', 'nightshift'))
             v = subprocess.run(['git', '-C', d, 'log', '-1', '--format=%h %cs'], capture_output=True, text=True, timeout=10).stdout.strip() or '?'
@@ -291,6 +292,96 @@ def _ns_version():
             v = '?'
         threading._ns_version = v
     return v
+
+
+class BrokenLabBuild(RuntimeError):
+    pass
+
+
+def _broken_build_check(rd, text=''):
+    """2 Nov (2fe03193): every run crashed 13 s after start with SIGABRT 'JNI DETECTED ERROR ... NoSuchMethodError
+    Player.appendRemoveBgMask(IJJI)V'. The C++ and the Kotlin modules did not match (the lab folder takes the Kotlin
+    modules from the working copy, which was on bg-removal-code-clean for a manual test). Night Shift spent 20+ min on
+    replays and the UI author that could never work. Such a build can reproduce nothing: stop at the first sign."""
+    hay = text or ''
+    lp = os.path.join(rd, 'logcat.txt')
+    if os.path.exists(lp):
+        try:
+            hay += ''.join(l for l in open(lp, errors='replace') if 'JNI DETECTED ERROR' in l or 'UnsatisfiedLinkError' in l)
+        except OSError:
+            pass
+    m = re.search(r'JNI DETECTED ERROR IN APPLICATION:[^\n]*?java\.lang\.(NoSuchMethodError|NoSuchFieldError|ClassNotFoundException|NoClassDefFoundError)'
+                  r':\s*([^\n]{0,200})', hay) or re.search(r'java\.lang\.(UnsatisfiedLinkError):\s*([^\n]{0,200})', hay)
+    if not m:
+        return
+    mods = []
+    for sm in ('android-video-editor-module', 'java-common', 'gallerypicker'):
+        d = os.path.join(config.REPO, sm)
+        if os.path.isdir(d):
+            b = subprocess.run(['git', '-C', d, 'rev-parse', '--abbrev-ref', 'HEAD'], capture_output=True, text=True).stdout.strip()
+            mods.append(f'{sm} on {b or "?"}')
+    raise BrokenLabBuild(
+        f'the lab build cannot run: the app crashes as soon as it opens ({m.group(1)}: {m.group(2).strip()[:160]}). '
+        f'The C++ code and the Kotlin modules do not match. The lab build takes the Kotlin modules from your working copy '
+        f'({", ".join(mods) or "?"}): put them back on the branch that matches this crash (usually the sprint branch), then '
+        f'press Reproduce again. Nothing was reproduced or ruled out by this run.')
+
+
+def _kit_dir():
+    """The teammate kit's git folder (github .../nightshift), or None on the board host (its code lives in video_gles3jni)."""
+    try:
+        d = os.path.realpath(os.path.join(config.REPO, 'tools', 'nightshift'))
+        top = subprocess.run(['git', '-C', d, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, timeout=10).stdout.strip()
+        url = subprocess.run(['git', '-C', top, 'remote', 'get-url', 'origin'], capture_output=True, text=True, timeout=10).stdout.strip()
+        return top if top and 'github.com' in url and 'nightshift' in url and os.path.exists(os.path.join(top, 'update.sh')) else None
+    except Exception:
+        return None
+
+
+def _all_idle():
+    """No job is running in this process (every job holds one of these locks while it runs)."""
+    import threading as _t
+    return not any(getattr(_t, n, None) is not None and getattr(_t, n).locked()
+                   for n in ('_ns_lab_lock', '_ns_ship_lock', '_ns_review_lock', '_ns_other_lock'))
+
+
+def auto_update(cfg, log=print):
+    """2 Nov: Khairy's worker ran week-old code (started 26 Oct, never updated), so it failed 'Check again' and took a
+    Ship-it job that belongs to the board host. Teammates now stay current by themselves: every 30 min, when no job
+    runs, fetch the kit; if GitHub has a newer one, run kit_update.py (keeps local learning) and restart this worker
+    in place with the new code. The board host (code in video_gles3jni) is never touched. Off with worker.auto_update: false."""
+    if str((cfg.get('worker') or {}).get('auto_update', True)).lower() in ('false', 'no', '0'):
+        return False
+    kit = _kit_dir()
+    if not kit or not _all_idle():
+        return False
+    g = lambda *a, t=120: subprocess.run(['git', '-C', kit] + list(a), capture_output=True, text=True, timeout=t)
+    try:
+        if g('fetch', '-q', 'origin').returncode:
+            return False
+        head, new = g('rev-parse', 'HEAD').stdout.strip(), g('rev-parse', 'origin/main').stdout.strip()
+        if not new or head == new or g('merge-base', '--is-ancestor', new, head).returncode == 0:
+            return False
+        if not _all_idle():
+            return False
+        log(f'[worker] Night Shift update found ({head[:7]} -> {new[:7]}): updating, then restarting this worker')
+        r = subprocess.run([sys.executable, os.path.join(kit, 'tools', 'nightshift', 'kit_update.py')],
+                           capture_output=True, text=True, timeout=600)
+        log('[worker] ' + (r.stdout + r.stderr).strip()[-400:])
+        if r.returncode:
+            log('[worker] update failed; this worker keeps running the old code. Run ./update.sh in the kit folder')
+            return False
+        if 'requirements.txt' in g('diff', '--name-only', head, 'HEAD').stdout:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--user', '-r', os.path.join(kit, 'requirements.txt')],
+                           capture_output=True, text=True, timeout=900)
+    except Exception as e:
+        log(f'[worker] update check failed: {str(e)[:150]}')
+        return False
+    if not _all_idle():                                 # a job started meanwhile: restart at the next idle check
+        threading._ns_restart_pending = True
+        return True
+    log('[worker] restarting with the new code')
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def _has_bitbucket():
@@ -1846,6 +1937,13 @@ class Worker:
                 fails += 1
                 rd = r['dir'] if os.path.isabs(r['dir']) else os.path.join(config.REPO, r['dir'])
                 text, cframes, cfault, cthread = crash_evidence(rd)
+                try:                                  # 2 Nov: app dies at start (JNI mismatch): stop the whole job now, say why
+                    _broken_build_check(rd, text)
+                except BrokenLabBuild as e_:
+                    self._broken = str(e_)
+                    self.cancelled = True             # every later step (runs, replays, the UI author) stops at once
+                    print(f'[worker] STOP: {e_}', flush=True)
+                    raise
                 wdlog = ''.join(l for l in open(os.path.join(rd, 'logcat.txt'), errors='replace') if 'ZWATCHDOG' in l) \
                     if os.path.exists(os.path.join(rd, 'logcat.txt')) else ''
                 main = ''
@@ -2162,10 +2260,15 @@ class Worker:
             # 2 Nov: 'Check again' (<id>|still) and 'Redraw' (<id>|<scenario>) work on a review that was made on ONE
             # computer (its saved review, checkout and caches). Khairy's Mac took '3189|still' (reviewed on the host) and
             # failed "no saved review". The computer that holds the review runs it; the host also serves others.
+            # Still-open reads the review from the board (Firestore), so the requester's own Mac or the host can run it.
+            # Redraw needs the saved review: the computer that has it (or the host); if none has it, the requester's
+            # Mac rebuilds it from the board (prreview.redraw).
+            if re.match(r'^[^|]+\|still(\|.*)?$', iss):
+                return who == me or serve
             pid = iss.split('|', 1)[0]
             from . import prreview as _pr
             have = pid == 'all' or os.path.exists(os.path.join(_pr.OUT, f'{pid}.json'))
-            return have and (who == me or serve)
+            return (who == me or serve) if have else who == me
         return who == me                                    # everything else: the requester's own computer, nobody else's
 
     def handle(self, snap):
@@ -2377,6 +2480,30 @@ class Worker:
                     ref.update({'status': 'done', 'finishedAt': _now()})
                 except Exception as e:
                     ref.update({'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:300]})
+                return
+            if job.get('action') == 'still-watch':       # Bitbucket webhook (functions/index.js): new commits -> watcher now
+                try:
+                    import importlib
+                    from . import stillopen as _so, bitbucket
+                    importlib.reload(bitbucket)
+                    importlib.reload(_so)
+                    br = ', '.join((job.get('branches') or [])[:8])
+                    self.log(ref, f'still-watch (webhook): new commits on {br or "a branch"}; checking which open findings they touch')
+                    n = _so.watch(self.db, self.cfg, log=lambda l: self.log(ref, l))
+                    self._still_watch_at = time.time()      # the 30-min poll need not repeat what was just done
+                    self.log(ref, f'still-watch: {n} PR check(s) queued' if n else 'still-watch: no open finding touched; nothing to re-check')
+                    upd = {'status': 'done', 'finishedAt': _now(), 'queuedChecks': n}
+                except Exception as e:
+                    self.log(ref, f'ERROR {e}')
+                    upd = {'status': 'failed', 'finishedAt': _now(), 'error': str(e)[:500]}
+                self.flush_log(ref)
+                try:                                      # pushes that came in while this ran: one more pass
+                    if (ref.get().to_dict() or {}).get('again'):
+                        from firebase_admin import firestore as _fs
+                        upd = {'status': 'queued', 'again': False, 'queuedAt': _fs.SERVER_TIMESTAMP}
+                    ref.update(upd)
+                except Exception as e:
+                    self.log(ref, f'still-watch: could not close the job ({str(e)[:120]})')
                 return
             if job.get('action') == 'pr-review':         # tool 1: review open Bitbucket PRs (no phone)
                 try:
@@ -2597,6 +2724,9 @@ class Worker:
                 self._end_progress('finished')
                 self._release_lab(job)
             except Exception as e:  # the job fails visibly; the worker keeps running
+                if getattr(self, '_broken', None):    # broken lab build: a failure with the reason, not a cancel
+                    self.cancelled = False
+                    e = RuntimeError(self._broken)
                 self.log(ref, 'CANCELLED from the board' if getattr(self, 'cancelled', False) else f'ERROR {e}')
                 ref.update({'status': 'cancelled' if getattr(self, 'cancelled', False) else 'failed',
                             'finishedAt': _now(), 'error': str(e)[:500]})
@@ -2730,6 +2860,15 @@ class Worker:
                 sys.modules['ns.worker'].Worker.heartbeat(self)          # the newest code, even in an old process
             except Exception:
                 pass
+            try:                                       # teammates: newest kit, by itself (board host: no-op)
+                if getattr(threading, '_ns_restart_pending', False) and _all_idle():
+                    print('[worker] restarting with the new code', flush=True)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                if time.time() - getattr(self, '_upd_at', 0) > 1800:
+                    self._upd_at = time.time()
+                    auto_update(self.cfg, log=lambda l: print(l, flush=True))
+            except Exception as e:
+                print(f'[worker] update check failed: {str(e)[:150]}', flush=True)
             # Safety net (2026-10-12: a Firestore quota error silently ended the live listener and queued jobs sat
             # for hours): every 60 s also look for queued jobs; re-subscribe when the listener has died.
             if time.time() - last_poll < 60:
@@ -2747,6 +2886,22 @@ class Worker:
                         fire(d)
             except Exception as e:
                 print(f'[worker] poll for queued jobs failed: {str(e)[:150]}', flush=True)
+            if (self.cfg.get('worker') or {}).get('serve_others') and time.time() - getattr(self, '_still_watch_at', 0) > \
+                    60 * float((self.cfg.get('worker') or {}).get('still_watch_minutes', 30)):
+                # 2 Nov: the still-open watcher (board host only, every 30 min): a push that changes a function an open
+                # PR finding depends on queues that PR's check, branch included even without a PR. No model, no reads.
+                self._still_watch_at = time.time()
+                def _sw():
+                    try:
+                        import importlib
+                        from . import stillopen as _so
+                        importlib.reload(_so)
+                        n = _so.watch(self.db, self.cfg, log=lambda t: print('[worker] ' + t, flush=True))
+                        if n:
+                            print(f'[worker] still-watch queued {n} check(s)', flush=True)
+                    except Exception as e:
+                        print(f'[worker] still-watch failed: {str(e)[:160]}', flush=True)
+                threading.Thread(target=_sw, daemon=True).start()
             if time.time() - getattr(self, '_sync_check_at', 0) > 900:   # the daily sync booking: every 15 min is enough
                 self._sync_check_at = time.time()
                 try:

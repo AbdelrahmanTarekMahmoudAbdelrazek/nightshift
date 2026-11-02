@@ -47,6 +47,30 @@ def pristine(wt, sha):
     _sh(['git', '-C', wt, 'clean', '-fdq', '--', 'app/src/main'], check=False)
 
 
+_SHARED = re.compile(r'^(sprint\d+|master|main|develop|dev|CPP-[\w.-]+|release[\w./-]*)$')
+
+
+def _module_commit(src, sm, log=print):
+    """Which commit of a Kotlin module the lab build uses. Normally the working copy's (the sprint you work on). 2 Nov:
+    the working copy was on a feature branch for a manual test (bg-removal-code-clean), its Player.kt no longer had a
+    JNI method the C++ looks up, and every lab run aborted at app start. A feature branch in the working copy is the
+    developer's own business: the lab takes the newest sprint branch instead (and says so)."""
+    head = _sh(['git', '-C', src, 'rev-parse', 'HEAD']).strip()
+    br = subprocess.run(['git', '-C', src, 'rev-parse', '--abbrev-ref', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    if not br or br == 'HEAD' or _SHARED.match(br):
+        return head
+    refs = subprocess.run(['git', '-C', src, 'for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin/sprint*',
+                           'refs/heads/sprint*'], capture_output=True, text=True).stdout.split()
+    num = lambda r: int(re.search(r'sprint(\d+)$', r).group(1)) if re.search(r'sprint(\d+)$', r) else -1
+    refs = sorted((r for r in refs if num(r) >= 0), key=lambda r: (num(r), r.startswith('origin/')))
+    if not refs:
+        return head
+    sha = _sh(['git', '-C', src, 'rev-parse', refs[-1]]).strip()
+    log(f'lab build: {sm} in your working copy is on {br} (a feature branch); the lab uses {refs[-1]} @ {sha[:8]} '
+        f'instead, so a manual test there cannot break the lab build')
+    return sha
+
+
 def ensure(cfg, branch=None, log=print):
     """Create/refresh the lab folder for `branch` (default lab.base_branch) at its latest commit. -> (path, sha)."""
     branch = branch or (cfg.get('lab') or {}).get('base_branch') or 'HEAD'
@@ -80,7 +104,7 @@ def ensure(cfg, branch=None, log=print):
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     os.symlink(src, d)
             continue
-        want = _sh(['git', '-C', src, 'rev-parse', 'HEAD']).strip()
+        want = _module_commit(src, sm, log)
         if done.get(sm) == want and os.path.isdir(d) and os.listdir(d):
             continue
         if os.path.islink(d):

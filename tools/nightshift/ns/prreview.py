@@ -1106,7 +1106,7 @@ def redraw(db, cfg, arg, log=print):
 def run(db, cfg, log=print, only=None, local=None, force=False, parallel=3, stop=None):
     """Review all open PRs (or `only` one id). local=(base, head, title) reviews two local commits instead (testing).
     only = '<id>|<flow or scenario id>|<note>' redraws one diagram of that PR's saved review instead (see redraw)."""
-    if only and str(only).endswith('|still'):   # 30 Oct: "Still open?" for one PR ('<id>|still') or all ('all|still')
+    if only and re.match(r'^[^|]+\|still(\|.*)?$', str(only)):   # 30 Oct: "Still open?" ('<id>|still', 'all|still'); 2 Nov: '|still|<branches>' from the watcher
         from . import stillopen
         importlib.reload(stillopen)
         return stillopen.run(db, cfg, only, log)
