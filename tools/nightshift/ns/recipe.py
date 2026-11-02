@@ -88,6 +88,18 @@ def for_case(case, cfg, log=print):
     # occurred configuring project :gallerypicker': no `namespace`, which myzesty_mobile's older Gradle did not need);
     # they never touch the engine, so the working copy's / newest sprint's copies are fine.
     pins = {k: v for k, v in pins.items() if k in ENGINE_SIDE}
+    # 2 Nov (2nd run): the released java-common needs React Native (com.facebook.react, :react-native-screens), which
+    # only the full app (myzesty_mobile) has: 'A problem occurred evaluating project :java-common' in video_gles3jni.
+    # The two engine-side modules only build as a pair, so if one cannot build here, neither is pinned (the JNI check
+    # and the smoke test still guard the newest-sprint Kotlin against the shipped engine).
+    for k, v in list(pins.items()):
+        bg = subprocess.run(['git', '-C', os.path.join(config.REPO, k), 'show', f'{v}:build.gradle'],
+                            capture_output=True, text=True).stdout
+        if re.search(r'com\.facebook\.react|react-native', bg):
+            log(f'release recipe: the released {k} ({v[:8]}) needs React Native, which only the full app builds; '
+                f'the lab keeps the engine at the shipped commit and uses the newest sprint Kotlin')
+            pins, why = {}, why + '; not usable here (React Native): newest sprint Kotlin'
+            break
     return {'vc': vc, 'version': vname, 'engine': engine, 'pins': pins, 'app_commit': app_commit, 'why': why}
 
 
