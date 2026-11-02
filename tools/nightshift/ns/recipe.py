@@ -83,4 +83,12 @@ def for_case(case, cfg, log=print):
         why = 'no myzesty_mobile folder on this computer: Kotlin modules from the newest sprint'
     elif not pins:
         why = f'myzesty_mobile has no commit with this exact library and no release/{vname} branch: Kotlin modules from the newest sprint'
+    # 2 Nov: pin only the modules that talk to the engine (JNI declarations, engine calls). The others (gallerypicker,
+    # overlay_collage, u2net) at their release commits did not configure with video_gles3jni's Gradle ('A problem
+    # occurred configuring project :gallerypicker': no `namespace`, which myzesty_mobile's older Gradle did not need);
+    # they never touch the engine, so the working copy's / newest sprint's copies are fine.
+    pins = {k: v for k, v in pins.items() if k in ENGINE_SIDE}
     return {'vc': vc, 'version': vname, 'engine': engine, 'pins': pins, 'app_commit': app_commit, 'why': why}
+
+
+ENGINE_SIDE = ('java-common', 'android-video-editor-module')

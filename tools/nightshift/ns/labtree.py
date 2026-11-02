@@ -57,17 +57,23 @@ def _module_commit(src, sm, log=print):
     developer's own business: the lab takes the newest sprint branch instead (and says so)."""
     head = _sh(['git', '-C', src, 'rev-parse', 'HEAD']).strip()
     br = subprocess.run(['git', '-C', src, 'rev-parse', '--abbrev-ref', 'HEAD'], capture_output=True, text=True).stdout.strip()
-    if not br or br == 'HEAD' or _SHARED.match(br):
-        return head
     refs = subprocess.run(['git', '-C', src, 'for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin/sprint*',
                            'refs/heads/sprint*'], capture_output=True, text=True).stdout.split()
     num = lambda r: int(re.search(r'sprint(\d+)$', r).group(1)) if re.search(r'sprint(\d+)$', r) else -1
     refs = sorted((r for r in refs if num(r) >= 0), key=lambda r: (num(r), r.startswith('origin/')))
-    if not refs:
+    newest = num(refs[-1]) if refs else -1
+    m = re.fullmatch(r'sprint(\d+)', br or '')
+    # the working copy counts only when it is on the NEWEST sprint (or a shared non-sprint branch). 2 Nov: it was on
+    # sprint216 with java-common never pulled (no isBodyEffect) -> 'Unresolved reference' in the editor module.
+    if not refs or br == 'HEAD' or (m and int(m.group(1)) >= newest) or (not m and _SHARED.match(br or '')):
         return head
-    sha = _sh(['git', '-C', src, 'rev-parse', refs[-1]]).strip()
-    log(f'lab build: {sm} in your working copy is on {br} (a feature branch); the lab uses {refs[-1]} @ {sha[:8]} '
-        f'instead, so a manual test there cannot break the lab build')
+    name = f'sprint{newest}'
+    subprocess.run(['git', '-C', src, 'fetch', '-q', '--no-tags', 'origin', f'+refs/heads/{name}:refs/remotes/origin/{name}'],
+                   capture_output=True, timeout=600)            # every module at the SAME, fresh sprint: they build together
+    sha = subprocess.run(['git', '-C', src, 'rev-parse', '--verify', '--quiet', f'origin/{name}'], capture_output=True,
+                         text=True).stdout.strip() or _sh(['git', '-C', src, 'rev-parse', refs[-1]]).strip()
+    log(f'lab build: {sm} in your working copy is on {br} ({"an older sprint" if m else "a feature branch"}); the lab '
+        f'uses {name} @ {sha[:8]} instead, so your own checkout cannot break the lab build')
     return sha
 
 
