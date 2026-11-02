@@ -294,6 +294,39 @@ def _ns_version():
     return v
 
 
+_GENERIC_FN = re.compile(r'MsgLooper::ProcessMessages|__thread_proxy|__pthread_start|__start_thread|SetCallbacks|'
+                         r'std::__ndk1::__function|art_quick|ExecuteSwitch|ArtMethod::Invoke|^$')
+
+
+def _fn_name(x):
+    x = re.sub(r'\s*\+\s*\d+\s*$', '', str(x or ''))
+    return re.sub(r'\(.*$', '', x).strip()
+
+
+def same_path(field_funcs, lab_frames):
+    """2 Nov: a lab crash that is NOT the field crash may still be on the field's path. Both stacks run through the same
+    caller (e.g. VideoEngine::replace_media) and split under it: the lab crashed in another step of that function.
+    -> {'via', 'lab_at', 'field_at', 'text'} or None. Code only."""
+    ff = [_fn_name(x) for x in field_funcs or []]
+    ffs = [x for x in ff if x and not _GENERIC_FN.search(x)]
+    lf = [_fn_name(f.get('func')) for f in lab_frames or [] if f.get('func')]
+    lfs = [x for x in lf if x and not _GENERIC_FN.search(x)]
+    if not ffs or not lfs:
+        return None
+    for i, x in enumerate(lfs):
+        if x in ffs:
+            j = ffs.index(x)
+            if i == 0 or j == 0:
+                return None                           # same top frame: not 'another step', the matcher decides
+            lab_at, field_at = lfs[i - 1], ffs[j - 1]
+            return {'via': x, 'lab_at': lab_at, 'field_at': field_at,
+                    'text': (f'SAME PATH, OTHER STEP: both stacks go through {x}; under it the lab crashed in {lab_at} '
+                             f'(lab top: {lfs[0]}), the field crashes in {field_at} (field top: {ffs[0]}). The run '
+                             f'reached the right function but broke a step too early or took another branch: keep the '
+                             f'{lab_at} step safe (like the users had it) and drive the state that makes {field_at} fail')}
+    return None
+
+
 def jni_precheck(root=None):
     """2 Nov: before a lab build, the native method table (JNI.cpp allMethods, registered all-or-nothing) against the
     Kotlin `external fun` declarations in the lab folder's modules. A method the table registers that no Kotlin file
@@ -2020,6 +2053,43 @@ class Worker:
             self._last_busy = res['busy']
         return res
 
+    def _note_related(self, rd, o, cframes, cfault, cthread, text=''):
+        """2 Nov: every OTHER crash the lab hits while trying to reproduce this one goes on the crash's board page
+        ('Other crashes the lab hit'): its stack, whether it is on the field's path (same_path), a known card, and HOW
+        it was hit (the run's own steps), so a developer can repro it too. One merged entry per stack, counted."""
+        cref = getattr(self, '_case_ref', None)
+        if cref is None:
+            return
+        try:
+            import hashlib
+            from firebase_admin import firestore as _fs
+            names = [_fn_name(f.get('func')) for f in cframes if f.get('func') and not _GENERIC_FN.search(_fn_name(f.get('func')))]
+            sig = hashlib.sha1('|'.join(names[:3] or [o.get('label', '')]).encode()).hexdigest()[:12]
+            scen = os.path.basename(rd).split('__')[0]
+            kind = ('engine replay (direct engine calls, no taps)' if re.search(r'_rp\d+_', scen) else
+                    'real taps (tap repro)' if scen.startswith('tf_') else 'lab repro script')
+            steps = []
+            sp = os.path.join(rd, 'steps.log')
+            if os.path.exists(sp):
+                for ln in open(sp, errors='replace'):
+                    m_ = re.match(r'^(\d\d:\d\d:\d\d)\s+·\s+(.*)$', ln.rstrip())
+                    if m_:
+                        steps.append(f'{m_.group(1)}  {m_.group(2)[:220]}')
+                    elif re.search(r'✖|FAIL_CRASH|CRASH:', ln):
+                        steps.append(ln.strip()[:220])
+                        break
+            sig_line = next((l.strip() for l in (text or '').splitlines() if 'Fatal signal' in l or 'signal ' in l and 'code' in l), '')
+            ent = {'label': o.get('label', '')[:300], 'scenario': scen, 'kind': kind, 'dir': o.get('dir', ''),
+                   'frames': [{'func': (f.get('func') or '')[:160], 'lib': (f.get('lib') or '')[:60]} for f in cframes[:10]],
+                   'fault': str(cfault or ''), 'thread': str(cthread or ''), 'signal': sig_line[:240],
+                   'samePath': (o.get('same_path') or {}).get('text', '')[:700], 'via': (o.get('same_path') or {}).get('via', ''),
+                   'card': o.get('card') or '', 'cardTitle': (o.get('title') or '')[:200],
+                   'steps': steps[-30:], 'lastAt': _now(), 'count': _fs.Increment(1)}
+            cref.set({'labRelated': {sig: ent}}, merge=True)
+        except Exception as e:
+            print(f'[worker] related crash not saved: {str(e)[:150]}', flush=True)
+
+
     def _eval_runs(self, new, expect):
         """Count runs / app failures / field matches in the given result folders (one ladder step, or one lane)."""
         import csv, json as js
@@ -2119,8 +2189,16 @@ class Worker:
                     short = bool(cframes) and len(cframes) <= 2 and not card and \
                         not any(f['lib'] == 'libMYJNILIB26.so' for f in cframes) and 'FATAL EXCEPTION' not in text and 'ANR in ' not in text
                     trunc += short
+                    sp_ = None
+                    try:
+                        sp_ = same_path(getattr(self, '_field_frames', None), cframes) if cframes and not short else None
+                    except Exception:
+                        sp_ = None
                     others.append({'label': crash_label(cframes, cfault, cthread) or (r.get('detail') or r.get('verdict') or '?')[:160],
-                                   'card': card, 'title': title, 'truncated': short, 'dir': os.path.relpath(rd, config.REPO)})
+                                   'card': card, 'title': title, 'truncated': short, 'dir': os.path.relpath(rd, config.REPO),
+                                   'same_path': sp_})
+                    if cframes and not short:
+                        self._note_related(rd, others[-1], cframes, cfault, cthread, text)
         why = ''
         if not hits:
             why = (f'automation did not reach the trigger in {len(errors)}/{runs} runs: {errors[0]}' if errors and not fails else
@@ -2128,6 +2206,7 @@ class Worker:
                    f'{fails} failure(s) but different from the field: missing {", ".join(sorted(missing_seen))[:200]}'
                    + (f'; it was: {others[0]["label"][:180]}' if others else '')
                    + (f' = known bug {others[0]["title"]}' if others and others[0].get('card') else '')
+                   + next((f'. {o["same_path"]["text"]}' for o in others if o.get('same_path')), '')
                    + (f'; engine message thread was busy in: {busy_seen[0][:200]}' if busy_seen else ''))
         if hits and (first or {}).get('cut_short_match'):
             why = ('matched on the field crash\'s own top frames (' + ' <- '.join((getattr(self, '_field_short', None) or {}).get('libs', [])[:2])
@@ -2687,10 +2766,13 @@ class Worker:
                 case['id'] = job['issue']
                 self._card_under_test = job['issue']      # a lab crash of ANOTHER card is named as that card's bug
                 self._field_short = None                  # field top-frame libs + fault, for dumps the phone cuts short
+                self._field_frames = []
                 try:                                      # from the case: the sample event's fault + its top 2 frames' libraries
                     import glob as _gl, json as _js
                     cf = next(iter(_gl.glob(os.path.join(config.REPO, 'tools/nightshift/out', f'*_{job["issue"]}_case_file.json'))), None)
                     cj = _js.load(open(cf)) if cf else {}
+                    self._field_frames = [f.get('func') or '' for f in (cj.get('frames') or [])] or \
+                        [f.get('func') or '' for f in (case.get('frames') or [])]      # for 'same path' (2 Nov)
                     m_ = re.search(r'SIG\w+\s+0x([0-9a-fA-F]+)', (cj.get('sample_event') or {}).get('subtitle') or '')
                     lb = [f.get('lib') or '' for f in (cj.get('frames') or [])[:2]]
                     if m_ and len(lb) == 2 and 'libMYJNILIB26.so' not in lb and all(lb):

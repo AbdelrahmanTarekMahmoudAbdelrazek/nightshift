@@ -2285,7 +2285,7 @@ function openProblem(id, keep) {
   if (dAuto && caseDoc) { dAuto = false; if (repd) dTab = 'lab'; }  // pick the tab once it is here
   const tabs = [['engine', caseDoc?.engineReplay ? 'Engine repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Engine repro'],
     ['lab', repd ? 'Lab repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Lab repro'], ['overview', 'Overview'], ['cause', 'Root cause'], ['diagrams', 'Diagrams'], ['symbols', 'Symbolized'], ['stack', 'Stack traces'],
-    ['devices', m.instanceSummary ? `Instances <span class="cnt">${m.instanceSummary.crashes}</span>` : `Devices <span class="cnt">${uniqDevices(m).length}</span>`], ['fix', 'Fix & reproduce'], ['notes', 'Ship it · PR & Jira']];
+    ['devices', m.instanceSummary ? `Instances <span class="cnt">${m.instanceSummary.crashes}</span>` : `Devices <span class="cnt">${uniqDevices(m).length}</span>`], ['fix', 'Fix & reproduce'], ['related', Object.keys(caseDoc?.labRelated || {}).length ? `Other lab crashes <span class="cnt">${Object.keys(caseDoc.labRelated).length}</span>` : 'Other lab crashes'], ['notes', 'Ship it · PR & Jira']];
   const stat = (lbl, val, sub, cls = '') => `<div class="dstat ${cls}"><div class="dl">${lbl}</div><div class="dv">${val}</div><div class="ds">${sub}</div></div>`;
   let body = '';
   const F = m._family;
@@ -2346,6 +2346,7 @@ function openProblem(id, keep) {
   if (dTab === 'devices') body = devicesTable(m);
   if (dTab === 'lab') body = stackNote + labTab(m, caseDoc);
   if (dTab === 'engine') body = engineTab(m, caseDoc);
+  if (dTab === 'related') body = relatedTab(m, caseDoc);
   if (dTab === 'fix') body = `
     <div class="panel accent"><div class="ph">Fix direction <span class="muted small">no code written</span></div>${paras(a.fix_direction) || '<p class="muted">pending</p>'}</div>
     <div class="panel"><div class="ph">Reproduce on the lab phone</div><ol class="steps">${steps(a.repro)}</ol>
@@ -2664,6 +2665,25 @@ function stackMatch(lab, field) {      // field frames (unique, ours) that the l
   return { got: got.length, of: F.length, missing: F.filter(x => !L.has(x)) };
 }
 // 28 Oct: Engine repro panel: what the engine was sent, step by step, and the crash it produced vs the field
+// 2 Nov: crashes the lab hit while trying to reproduce THIS one: on the same path (crashed a step earlier / another
+// branch) or elsewhere, with the steps that led there, so a developer can repro them too (worker._note_related)
+function relatedTab(m, c) {
+  const R = Object.values(c?.labRelated || {}).sort((a, b) => (b.samePath ? 1 : 0) - (a.samePath ? 1 : 0) || String(b.lastAt || '').localeCompare(String(a.lastAt || '')));
+  if (!R.length) return `<div class="panel"><div class="ph">Other crashes the lab hit</div><p class="muted">None yet. When a repro attempt crashes the app in a different way than the users' crash, it shows here with its stack and the steps that led to it.</p></div>`;
+  return `<div class="panel"><div class="ph">Other crashes the lab hit <span class="muted small">while trying to reproduce this crash · not the users' crash, but real crashes of the lab build</span></div>
+      <p class="small muted">"Same path" = the lab stack goes through the same function as the field stack and crashed in another step under it: a near miss, and possibly a second bug in the same code.</p></div>` +
+    R.map(r => `<div class="panel${r.samePath ? ' accent' : ''}"><div class="ph">${r.samePath ? '<span class="badge b-run">same path</span> ' : ''}${r.card ? `<a class="xa-chip" href="#problems/m-${esc(r.card)}">known: ${esc(r.cardTitle || r.card)}</a> ` : ''}<span class="mono small">${esc(r.label || '')}</span>
+        <span class="muted small" style="margin-left:auto">${r.count || 1}× · last ${esc(String(r.lastAt || '').replace('T', ' ').slice(0, 16))}</span></div>
+      ${r.samePath ? `<p>${esc(r.samePath)}</p>` : ''}
+      ${r.signal ? `<p class="mono small">${esc(r.signal)}</p>` : ''}
+      <div class="ov-grid">
+        <div><div class="ph small">How the lab got there <span class="muted small">${esc(r.kind || '')} · <code>${esc(r.scenario || '')}</code></span></div>
+          ${(r.steps || []).length ? `<ol class="small mono" style="padding-left:18px;margin:4px 0">${r.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<p class="muted small">No step log saved.</p>'}
+          <p class="muted small">Run folder on the lab Mac: <code>${esc(r.dir || '')}</code> (logcat, crash dump, screenshot)</p></div>
+        <div><div class="ph small">Lab crash stack</div>
+          <table class="tbl">${(r.frames || []).map((f, i) => `<tr${r.via && String(f.func || '').startsWith(r.via) ? ' style="background:var(--good-soft)"' : ''}><td class="mono small">#${i}</td><td class="mono small">${esc(f.lib || '')}</td><td class="mono small">${esc(f.func || '')}</td></tr>`).join('')}</table></div>
+      </div></div>`).join('');
+}
 function engineTab(m, c) {
   const rp = c?.engineReplay;
   if (!rp) return `<div class="panel"><div class="ph">Engine repro</div><p class="muted">Not run yet. Reproduce sends the user's engine calls straight to the engine on the lab phone (no taps); a crash with every field frame proves the bug at engine level in minutes.</p></div>`;
