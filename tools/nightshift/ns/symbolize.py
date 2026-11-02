@@ -215,7 +215,8 @@ def resolve(version_code, version_name, native_lib):
 
 def _via_host(frames, version_code, native_lib, version_name):
     """No symbols for this build on this computer (a teammate's): the board host names the pcs (relay), cached here."""
-    idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and not f.get('func') and f.get('address')]
+    idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and f.get('address')
+           and (not f.get('func') or not (f.get('srcline') or (f.get('file') and f.get('line'))))]   # 28 Oct: named but no line too
     if not idx:
         return frames, False
     cf = os.path.join(STORE, '_from_host', f'{version_code}_{native_lib}.json')
@@ -238,7 +239,10 @@ def _via_host(frames, version_code, native_lib, version_name):
             return frames, False
     for i in idx:
         r = cache.get(str(int(frames[i]['address']))) or {}
-        if r.get('func'):
+        if r.get('func') and frames[i].get('func'):         # already named (Crashlytics): only add the missing line
+            if r.get('srcline') and not r.get('assumed_lib'):
+                frames[i]['srcline'] = r['srcline']
+        elif r.get('func'):
             frames[i]['func'] = r['func']
             frames[i]['srcline'] = r.get('srcline')
             frames[i]['named_by'] = r.get('named_by') or 'board-host'
@@ -264,10 +268,14 @@ def symbolize_frames(frames, version_code, native_lib, version_name=None, relay_
         if not p:
             return frames, False
     sym = Symbolizer(p)
-    idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and not f.get('func') and f.get('address')]
+    idx = [i for i, f in enumerate(frames) if f.get('lib') == native_lib and f.get('address')
+           and (not f.get('func') or not (f.get('srcline') or (f.get('file') and f.get('line'))))]   # 28 Oct: named but no line too
     res = sym.lookup([int(frames[i]['address']) for i in idx])
     for i, r in zip(idx, res):
-        if r['func']:
+        if r['func'] and frames[i].get('func'):            # already named (Crashlytics): only add the missing line,
+            if r['srcline'] and not assumed:              # and only from the build's exact library (BuildId match)
+                frames[i]['srcline'] = r['srcline']
+        elif r['func']:
             frames[i]['func'] = r['func']
             frames[i]['srcline'] = r['srcline']
             if assumed:
@@ -340,6 +348,14 @@ def add_debug(src, version_code, lib='libMYJNILIB26.so', abi='arm64-v8a'):
             shutil.copyfileobj(fi, fo, 1 << 20)
     e = Elf(tmp)
     bid = e.build_id()
+    other = lib != meta.get('lib', 'libMYJNILIB26.so')   # 29 Oct: a second library of the same build (libImageFilter)
+    if other:
+        os.replace(tmp, store_path(version_code, lib) + '.dbg')
+        syms, table = e.symbols()
+        meta.setdefault('libs', {})[lib] = {'debug_symbols': os.path.abspath(src), 'debug_member': member,
+                                            'debug_table': table, 'debug_functions': len(syms), 'debug_build_id': bid}
+        json.dump(meta, open(meta_p, 'w'), indent=1)
+        return meta['libs'][lib]
     if meta.get('build_id') and bid and meta['build_id'] != bid:
         os.remove(tmp)
         raise SystemExit(f'BuildId mismatch: {src} has {bid}, build {version_code} has {meta["build_id"]}: not this build')
@@ -354,6 +370,11 @@ def add_debug(src, version_code, lib='libMYJNILIB26.so', abi='arm64-v8a'):
 def auto_import_debug(version_codes, lib='libMYJNILIB26.so', log=print):
     """Each sync: for builds without full symbols, look in Downloads for <vc>*.aab or native-debug-symbols*<vc>*.zip."""
     import glob
+    try:                                            # 29 Oct: the same .aab also carries the Java/Kotlin R8 mapping
+        from . import retrace
+        retrace.auto_import(version_codes, log)
+    except Exception as e:
+        log(f'retrace: auto import skipped: {str(e)[:120]}')
     for vc in version_codes:
         if os.path.exists(store_path(vc, lib) + '.dbg'):
             continue

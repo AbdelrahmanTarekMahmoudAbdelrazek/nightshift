@@ -62,8 +62,22 @@ def _clone(repo):
     return path
 
 
+_FETCHED = {}          # (repo, ref) -> (time, sha): one fetch per ref per review, not one per changed function
+_CANDS = {}            # (repo, pr id) -> (time, refs)
+
+
 def _fetch(repo, ref):
     """Commit of `ref` (branch name) fetched shallowly into the cache. -> sha or None"""
+    import time as _t
+    hit = _FETCHED.get((repo, ref))
+    if hit and _t.time() - hit[0] < 1800:
+        return hit[1]
+    sha = _fetch_now(repo, ref)
+    _FETCHED[(repo, ref)] = (_t.time(), sha)
+    return sha
+
+
+def _fetch_now(repo, ref):
     path = _clone(repo)
     url = kotlinctx._remote_base() + repo + '.git'
     safe = re.sub(r'[^A-Za-z0-9._/-]', '_', ref)
@@ -148,6 +162,17 @@ def calls(texts, name):
 # ------------------------------------------------------------------ where the other side lives
 
 def _candidates(repo, pr, log):
+    import time as _t
+    k = (repo, str((pr or {}).get('id')))
+    hit = _CANDS.get(k)
+    if hit and _t.time() - hit[0] < 1800:
+        return hit[1]
+    refs = _candidates_now(repo, pr, log)
+    _CANDS[k] = (_t.time(), refs)
+    return refs
+
+
+def _candidates_now(repo, pr, log):
     """Refs worth looking at in `repo`: the sprint (merged), open PRs, branches with the same Jira key or branch name,
     the most recently updated ones. -> [(kind, ref, label)]"""
     from . import bitbucket
@@ -187,6 +212,13 @@ def _candidates(repo, pr, log):
 
 def _rank(st):
     return STATUS_ORDER.index(st) if st in STATUS_ORDER else 0
+
+
+def _jni_repos(cfg, repos):
+    """29 Oct: only the repos that can call the engine's JNI (the image app, its editor module and the AI tools have
+    their own native code): nightshift.yaml pr_review.integration_repos, else every profile repo."""
+    want = [x.strip() for x in str(((cfg or {}).get('pr_review') or {}).get('integration_repos') or '').split(',') if x.strip()]
+    return [r for r in repos if r in want] if want else repos
 
 
 def check(change, repos, pr, log=print):
@@ -266,7 +298,7 @@ def track(db, pr, head_src, base_src, cfg, log=print):
     db = db or firestore.client()
     from . import config
     prof = config.profile(cfg)
-    repos = [r for r in prof['repos'] if r != (pr.get('repo') or prof['main_repo'])]
+    repos = _jni_repos(cfg, [r for r in prof['repos'] if r != (pr.get('repo') or prof['main_repo'])])
     lines = []
     for i, ch in enumerate(changes, 1):
         parts = check(ch, repos, pr, log)
@@ -341,7 +373,7 @@ def recheck(db, cfg, log=print):
         t = x.get('checkedAt')
         if t and hasattr(t, 'timestamp') and dt.datetime.now(dt.timezone.utc).timestamp() - t.timestamp() < 3600:
             continue                                   # just checked (seeded a minute ago)
-        repos = [r for r in prof['repos'] if r != x.get('repo')]
+        repos = _jni_repos(cfg, [r for r in prof['repos'] if r != x.get('repo')])
         pr = {'id': x.get('prKey'), 'num': x.get('pr'), 'source': '', 'title': x.get('prTitle', '')}
         ch = {k: x.get(k, '') for k in ('name', 'kind', 'old', 'new')}
         try:

@@ -53,7 +53,7 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .ana{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 14px;background:var(--card)}.ana.muted{font-size:13px}
 .ana-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ana .lead{font-weight:600;margin:8px 0 4px}.ana p{margin:6px 0;font-size:13.5px}.ana ul{margin:4px 0;padding-left:18px;font-size:13px}
 .own{display:inline-block;border-radius:5px;padding:1px 7px;font-size:11.5px;font-weight:650;background:var(--accent-soft);color:var(--accent)}
-.o-engine{background:var(--bad-soft);color:var(--bad)}.o-app-java{background:var(--warn-soft);color:var(--warn)}.o-third-party,.o-system{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.o-engine{background:var(--bad-soft);color:var(--bad)}.o-mixed{background:var(--warn-soft);color:var(--bad)}.o-app-java{background:var(--warn-soft);color:var(--warn)}.o-third-party,.o-system{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
 .conf{font-size:11.5px;color:var(--muted)}.diag2{display:grid;grid-template-columns:1fr;gap:10px}@media(min-width:720px){.diag2{grid-template-columns:1fr 1fr}}
 .mmd{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px;overflow:auto;min-height:60px}.mmd svg{max-width:100%;height:auto}
 .p-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:14px}
@@ -460,6 +460,7 @@ ul.mini-list li:hover{color:var(--accent)}
 .xa-step.done{color:var(--ink);font-weight:600}.xa-step.done i{background:var(--good);color:#fff}
 .xa-step.run{color:var(--accent);font-weight:600}.xa-step.run i{background:var(--accent);color:#fff;animation:pulse 1.4s infinite}
 .xa-step.fail{color:var(--bad)}.xa-step.fail i{background:var(--bad);color:#fff}
+.xa-step.part{color:var(--ink)}.xa-step.part i{background:var(--warn,#d9a400);color:#fff}
 .xa-line{flex:0 0 26px;height:2px;background:var(--line);margin-right:10px}.xa-line.done{background:var(--good)}
 .xa-steps .xa-chip{margin-left:8px}
 .t-good{color:var(--good)}
@@ -519,10 +520,21 @@ ol.nx-frames li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10
 .nx-sides>div:first-child{border-right:1px solid var(--line)}
 .nx-sides .nx-cap{display:block;padding:6px 14px 0}.nx-badt{color:var(--bad)}.nx-goodt{color:var(--good)}
 pre.nx-old{background:var(--bad-soft)}pre.nx-new{background:var(--good-soft)}
+.nx-where{font-size:12.5px;color:var(--muted);margin:6px 0 4px}.nx-plus{color:var(--good);font-weight:650}.nx-minus{color:var(--bad);font-weight:650}
+.nx-scroll{overflow-x:auto;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+table.nx-uni{width:max-content;min-width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px;background:var(--card);table-layout:auto}
+table.nx-uni td,table.nx-uni tr{border:0!important}
+table.nx-uni td{padding:1px 8px!important;vertical-align:top}table.nx-uni td.ln{width:48px!important;min-width:48px;max-width:48px;text-align:right;color:var(--muted);user-select:none}
+table.nx-uni td.mk{width:20px!important;max-width:20px;text-align:center;font-weight:700}table.nx-uni td:last-child{white-space:pre}
+table.nx-uni code{background:none;padding:0;font-size:inherit}
+table.nx-uni tr.a{background:color-mix(in srgb,var(--good) 14%,transparent)}table.nx-uni tr.a td.mk,table.nx-uni tr.a code{color:var(--good)}
+table.nx-uni tr.d{background:color-mix(in srgb,var(--bad) 14%,transparent)}table.nx-uni tr.d td.mk,table.nx-uni tr.d code{color:var(--bad);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--bad) 50%,transparent)}
+table.nx-uni tr.g td{color:var(--muted);text-align:center}
 pre.nx-code .nx-d{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
 pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good);font-weight:600}
 
 .tbadge.fx-good{background:#dcfce7;color:#166534}.tbadge.fx-bad{background:#fee2e2;color:#991b1b}.tbadge.fx-warn{background:#fef3c7;color:#92400e}
+.fcell{white-space:normal;word-break:break-word;max-width:640px}.fcell .fsrc{color:var(--muted);font-size:11.5px;margin-top:2px}
 </style>
 </head>
 <body>
@@ -639,7 +651,7 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
       <select id="p-kind"><option value="">Crashes + ANRs</option><option value="CRASH">Crashes</option><option value="ANR">ANRs</option></select>
       <select id="p-match"><option value="">Any source</option><option value="both">In both</option><option value="likely">Likely both</option><option value="play">Play only</option><option value="firebase">Firebase only</option></select>
       <input type="search" id="p-q" placeholder="Search function, device, PR, note" style="min-width:260px">
-      <select id="p-layer" aria-label="Code layer"><option value="">All code layers</option><option value="native">Native (C++)</option><option value="app">App code (Java/Kotlin)</option><option value="kotlin">· Kotlin only</option><option value="java">· Java only</option><option value="other">System / third-party</option></select>
+      <select id="p-layer" aria-label="Code layer"><option value="">All code layers</option><option value="native">Native (C++): engine bugs</option><option value="app">App code (Java/Kotlin): incl. wrong calls crashing in C++</option><option value="kotlin">· Kotlin only</option><option value="java">· Java only</option><option value="other">System / third-party</option></select>
       <select id="p-status" aria-label="Progress"><option value="">Any progress</option><option value="none">Not analysed yet</option><option value="cause">Root cause found</option><option value="rep">Reproduced</option><option value="norep">Not reproduced</option><option value="fixed">Fix verified</option><option value="open">Not fixed yet</option></select>
       <select id="p-ver" aria-label="Version"><option value="">All versions</option></select>
       <select id="p-sort" aria-label="Sort"><option value="users">Most users</option><option value="events">Most events</option><option value="trend">Rising fastest</option><option value="recent">Newest (last seen)</option><option value="oldest">Oldest (last seen)</option><option value="rank">Default order</option></select>
@@ -1202,7 +1214,7 @@ function jobWhere(j) {
 function renderJobs() {
   const active = jobs.filter(j => /queued|running/.test(j.status)).length;
   $('#jobcount').textContent = jobs.length ? `(${active || jobs.length})` : '';
-  $('#jobs tbody').innerHTML = jobs.map(j => `<tr><td class="muted">${esc(j.at)}${j.requestedBy ? `<br><span class="note">${esc(j.requestedBy)}</span>` : ''}</td><td>${esc(j.action)}</td><td class="mono">${j.issue ? esc(j.issue).slice(0, 12) + '…' : 'whole app'}</td>
+  $('#jobs tbody').innerHTML = jobs.map(j => `<tr><td class="muted">${esc(j.at)}${j.requestedBy ? `<br><span class="note">${esc(j.requestedBy)}</span>` : ''}</td><td>${j.startedAs ? `${esc(j.startedAs)} → ${esc(j.action)}${j.stage ? `<br><span class="note">${esc(j.stage)}</span>` : ''}` : esc(j.action)}</td><td class="mono">${j.issue ? esc(j.issue).slice(0, 12) + '…' : 'whole app'}</td>
     <td><span class="badge b-${/done/.test(j.status) ? 'done' : /fail/.test(j.status) ? 'engine' : 'queued'}">${esc(j.status)}</span>${jobWhere(j) ? `<br><span class="note">${jobWhere(j)}</span>` : ''}${j.error ? `<br><span class="note">${esc(j.error)}</span>` : ''}${live && j.id && /queued|running/.test(j.status) ? `<br><button class="iconbtn" style="margin-top:6px" onclick="cancelJob('${esc(j.id)}','${esc(j.status)}','jobs tab')">Cancel</button>` : ''}</td>
     <td><pre style="margin:0;max-height:160px">${esc(j.log && j.log.length ? j.log.slice(-8).join('\n') : j.cmd || '')}</pre></td></tr>`).join('');
   $('#jobs-empty').classList.toggle('hidden', jobs.length > 0);
@@ -1573,8 +1585,8 @@ function nxHunks(patch) {
   for (const l of String(patch || '').split('\n')) {
     if (l.startsWith('+++ ')) { file = l.slice(4).replace(/^b\//, ''); continue; }
     if (l.startsWith('--- ') || l.startsWith('diff ') || l.startsWith('index ')) continue;
-    const hm = l.match(/^@@ [^@]+@@\s*(.*)$/);
-    if (hm) { h = { file, fn: hm[1], lines: [] }; out.push(h); continue; }
+    const hm = l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@\s*(.*)$/) || l.match(/^@@ [^@]+@@\s*(.*)$/);
+    if (hm) { h = hm.length > 3 ? { file, os: +hm[1], ns: +hm[2], fn: hm[3], lines: [] } : { file, os: 0, ns: 0, fn: hm[1], lines: [] }; out.push(h); continue; }
     if (h) h.lines.push(l);
   }
   return out.map(h => {
@@ -1591,7 +1603,16 @@ function nxHunks(patch) {
     });
     const cm = h.lines.filter(l => /^\+\s*(\/\*|\*|\/\/)/.test(l)).map(l => l.replace(/^\+\s*(\/\*+|\*\/|\*|\/\/)\s?/, '').replace(/\*\/\s*$/, '').trim()).filter(Boolean).join(' ');
     const adds = h.lines.filter(l => l.startsWith('+')).length, dels = h.lines.filter(l => l.startsWith('-')).length;
-    return { file: h.file, fn: h.fn, old: old.filter(x => x[0] !== '…' || old.length > 1), neu, why: cm, adds, dels };
+    // 1 Nov: one unified list with the file's real line numbers (old | new), '-' / '+' only on changed lines
+    const uni = []; let on = h.os, nn = h.ns; gap = false;
+    h.lines.forEach((l, i) => {
+      const k = l.startsWith('-') ? 'd' : l.startsWith('+') ? 'a' : '';
+      const row = [k === 'a' ? '' : on, k === 'd' ? '' : nn, k, l.slice(1)];
+      if (k !== 'a') on++; if (k !== 'd') nn++;
+      if (!keep.has(i)) { if (!gap) uni.push(['', '', 'g', '']); gap = true; return; }
+      gap = false; uni.push(row);
+    });
+    return { file: h.file, fn: h.fn, os: h.os, ns: h.ns, old: old.filter(x => x[0] !== '…' || old.length > 1), neu, uni, why: cm, adds, dels };
   }).filter(Boolean);
 }
 function nxFix(m, a, c) {
@@ -1599,7 +1620,7 @@ function nxFix(m, a, c) {
     .filter(x => !/^\s*(fail|pass|repeat|separate check|expected|result)\b/i.test(x)).slice(0, 8);
   const fn = String(c?.fixNote || '');
   const clean = fn.match(/with the fix (\d+\/\d+)/), guard = fn.match(/guard ran in (\d+\/\d+)[^"]*"([^"]{0,90})/);
-  const hs = nxHunks(c?.patch).slice(0, 6);
+  const hs = nxHunks(c?.patch).slice(0, 14);
   window.nxPatch = String(c?.patch || '');
   const isCm = t => /^\s*(\/\*+|\*\/?|\/\/)/.test(t);
   const side = (rows, cls) => `<pre class="nx-code nx-${cls}">${rows.filter(([t, k]) => !(k === 'a' && isCm(t))).map(([t, k]) => k === 'g' ? '<span class="muted">⋯</span>' : `<span class="${k ? 'nx-' + k : ''}">${esc(t) || ' '}</span>`).join('')}</pre>`;
@@ -1615,7 +1636,10 @@ function nxFix(m, a, c) {
         <span><button class="btn" onclick="copyText(window.nxPatch || '', this)">Copy patch</button></span></div>
       ${hs.map((h, i) => `<section class="nx-chg"><div class="nx-chg-h"><span class="nx-n">${i + 1}</span><div><b>${esc((h.why ? h.why.split(/(?<=[.:])\s/)[0].replace(/[.:]$/, '').slice(0, 110) : '') || h.fn || h.file.replace(/^.*\//, ''))}</b> <span class="muted small">${esc(h.file.replace(/^.*\/cpp\//, ''))} · +${h.adds} −${h.dels}</span>
           ${(w => w ? `<div class="nx-why">${rich(w.slice(0, 420))}</div>` : '')(h.why ? h.why.split(/(?<=[.:])\s/).slice(1).join(' ') : `Changed lines in ${h.fn || h.file.replace(/^.*\//, '')}; the comment-free part of the patch.`)}</div></div>
-        <div class="nx-sides"><div><div class="nx-cap nx-badt">Old</div>${side(h.old, 'old')}</div><div><div class="nx-cap nx-goodt">New</div>${side(h.neu, 'new')}</div></div></section>`).join('')}` : ''}
+        <div class="nx-where">${esc(h.file)}${h.ns ? ` · line ${h.ns}` : ''}${h.fn ? ` · in <code>${esc(h.fn.replace(/\(.*$/, '()').slice(0, 80))}</code>` : ''} · <span class="nx-plus">+${h.adds} added</span>${h.dels ? ` <span class="nx-minus">−${h.dels} removed</span>` : ' · nothing removed'}</div>
+        <div class="nx-scroll"><table class="nx-uni"><colgroup><col style="width:48px"><col style="width:48px"><col style="width:20px"><col></colgroup>${h.uni.map(([o, n, k, t]) => k === 'g' ? '<tr class="g"><td></td><td></td><td></td><td>⋯</td></tr>'
+          : `<tr class="${k}"><td class="ln">${o}</td><td class="ln">${n}</td><td class="mk">${k === 'a' ? '+' : k === 'd' ? '−' : ''}</td><td><code>${esc(t) || ' '}</code></td></tr>`).join('')}</table></div></section>`).join('')}
+      <p class="muted small">How to read it: <b class="nx-plus">+ green</b> lines are added, <b class="nx-minus">− red</b> lines are deleted, plain lines are unchanged code shown for context. Numbers are the file's line numbers before | after. Copy patch gives a file you can apply with <code>git apply</code>.</p>` : ''}
     ${issues.length ? `<p class="nx-callout nx-warnbox">Review still asks for ${issues.length} change${issues.length > 1 ? 's' : ''}: ${issues.map(i => rich(i.fix || i.problem || '')).join(' · ')}</p>` : ''}`;
 }
 
@@ -1632,7 +1656,7 @@ function jiraDraft(m, c) {
   const L = [];
   if (ho.jira_description) L.push(String(ho.jira_description).trim(), '');
   else {
-    L.push('What users hit:', `${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${m.fb?.events ?? m.events ?? '?'} events, ${m.fb?.users ?? '?'} users. Builds: ${(m.builds || []).slice(0, 4).join(', ') || '?'}.`);
+    L.push('What users hit:', `${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${plural(m.fb?.events ?? m.events, 'event')}, ${plural(m.fb?.users, 'user')}. Builds: ${hitBuilds(m).replace(/`/g, '') || '?'}.`);
     if (a.summary) L.push('', 'Root cause:', String(a.summary));
     if ((a.located || []).length) L.push('', 'Where in the code:', ...a.located.slice(0, 5).map(x => '- ' + x));
   }
@@ -1646,30 +1670,70 @@ function jiraDraft(m, c) {
   if (m.play?.url) L.push(`- Google Play: ${m.play.url}`);
   return { summary: summary.slice(0, 250), description: L.join('\n').slice(0, 30000) };
 }
+// 28 Oct: only the builds that really have events of this problem, as `1.25.1 (800054871)`
+function hitBuilds(m) {
+  const pb = m.perBuild || {};
+  return (m.builds || []).filter(n => { const code = (String(n).match(/\((\d+)\)/) || [])[1]; const v = pb[code] || {};
+    return !code || (+v.fb || 0) + (+v.play || 0) > 0; }).map(n => '`' + n + '`').join(', ');
+}
+// Bitbucket turns bare 7-40 char hex/number words into /commits/ links: the case id links to the case, others go in backticks
+function bbSafe(t, m) {
+  const cid = String(m.id || '').replace(/^m-(play-)?/, ''), cid0 = cid.split('~')[0];
+  return String(t || '').split(/(`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/\S+)/).map(part => {
+    if (!part || /^(`|\[|https?:)/.test(part)) return part;
+    return part.replace(/(^|[^\w\/#.\-])([0-9a-fA-F]{7,40})(?![\w])/g, (all, pre, w) =>
+      pre + (cid0 && w.startsWith(cid0.slice(0, 8)) ? `[${w.slice(0, 8)}](${location.origin}/#problems/${m.id})` : '`' + w + '`'));
+  }).join('');
+}
+const plural = (n, w) => `${n ?? '?'} ${w}${n === 1 ? '' : 's'}`;
+// where the real-tap proof stands, for texts written while it was still running
+function tapState(c) {
+  const n = (c?.authorAttempts || []).length;
+  if (c?.fixVerified) return 'verified on the phone';
+  return /not-reproduced|repro-failed/.test(c?.status || '') ? `not achieved yet (${n || 'several'} lab attempts); the engine replay is the proof` : 'still running';
+}
+function fixTapState(t, c) {
+  return String(t || '').replace(/(is )?still running or pending/gi, (all, is) => (is ? 'is ' : '') + tapState(c));
+}
 function crashPrDraft(m, c) {               // the draft PR text, prepared from the verified fix (posted as shown)
   const a = m.analysis || {}, ho = hoOf(c), b = location.origin, kind = m.kind === 'ANR' ? 'ANR' : 'Crash';
   const files = [...new Set((String(c?.patch || '').match(/^\+\+\+ b\/(\S+)/gm) || []).map(x => x.slice(6)))];
   const title = String(ho.pr_title || `Fix ${kind.toLowerCase()}: ${String(a.summary || m.title || '').split(/(?<=[.!?])\s/)[0]}`).slice(0, 200);
   const L = [`## ${kind}: ${m.title || ''}`, '',
-    `**What users hit:** ${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${m.fb?.events ?? m.events ?? '?'} events, ${m.fb?.users ?? '?'} users, builds ${(m.builds || []).slice(0, 4).join(', ') || '?'}.`, ''];
-  if (ho.pr_body) L.push(String(ho.pr_body).trim(), '');
+    `**What users hit:** ${m.subtitle && m.subtitle !== 'unknown' ? m.subtitle : m.title || ''} — ${plural(m.fb?.events ?? m.events, 'event')}, ${plural(m.fb?.users, 'user')}, builds ${hitBuilds(m) || '?'}.`, ''];
+  if (ho.pr_body) L.push(fixTapState(bbSafe(String(ho.pr_body).trim(), m), c), '');
   else if (a.root_cause || a.summary) L.push('### Root cause', String(a.root_cause || a.summary), '');
-  L.push('### Proof', `- **Verified on the lab phone:** ${String(c?.fixNote || '').trim() || 'see the Night Shift case'}`);
+  {                                          // 28 Oct: Kotlin cause + engine guard -> say the native change is only the extra guard
+    const pf = (String(c?.patch || '').match(/^\+\+\+ b\/\S+/gm) || []).map(x => x.slice(6));
+    if (a.owner === 'app-java' && pf.some(f => /\.(kt|java)$/.test(f)) && pf.some(f => /\.(cpp|h|hpp|cc)$/.test(f))
+        && !/extra guard/i.test(String(ho.pr_body || '')))
+      L.push('## Native side (extra guard)', 'The cause is the Kotlin call and it is fixed in Kotlin above. The engine change is an **extra guard** (defence in depth): if a wrong call ever reaches the engine again, it is skipped and logged instead of crashing the app. It is not the root cause fix.', '');
+  }
+  const reps = (String(c?.earlyFix?.note || '').match(/(\d+) replays/) || [])[1];
+  L.push('### Proof', c && c.engineVerified && !c.fixVerified
+    ? `- **Engine replay:** crash reproduced with every field frame on the unfixed build; clean with the fix${reps ? ` (${reps} replays)` : ''}. Real-tap repro: ${tapState(c)}.`
+      + (c.kotlinVerified === false ? '\n- **Kotlin/Java part: proposed, NOT verified yet.** The engine replay calls the engine directly and skips Kotlin; the real-tap repro + phone check verify this part.' : '')
+    : `- **Verified on the lab phone:** ${String(c?.fixNote || '').trim() || 'see the Night Shift case'}`);
   if (c?.reproVideoUrl) L.push(`- **Repro video (before the fix):** ${b}${c.reproVideoUrl}`);
   L.push(`- **Night Shift case:** ${b}/#problems/${m.id}`);
   if (m.fb?.url) L.push(`- **Crashlytics:** ${m.fb.url}`);
   const rv = c?.review || {};
   if (rv.verdict) L.push(`- **Night Shift code review of this patch:** ${rv.verdict} — ${String(rv.summary || '').slice(0, 300)}`);
   if (files.length) L.push('', '### Files', ...files.map(f => '- `' + f + '`'));
-  L.push('', '_Draft opened by Night Shift from a fix verified A/B on the lab phone. A person reviews and merges it._');
+  L.push('', c && c.engineVerified && !c.fixVerified
+    ? '_Draft opened by Night Shift from a fix verified by **engine replay** on the lab phone (the unfixed build crashed with every field frame; with the fix the same replay ran clean). The real-tap repro video is attached to the case when it passes. A person reviews and merges it._'
+    : '_Draft opened by Night Shift from a fix verified A/B on the lab phone. A person reviews and merges it._');
   return { title, description: L.join('\n').slice(0, 30000) };
 }
 function shipPanel(m, c, fbId) {
   if (!fbId) return '';
-  const fixed = !!(c && (c.fixVerified || /fix-verified/.test(c.status || '')));
+  // engineVerified: fix proven by the engine replay (Option A); a later real-tap 'not-reproduced' status must not hide the PR
+  const fixed = !!(c && (c.fixVerified || c.engineVerified || /fix-verified/.test(c.status || '')));
   const pr = c?.fixPr || {}, jr = c?.jira || {}, d = jiraDraft(m, c);
   const pd = crashPrDraft(m, c);
-  const prText = `<div class="edit"><input id="ship-ptitle" value="${esc(pd.title)}" maxlength="200"><textarea id="ship-pdesc" rows="14">${esc(pd.description)}</textarea>`;
+  const revWarn = (c?.review?.blocking || []).length
+    ? `<p class="badge b-bad" style="display:block;white-space:normal;padding:8px">⚠ The Night Shift code review still asks for ${c.review.blocking.length} change(s) before merge: ${esc(c.review.blocking.map(b => (String(b.file || '').split('/').pop() + (b.line ? ':' + b.line : '') + ' ' + String(b.problem || '')).slice(0, 160)).join(' · '))}. Consider a new run (Start) before creating the PR.</p>` : '';
+  const prText = revWarn + `<div class="edit"><input id="ship-ptitle" value="${esc(pd.title)}" maxlength="200"><textarea id="ship-pdesc" rows="14">${esc(pd.description)}</textarea>`;
   const bbRepo = 'https://bitbucket.org/mitrotek/' + ((FB && FB.profile && FB.profile.main_repo) || 'video_gles3jni');
   const prBox = pr.state === 'already-fixed'
     ? `<p><span class="badge b-done">Already fixed on ${esc(pr.base || '')}</span> ${esc(pr.how || '')}${(pr.prs || []).length ? ': ' + pr.prs.map(n => `<a href="${bbRepo}/pull-requests/${esc(n)}" target="_blank" rel="noopener">PR #${esc(n)} ↗</a>`).join(', ') : ''}. No new PR needed.</p>
@@ -1853,7 +1917,7 @@ function renderDashboardV1() {
     ...nightShiftKpis(rows),
   ].map(([l, n, s]) => `<div class="kpi big"><div class="kpi-l">${l}</div><div class="kpi-v">${n}</div><div class="kpi-s">${s}</div></div>`).join('');
   lineChart('c-crash', codes, 'crash', 1); lineChart('c-anr', codes, 'anr', 1);
-  const ord = ['engine', 'app-java', 'third-party', 'system', 'unknown', 'pending'].filter(k => own[k]);
+  const ord = ['engine', 'app-java', 'mixed', 'third-party', 'system', 'unknown', 'pending'].filter(k => own[k]);
   barChart('c-owner', ord, [{ label: 'Problems', data: ord.map(k => own[k]), color: cssv('--s1') }],
     { horizontal: true, onClick: (e, els) => { if (els[0]) { location.hash = '#problems'; $('#p-q').value = ''; } } });
   barChart('c-build', codes, [{ label: 'Crash', data: codes.map(c => rows.filter(r => r.kind === 'CRASH' && r.perBuild?.[c]).length) },
@@ -2219,7 +2283,8 @@ function openProblem(id, keep) {
   const repd = caseDoc && (caseDoc.status === 'reproduced' || caseDoc.reproLevel || caseDoc.labCrash || caseDoc.reproVideoUrl);
   if (dTab === 'auto') { dAuto = true; dTab = 'overview'; }       // the case record may arrive after the page:
   if (dAuto && caseDoc) { dAuto = false; if (repd) dTab = 'lab'; }  // pick the tab once it is here
-  const tabs = [['lab', repd ? 'Lab repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Lab repro'], ['overview', 'Overview'], ['cause', 'Root cause'], ['diagrams', 'Diagrams'], ['symbols', 'Symbolized'], ['stack', 'Stack traces'],
+  const tabs = [['engine', caseDoc?.engineReplay ? 'Engine repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Engine repro'],
+    ['lab', repd ? 'Lab repro <span class="cnt" style="background:var(--good-soft);color:var(--good)">●</span>' : 'Lab repro'], ['overview', 'Overview'], ['cause', 'Root cause'], ['diagrams', 'Diagrams'], ['symbols', 'Symbolized'], ['stack', 'Stack traces'],
     ['devices', m.instanceSummary ? `Instances <span class="cnt">${m.instanceSummary.crashes}</span>` : `Devices <span class="cnt">${uniqDevices(m).length}</span>`], ['fix', 'Fix & reproduce'], ['notes', 'Ship it · PR & Jira']];
   const stat = (lbl, val, sub, cls = '') => `<div class="dstat ${cls}"><div class="dl">${lbl}</div><div class="dv">${val}</div><div class="ds">${sub}</div></div>`;
   let body = '';
@@ -2280,6 +2345,7 @@ function openProblem(id, keep) {
   if (dTab === 'symbols') body = symbolsTab(m, caseDoc);
   if (dTab === 'devices') body = devicesTable(m);
   if (dTab === 'lab') body = stackNote + labTab(m, caseDoc);
+  if (dTab === 'engine') body = engineTab(m, caseDoc);
   if (dTab === 'fix') body = `
     <div class="panel accent"><div class="ph">Fix direction <span class="muted small">no code written</span></div>${paras(a.fix_direction) || '<p class="muted">pending</p>'}</div>
     <div class="panel"><div class="ph">Reproduce on the lab phone</div><ol class="steps">${steps(a.repro)}</ol>
@@ -2301,7 +2367,7 @@ function openProblem(id, keep) {
   $('#drawer').innerHTML = `<div class="dv-wrap">
     <div class="dv-head">
       <div class="dv-badges"><span class="mbadge ${mc}">${ml}</span><span class="kind k-${esc(m.kind)}">${m.kind === 'ANR' ? 'ANR' : 'Crash'}</span>
-        ${a.owner ? `<span class="own o-${esc(a.owner)}" title="${esc(a.owner_why || 'the side whose code made the wrong call')}">${esc({ 'app-java': 'Kotlin/Java', engine: 'Engine (C++)', 'third-party': 'Third-party', system: 'System' }[a.owner] || a.owner)}</span>` : ''}${a.confidence ? `<span class="conf">confidence <b>${esc(a.confidence)}</b></span>` : ''}
+        ${a.owner ? `<span class="own o-${esc(a.owner)}" title="${esc(a.owner_why || 'the side whose code made the wrong call')}">${esc({ 'app-java': 'Kotlin/Java', engine: 'Engine (C++)', mixed: 'Kotlin + Engine', 'third-party': 'Third-party', system: 'System' }[a.owner] || a.owner)}</span>` : ''}${a.confidence ? `<span class="conf">confidence <b>${esc(a.confidence)}</b></span>` : ''}
         ${a.severity ? `<span class="conf">severity <b>${esc(a.severity)}</b></span>` : ''}
         <div class="dv-act">
           ${m.play?.url ? `<a class="iconbtn" href="${esc(m.play.url)}" target="_blank" title="Open in Google Play Console">Play ↗</a>` : ''}
@@ -2468,7 +2534,7 @@ function pipeline(m, c) {
   const fixed = c && (c.fixVerified || /fix-verified/.test(c.status || '')), patch = c && (c.patch || /fix-proposed/.test(c.status || ''));
   const ho = c && c.handover && Object.keys(c.handover).length;
   const frames = (c?.frames || []).length || (m.fb?.top || []).length || (m.play?.top || []).length;
-  const ours = (c?.frames || []).filter(f => f.srcline).length;
+  const ours = (c?.frames || []).filter(f => f.srcline || (f.file && f.line)).length;   // our addr2line OR Crashlytics' own file:line
   const named = (m.fb?.top || []).some(f => /::/.test(f));      // function names from the sync (each build's .so)
   const symb = ours || named;                                   // file:line only after the case is pulled (srcline)
   const S = [
@@ -2476,14 +2542,18 @@ function pipeline(m, c) {
     ['Symbolized', ours ? `${ours} app frames · file:line` : named ? 'function names · file:line after pull' : frames ? `${frames} frames` : 'pending',
       ours ? 'done' : named ? 'part' : '', 'symbols'],
     ['Root cause', a.summary ? `${a.owner || ''} · ${a.confidence || ''}${(a.versions || []).length ? ' · ' + a.versions[a.versions.length - 1].v : a.lab_update ? ' · lab-updated' : ''}` : 'pending', a.summary ? 'done' : (run && /pull|analyse/.test(run.action) ? 'now' : ''), 'cause'],
-    ['Reproduced', rep ? `L${c.reproLevel} · ${c.reproNatural ? 'natural' : 'hook'} · ${c.reproRate || ''}` : run && run.action === 'reproduce' ? 'running…' : nrep ? (c.labConfirmed ? 'condition confirmed · no crash on this phone' : `not reproduced · ${tries} attempt${tries === 1 ? '' : 's'}`) : 'not run', rep ? 'done' : (run && run.action === 'reproduce' ? 'now' : nrep ? (c.labConfirmed ? 'part' : 'fail') : ''), 'lab'],
-    ['Fix', fixed ? 'verified on the phone' : patch ? 'patch proposed · not verified' : c?.fixRounds ? 'rounds ran' : 'not run', fixed ? 'done' : (run && run.action === 'draft-fix' ? 'now' : patch ? 'part' : ''), 'fix'],
+    ['Engine repro', c?.engineReplay ? `crashed like the field · ${c.engineReplay.hits || '?'}/${c.engineReplay.runs || '?'} · ${c.engineReplay.minutes ?? '?'} min`
+      : run && run.action === 'reproduce' ? 'running…' : nrep ? 'no engine crash' : 'not run',
+      c?.engineReplay ? 'done' : (run && run.action === 'reproduce' ? 'now' : ''), 'engine'],
+    ['Lab repro (real taps)', rep ? `L${c.reproLevel} · ${c.reproNatural ? 'natural' : 'hook'} · ${c.reproRate || ''}` : run && run.action === 'reproduce' ? 'running…' : nrep ? (c.labConfirmed ? 'condition confirmed · no crash on this phone' : `not reproduced · ${tries} attempt${tries === 1 ? '' : 's'}`) : 'not run', rep ? 'done' : (run && run.action === 'reproduce' ? 'now' : nrep ? (c.labConfirmed ? 'part' : 'fail') : ''), 'lab'],
+    ['Fix', c?.fixVerified ? 'verified on the phone' : c?.engineVerified ? (c?.kotlinVerified === false ? 'engine guard verified by replay · Kotlin part NOT verified yet' : 'verified by engine replay · phone check pending') : fixed ? 'verified on the phone' : patch ? 'patch proposed · not verified' : c?.fixRounds ? 'rounds ran' : 'not run', fixed ? 'done' : (run && run.action === 'draft-fix' ? 'now' : patch ? 'part' : ''), 'fix'],
     ['Hand-over', ho ? 'PR · Jira · Slack drafts' : patch ? 'patch file ready' : 'not run', ho ? 'done' : patch ? 'part' : '', 'fix'],
   ];
   return `<div class="pipe">${S.map(([t, s, k, tab]) => `<div class="st ${k} click" title="open ${t}" onclick="dTab='${tab}'; openProblem(selProblem, true)"><b>${t}</b><small>${esc(s)}</small></div>`).join('')}</div>`;
 }
 function symbolsTab(m, c) {
   const fr = c?.frames || [];
+  const srcOf = f => f.srcline || (f.file && f.line ? `${f.file}:${f.line}` : '');   // our addr2line OR Crashlytics' own file:line
   if (!fr.length && (m.fb?.top || []).some(f => /::/.test(f)))   // the sync named the functions; file:line needs the pulled event
     return `<div class="panel"><p class="muted">Function names only (from the daily sync, with each build's own libMYJNILIB26.so). File and line come when the crash is pulled: press Refresh or Analyse.</p>
       <pre class="frames">${esc(m.fb.top.map((f, i) => String(i).padStart(2) + '  ' + f).join('\n'))}</pre></div>`;
@@ -2491,15 +2561,15 @@ function symbolsTab(m, c) {
   const build = Object.entries(c.versions || {}).filter(([, n]) => n).map(([v]) => v).join(', ') || (c.sample_event?.version || '');
   const rows = []; let run = null;
   fr.forEach((f, i) => {
-    const ours = !!f.srcline || /MYJNI/.test(f.lib || '');
+    const ours = !!srcOf(f) || /MYJNI/.test(f.lib || '');
     if (!ours && !f.func) { if (run && run.lib === f.lib) { run.n++; return; } run = { lib: f.lib, n: 1, i }; rows.push(run); return; }
-    run = null; rows.push({ i, lib: f.lib || '', func: String(f.func || '').replace(/\s*\+\s*\d+$/, ''), src: f.srcline || '', ours });
+    run = null; rows.push({ i, lib: f.lib || '', func: String(f.func || '').replace(/\s*\+\s*\d+$/, ''), src: srcOf(f), ours });
   });
   const code = (c.code || []).filter(x => x.found);
-  const top = fr.find(f => f.srcline);
+  const top = fr.find(f => srcOf(f));
   return `<div class="panel accent"><div class="ph">Symbolized against the build that crashed</div>
-      <p>Build <b>${esc(build)}</b> · the crash's own <span class="mono">libMYJNILIB26.so</span> matched by GNU BuildId, with its debug symbols · ${fr.length} frames on the crashed thread, ${fr.filter(f => f.srcline).length} in our code.</p>
-      ${top ? `<p>Crash point in our code: <b class="mono">${esc(String(top.func).replace(/\s*\+\s*\d+$/, ''))}</b> at <span class="mono">${esc(top.srcline)}</span></p>` : ''}</div>
+      <p>Build <b>${esc(build)}</b> · the crash's own <span class="mono">libMYJNILIB26.so</span> matched by GNU BuildId, with its debug symbols · ${fr.length} frames on the crashed thread, ${fr.filter(f => srcOf(f)).length} with file:line.</p>
+      ${top ? `<p>Crash point in our code: <b class="mono">${esc(String(top.func).replace(/\s*\+\s*\d+$/, ''))}</b> at <span class="mono">${esc(srcOf(top))}</span></p>` : ''}</div>
     <div class="panel"><div class="ph">Crashed thread <span class="muted small">top = where it died · our frames highlighted</span></div>
       <table class="dev-t"><thead><tr><th>#</th><th>Library</th><th>Function</th><th>File:line</th></tr></thead><tbody>
       ${rows.map(r => r.n ? `<tr class="muted"><td class="mono">${r.i}</td><td class="mono">${esc(r.lib)}</td><td colspan="2">${r.n} frame${r.n > 1 ? 's' : ''} in the system library (no symbols published)</td></tr>`
@@ -2508,9 +2578,9 @@ function symbolsTab(m, c) {
     ${code.map(x => `<div class="panel"><div class="ph mono">${esc(x.file)}:${esc(x.line)} <span class="muted small">${esc(String(x.func || '').replace(/\s*\+\s*\d+$/, '').slice(0, 90))}${x.how ? ' · ' + esc(x.how) : ''}</span></div>
       <pre class="code">${esc(String(x.body || '').split('\n').slice(-30).join('\n'))}</pre></div>`).join('')}`;
 }
-const fnKey = s => collapseTpl(String(s || '')).replace(/\s*\+\s*\d+\s*$/, '').replace(/\s*\[Play symbols\]/, '').replace(/^\S+\.so\s+/, '').replace(/\(.*$/, '').trim();
+const fnKey = s => collapseTpl(String(s || '').replace(/^offset 0x[0-9a-f]+\)\s*\(?/, '')).replace(/\s*\+\s*\d+\s*$/, '').replace(/\s*\[Play symbols\]/, '').replace(/^\S+\.so\s+/, '').replace(/\(.*$/, '').trim();
 function fieldFrames(m, c) {
-  if ((c?.frames || []).length) return c.frames.map(f => ({ lib: f.lib || '', func: f.func || f.address || '', src: f.srcline || '' }));
+  if ((c?.frames || []).length) return c.frames.map(f => ({ lib: f.lib || '', func: f.func || f.address || '', src: f.srcline || (f.file && f.line ? `${f.file}:${f.line}` : '') }));
   return (m.fb?.top || m.play?.top || []).map(f => { const x = String(f).match(/^(\S+\.so|\[[^\]]+\])\s+(.*)$/); return { lib: x ? x[1] : '', func: x ? x[2] : f, src: '' }; });
 }
 function stackCompare(m, c) {
@@ -2533,7 +2603,7 @@ function stackCompare(m, c) {
   }
   const rows = pairs.map(([f, l], i) => {
     const mt = f && l && fnKey(f.func) && fnKey(f.func) === fnKey(l.func);
-    const cell = (x, src) => x ? `<span class="libpill ${ours(x) ? 'lp-ours' : ''}">${esc((x.lib || '').replace(/^.*\//, '').replace(/[[\]]/g, '') || '—')}</span> <span class="fnn">${esc(collapseTpl(x.func || '(no symbol)'))}${x.off != null ? ' +' + x.off : ''}</span>${src ? `<br>${codeLink(src)}` : ''}` : '';
+    const cell = (x, src) => x ? `<span class="libpill ${ours(x) ? 'lp-ours' : ''}">${esc((x.lib || '').replace(/^.*\//, '').replace(/[[\]]/g, '') || '—')}</span> <span class="fnn" title="${esc(x.func || '')}">${esc(frameKey(String(x.func || '').replace(/^offset 0x[0-9a-f]+\)?\s*\(?/, '')) || '(no symbol)')}${x.off != null ? ' +' + x.off : ''}</span>${src ? `<br>${codeLink(src)}` : ''}` : '';
     return `<tr class="${mt ? 'm' : ''}"><td>${i}</td><td>${cell(f, f?.src)}</td><td class="${mt ? 'ok' : 'no'}" style="width:26px;text-align:center">${mt ? '=' : ''}</td><td>${cell(l, l?.src)}</td></tr>`;
   }).join('');
   const sy = lab.symbols || {};
@@ -2567,6 +2637,61 @@ function wireVideo() {
   items.forEach(li => li.onclick = () => { v.currentTime = +li.dataset.t; v.play().catch(() => {}); });
   v.ontimeupdate = () => { let cur = null; items.forEach(li => { const on = +li.dataset.t <= v.currentTime + .2; li.classList.toggle('done', on); if (on) cur = li; });
     items.forEach(li => li.classList.toggle('on', li === cur)); if (cur && !v.paused) cur.scrollIntoView({ block: 'nearest' }); };
+}
+// 1 Nov: readable frame names: std::function wrappers unwrapped, argument lists folded, '+ offset' dropped; the full
+// name stays in the tooltip. Used to show and to MATCH lab vs field frames (different builds -> different offsets).
+function frameKey(fn) {
+  let x = String(fn || '').replace(/\s*\+\s*\d+\s*$/, '');
+  const w = x.match(/__func<(.*?::\$_\d+)/);
+  if (w) x = w[1];                                   // std::function wrapper -> the lambda it runs
+  for (let i = 0; i < 4; i++) x = x.replace(/\([^()]*\)/g, '\u0000');   // fold argument lists, inner first
+  x = x.replace(/\u0000/g, '()').replace(/std::__ndk1::/g, '').replace(/\s+const$/, '').replace(/::operator\(\)\(\)$/, '');
+  return x.trim();
+}
+function frameCell(fn, src, fallback) {
+  const full = String(fn || '');
+  const short = full ? frameKey(full) : (fallback || '');
+  const off = (full.match(/\+\s*(\d+)\s*$/) || [])[1];
+  return `<td class="mono small fcell" title="${esc(full)}"><span class="fname">${esc(short)}</span>${off ? ` <span class="muted">+${off}</span>` : ''}`
+    + `${src ? `<div class="fsrc">${esc(src)}</div>` : ''}</td>`;
+}
+function stackMatch(lab, field) {      // field frames (unique, ours) that the lab stack also has, by readable name
+  const k = f => frameKey(f.func || f);
+  const L = new Set(lab.map(k).filter(Boolean));
+  const F = [];
+  field.forEach(f => { const x = k(f); if (x && !/^\(no symbol\)|^__|^start_thread|^__pthread/.test(x) && F[F.length - 1] !== x) F.push(x); });
+  const got = F.filter(x => L.has(x));
+  return { got: got.length, of: F.length, missing: F.filter(x => !L.has(x)) };
+}
+// 28 Oct: Engine repro panel: what the engine was sent, step by step, and the crash it produced vs the field
+function engineTab(m, c) {
+  const rp = c?.engineReplay;
+  if (!rp) return `<div class="panel"><div class="ph">Engine repro</div><p class="muted">Not run yet. Reproduce sends the user's engine calls straight to the engine on the lab phone (no taps); a crash with every field frame proves the bug at engine level in minutes.</p></div>`;
+  const st = rp.stack || {}, fr = st.frames || [], field = (st.field && st.field.length ? st.field : (m.fb?.top || [])).slice(0, 12);
+  const exp = (rp.expect || []).map(e => String(e).split('::').pop());
+  const hit = f => exp.some(e => String(f.func || f).includes(e));
+  const steps = (rp.steps || []).map(s => `<tr class="${s.kind}"><td class="mono small muted">${esc(s.t)}</td><td>${s.kind === 'send' ? '➜ <b>sent</b>' : s.kind === 'result' ? '↳ result' : s.kind === 'crash' ? '💥 <b>crash</b>' : '·'}</td><td class="mono small">${esc(s.text)}</td></tr>`).join('');
+  const frows = fr.map(f => `<tr${hit(f) ? ' style="background:var(--good-soft)"' : ''}><td class="mono small">#${f.n}</td><td class="mono small">${esc(f.lib)}</td>${frameCell(f.func, f.srcline, '(no symbol) ' + f.pc)}</tr>`).join('');
+  // 28 Oct: the field stack from the case's own frames: they carry Crashlytics' file:line (fb.top keeps names only)
+  const cf = (c?.frames || []).slice(0, 14);
+  const frow2 = cf.length
+    ? cf.map((f, i) => `<tr${hit(f) ? ' style="background:var(--good-soft)"' : ''}><td class="mono small">#${i}</td><td class="mono small">${esc(f.lib || '')}</td>${frameCell(f.func, f.srcline || (f.file && f.line ? f.file + ':' + f.line : ''), f.address ? '(no symbol) 0x' + Number(f.address).toString(16) : '')}</tr>`).join('')
+    : field.map((f, i) => `<tr${hit(f) ? ' style="background:var(--good-soft)"' : ''}><td class="mono small">#${i}</td><td class="mono small" colspan="3">${esc(String(f))}</td></tr>`).join('');
+  return `<div class="panel accent"><div class="ph">Engine repro <span class="badge b-done">crashed like the field</span>
+      <span class="muted small">${esc(rp.scenario || '')} · ${rp.hits ?? '?'}/${rp.runs ?? '?'} runs · ${rp.minutes ?? '?'} min · no taps: the engine calls were sent directly</span></div>
+      ${rp.why ? `<p>${esc(rp.why)}</p>` : ''}
+      <p class="note">A run counts only when the lab crash dump shows the field frames: ${exp.map(e => '<code>' + esc(e) + '</code>').join(', ') || '-'}.</p></div>
+    <div class="panel"><div class="ph">Steps the engine received <span class="muted small">in order, with each call's result</span></div>
+      ${steps ? `<table class="tbl">${steps}</table>` : '<p class="muted">The step log is not on the board yet (older run).</p>'}</div>
+    <div class="panel"><div class="ph">Crash stack: lab replay vs field <span class="muted small">green = the frames that had to match</span></div>
+      ${st.signal ? `<p class="mono small">${esc(st.signal)}${st.cause ? ' · ' + esc(st.cause) : ''}</p>` : ''}
+      ${(() => { const sm = stackMatch(fr, cf.length ? cf : field); return sm.of ? `<p class="small"><b>${sm.got} of ${sm.of}</b> field frames are in the lab stack (by function name; offsets differ because the lab runs a debug build of different code than the shipped release)${sm.missing.length ? ' · not in the lab stack: ' + sm.missing.map(x => '<code>' + esc(x) + '</code>').join(', ') : ''}</p>` : ''; })()}
+      <div class="ph small" style="margin-top:6px">Lab (engine replay)</div>
+      ${frows ? `<table class="tbl">${frows}</table>` : '<p class="muted">No crash dump saved for this run.</p>'}
+      <div class="ph small" style="margin-top:10px">Field (Crashlytics)</div>
+      ${frow2 ? `<table class="tbl">${frow2}</table>` : '<p class="muted">-</p>'}</div>
+    ${rp.script?.code ? `<details class="panel"><summary class="ph">Replay script <span class="muted small">${esc(rp.script.file || '')}</span></summary>
+      ${rp.script.doc ? `<p>${esc(rp.script.doc)}</p>` : ''}<pre class="mono small" style="white-space:pre-wrap">${esc(rp.script.code)}</pre></details>` : ''}`;
 }
 function labTab(m, c) {
   const fbId = m.fb?.id, run = jobs.find(j => /running|queued/.test(j.status) && (j.issue === fbId || j.issue === m.caseId));
@@ -2671,7 +2796,15 @@ function layerOf(m) {
   try { Object.defineProperty(m, '__layer', { value: l, enumerable: false }); } catch (e) {}
   return l;
 }
-function layerOk(m, want) { if (!want) return true; const l = layerOf(m); return want === 'app' ? ['kotlin', 'java', 'app'].includes(l) : l === want; }
+// 28 Oct (team rule): the code layer is the side that OWNS the bug, not where it crashed. A wrong Kotlin call that
+// crashes inside the engine is an app problem: it is listed under App code (and Kotlin), not under Native.
+function ownerLayer(m) {
+  const o = m.analysis?.owner;
+  if (o === 'app-java') { const l = layerOf(m); return ['kotlin', 'java'].includes(l) ? l : 'kotlin'; }
+  if (o === 'engine') return 'native';
+  return layerOf(m);
+}
+function layerOk(m, want) { if (!want) return true; const l = ownerLayer(m); return want === 'app' ? ['kotlin', 'java', 'app'].includes(l) : l === want; }
 function statusOk(m, want) {
   if (!want) return true;
   const a = !!m.analysis?.summary, r = isRep(m), f = isFixed(m), c = caseOf(m);
@@ -2794,8 +2927,9 @@ function pipeSteps(m) {
   const c = caseOf(m), a = !!m.analysis?.summary, r = isRep(m), f = isFixed(m);
   const run = jobs.find(j => j.status === 'running' && (j.issue === m.fb?.id || j.issue === m.caseId || j.issue === m.id));
   const st = [['Root cause', a ? 'done' : run && ['analyse', 'start', 'pull'].includes(run.action) ? 'run' : ''],
-    ['Reproduced', r ? 'done' : run && run.action === 'reproduce' ? 'run' : c?.status === 'not-reproduced' ? 'fail' : ''],
-    ['Fix verified', f ? 'done' : run && run.action === 'draft-fix' ? 'run' : '']];
+    ['Engine repro', c?.engineReplay ? 'done' : run && run.action === 'reproduce' ? 'run' : c?.status === 'not-reproduced' ? 'fail' : ''],
+    ['Lab repro', r ? 'done' : run && run.action === 'reproduce' ? 'run' : c?.status === 'not-reproduced' ? 'fail' : ''],
+    ['Fix verified', f && c?.fixVerified ? 'done' : c?.engineVerified ? 'part' : f ? 'done' : run && run.action === 'draft-fix' ? 'run' : '']];
   return st.map(([l, s], i) => `${i ? `<span class="xa-line ${st[i - 1][1] === 'done' && s === 'done' ? 'done' : ''}"></span>` : ''}<span class="xa-step ${s}"><i>${s === 'done' ? '✓' : s === 'fail' ? '✕' : i + 1}</i>${l}</span>`).join('')
     + (c?.reproVideoUrl ? '<span class="xa-chip">repro video</span>' : '')
     + (m.pr ? `<a class="xa-chip" href="${esc(m.pr)}" target="_blank" onclick="event.stopPropagation()">PR ↗</a>` : '');
@@ -2803,7 +2937,7 @@ function pipeSteps(m) {
 function pipeDots(m) {
   const c = caseOf(m), a = !!m.analysis?.summary, r = isRep(m), f = isFixed(m);
   const run = jobs.find(j => j.status === 'running' && (j.issue === m.fb?.id || j.issue === m.caseId));
-  return `<span class="pdots" title="root cause · reproduced · fix verified"><i class="${a ? 'on' : ''}"></i><i class="${r ? 'on' : run && run.action === 'reproduce' ? 'run' : c?.status === 'not-reproduced' ? 'no' : ''}"></i><i class="${f ? 'on' : run && run.action === 'draft-fix' ? 'run' : ''}"></i></span>`
+  return `<span class="pdots" title="root cause · engine repro · lab repro (real taps) · fix verified"><i class="${a ? 'on' : ''}"></i><i class="${c?.engineReplay ? 'on' : run && run.action === 'reproduce' ? 'run' : ''}"></i><i class="${r ? 'on' : run && run.action === 'reproduce' ? 'run' : c?.status === 'not-reproduced' ? 'no' : ''}"></i><i class="${f ? 'on' : run && run.action === 'draft-fix' ? 'run' : ''}"></i></span>`
     + (c?.reproVideoUrl ? ' <span title="repro video" class="small">🎬</span>' : '') + (m.pr ? ` <a href="${esc(m.pr)}" target="_blank" onclick="event.stopPropagation()" class="small">PR ↗</a>` : '');
 }
 /* ---- dashboard ---- */
@@ -2880,7 +3014,7 @@ function renderDashboard() {
   const cols = SERIES();
   if (window.Chart) {
     const ds = codes.map((c, i) => { const m = Object.fromEntries(vitFree(cfMode, c).map(x => [x.d, x])); return { label: c, data: days.map(d => m[d]?.v == null ? null : +m[d].v.toFixed(3)),
-      borderColor: cols[i % 3], backgroundColor: cols[i % 3], borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, spanGaps: true, tension: .3, users: days.map(d => m[d]?.u) }; });
+      borderColor: cols[i % 3], backgroundColor: cols[i % 3], borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, spanGaps: true, tension: 0, cubicInterpolationMode: 'monotone', users: days.map(d => m[d]?.u) }; });
     const allv = ds.flatMap(d => d.data).filter(x => x != null); const lo = allv.length ? Math.max(0, Math.floor((Math.min(...allv) - .05) * 10) / 10) : 99;
     draw('c-crashfree', 'line', { labels: days.map(d => d.slice(5)), datasets: ds }, { y: { min: lo, max: 100, ticks: { callback: x => (+x).toFixed(2) + '%' } },
       tip: c => `${c.dataset.label}: ${c.parsed.y == null ? '–' : c.parsed.y.toFixed(3) + '%'} · ${fmt(c.dataset.users?.[c.dataIndex] || 0)} users` });
@@ -2904,7 +3038,7 @@ function renderDashboard() {
       ['Reproduced', rows.filter(isRep).length, 'reproduced'], ['Fix verified', rows.filter(isFixed).length, 'fixed']];
     barChart('c-funnel', funnel.map(f => f[0]), [{ label: 'Problems', data: funnel.map(f => f[1]), color: cssv('--s1') }],
       { horizontal: true, onClick: (e, els) => { if (els[0]) goFilter(funnel[els[0].index][2]); } });
-    const ord = ['engine', 'app-java', 'third-party', 'system', 'unknown', 'pending'].filter(k => own[k]);
+    const ord = ['engine', 'app-java', 'mixed', 'third-party', 'system', 'unknown', 'pending'].filter(k => own[k]);
     barChart('c-owner', ord, [{ label: 'Problems', data: ord.map(k => own[k]), color: cssv('--s3') }],
       { horizontal: true, onClick: (e, els) => { if (els[0]) goFilter('x', { owner: ord[els[0].index] }); } });
     barChart('c-build', codes, [{ label: 'Crash', data: codes.map(c => rows.filter(r => r.kind === 'CRASH' && r.perBuild?.[c]).length) },

@@ -45,6 +45,10 @@ Rules:
 - severity (with every "confirmed" vote on a problem): YOU grade it, from what users get, not from what the hunter
   wrote. Use exactly these rules:
   - "blocker": a crash, ANR, data loss or corrupted save in normal use.
+    A crash that needs a thread interleaving inside a window far shorter than the other side's period (e.g. a
+    few microseconds against a callback every 30-60 ms) is real but rare: grade it "major", kind "timing", and say the
+    window and the period in the note. It is "blocker" only when the window is wide or the action repeats often enough
+    (every frame, a loop) that users will hit it.
   - "major": a change to what the user sees, hears or exports (a different image, order, colour, sound or timing);
     a failure that stores broken state and does not recover (e.g. a failed compile cached as "ready", so colours stay
     wrong for the session with only a log line); a freeze; a leak that grows with use. A condition the user or the
@@ -81,6 +85,34 @@ Rules:
   one family is affected), give the corrected "title" and/or "q" in the same style. The page
   shows yours instead. Leave them out when they are right.
 
+## Can a user get there, and in what state? (every scenario you confirm or leave unsure)
+Code that is wrong is not yet a problem users have. For every problem scenario also answer:
+- reach: how a user of the RELEASE build gets to the bad line. Walk back from it to a screen and a button (Grep the
+  caller, its caller, up to the UI: a click listener, a menu item, a lifecycle call). On the way check every gate:
+  `BuildConfig.DEBUG`, a debug-only source set (src/debug, src/*Debug), a feature flag or remote config that is off by
+  default, a call with no UI caller at all.
+  - "release" + reach_path: the user steps, screen > button > ... (cite the listener line in reach_evidence).
+  - "debug-only" / "no-ui" / "flag-off" + reach_evidence: the gate line(s) you opened. The page keeps it as latent.
+  - "unknown": you searched and could not find the UI entry; say what you searched.
+- needs: every state the outcome needs at the moment of the user action, in plain words: a job still running, an
+  empty cache, a first run on that input, a second item already added. Check what skips the path: a cache, a memo, a
+  "done" flag, a result saved from an earlier run. If the path only runs the first time on a given input (later runs
+  read the cache), say so: "needs a clip never processed before (masks are cached by <file:line>)". A tester must be
+  able to set that state from your words.
+A race is reachable only if the work it races with is still running when the user can act: say how long that work
+runs and what makes it run (and what makes it skip).
+
+## Does the SCREEN let the user do it, and how often? (every problem scenario)
+- ui_gate: in the state the scenario needs (a build still running, a dialog open, playing...), can the user actually
+  do the action on that screen? Look for what would stop it: a control disabled or hidden in that state
+  (isEnabled = false, visibility GONE, clickable false), a full-screen or modal progress dialog, a touch-blocking
+  overlay, an early return in the click/drag handler while a job runs (a flag like isApplying/isBuilding), the
+  timeline locked. "open" = you followed the click/drag handler and nothing blocks it (cite the handler line);
+  "blocked" = cite the line that blocks it; "unknown" = you could not find the handler.
+- likelihood: "often" (every time the state holds, or the action repeats per frame/loop), "sometimes" (a common user
+  action during a state that lasts seconds), "rare" (needs a thread interleaving in a window far shorter than the
+  other side's period). Give the window and the period in the note for a race.
+
 ## Answer
 ONLY a ```json block: {"votes": [{"id": "s1", "vote": "confirmed|refuted|unsure", "kind": "always|timing|condition",
-"evidence": ["File.cpp:123"], "severity": "blocker|major|minor|suggestion", "note": "", "title"?: "", "q"?: "", "problem"?: "", "same_as"?: ""}]}
+"evidence": ["File.cpp:123"], "severity": "blocker|major|minor|suggestion", "note": "", "title"?: "", "q"?: "", "problem"?: "", "same_as"?: "", "reach": "release|debug-only|no-ui|flag-off|unknown", "reach_path": "", "reach_evidence": ["File.kt:12"], "needs": "", "ui_gate": "open|blocked|unknown", "ui_gate_evidence": ["Handler.kt:40"], "likelihood": "often|sometimes|rare"}]}

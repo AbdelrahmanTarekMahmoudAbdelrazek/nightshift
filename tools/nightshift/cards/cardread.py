@@ -39,6 +39,17 @@ def run(cmd, timeout=600):
     return r.stdout
 
 
+def web_video(vp, gdir, v):
+    """board/public/v/<token>/v<n>.mp4: 540 px wide H.264 + AAC, fast start, so the card page can play and scrub it."""
+    dst = os.path.join(gdir, f'v{v}.mp4')
+    if os.path.exists(dst) and os.path.getsize(dst) > 0:
+        return dst
+    run([tool('ffmpeg'), '-v', 'error', '-y', '-i', vp, '-vf', 'scale=540:-2', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28',
+         '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', dst + '.tmp.mp4'], timeout=900)
+    os.replace(dst + '.tmp.mp4', dst)
+    return dst
+
+
 class Card:
     def __init__(self, a):
         self.a, self.db, self.cfg = a, fire.client(), config.load()
@@ -205,6 +216,10 @@ class Card:
         run([ff, '-v', 'error', '-y', '-framerate', '1', '-i', os.path.join(fdir, 'f_%03d.jpg'), '-vf',
              f'scale=300:-2,tile={c}x{r}:padding=6:margin=6:color=white', os.path.join(self.dir, f'v{v}_sheet_%02d.jpg')], timeout=600)
         self._vinfo = {'seconds': round(dur, 2), 'fps': round(fps, 3)}
+        try:                                        # 30 Oct: a light copy the card page plays as a real video (v<n>.mp4 next to the frames)
+            web_video(vp, gdir, v)
+        except Exception as e:                      # the frames still work without it
+            print(f'web video {v}: {e}', file=sys.stderr)
         return out
 
     def checkout(self, branch):

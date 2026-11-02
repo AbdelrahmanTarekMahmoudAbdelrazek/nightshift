@@ -96,18 +96,27 @@ def publish(db, data: dict) -> dict:
         doc['updatedAt'] = firestore.SERVER_TIMESTAMP
         ref = db.collection('cases').document(c['id'])
         old = ref.get().to_dict() or {}
-        for k in ('status', 'patch', 'fixVerified', 'fixNote', 'repro_scenario', 'repro_seed', 'repro_dir', 'labMatch', 'labRuns', 'labFailures',
-                  'reproAttempts', 'repro_step', 'reproAuthor', 'reproVideo', 'reproVideoNote', 'reproVideoUrl', 'reproVideoVtt', 'reproSteps', 'labCrash', 'authorAttempts', 'fixRounds', 'fixMinutes', 'fixAnswer', 'review', 'handover', 'progress', 'reproLevel', 'reproNatural', 'reproRate', 'repro_script', 'narrative', 'frames', 'breadcrumbs',
-                  'stack_groups', 'field_fingerprint',
-                  'src', 'sync_run', 'sync_at', 'sync_events', 'sync_users', 'sync_versions', 'signals', 'first_seen', 'last_seen',
-                  'play_name', 'last_report', 'stack', 'sample_device', 'sample_version', 'console_url'):
-            if k in old and k not in doc:
-                doc[k] = old[k]          # keep lab/fix results the worker wrote; replace everything else
-        keep = ('reproduced', 'not-reproduced', 'fix-proposed', 'fix-verified', 'fix-failed', 'lab-run-done')
-        if old.get('status') in keep and doc.get('status') == 'triaged':
+        # 28 Oct: keep EVERY field the worker or the board wrote that this publish does not carry. The old whitelist
+        # silently wiped newer ones on each re-pull/sync (engineReplay = the Engine repro panel, earlyFix, engineVerified,
+        # tapRepro, fixPr = the draft PR link, jira, labConfirmed ...). Fields the publish does carry are still replaced
+        # whole, so stale map entries (old bucket counts) still disappear.
+        for k, v in old.items():
+            if k not in doc and k != 'updatedAt':
+                doc[k] = v
+        if not doc.get('frames') and old.get('frames'):
+            # 29 Oct: a re-pull with 0 events in the current release scope (the crash only happened on an older build)
+            # must not turn a case with a field stack into one without: keep the stack and what came from it
+            for k in ('frames', 'code', 'breadcrumbs', 'stack_groups', 'sample_event', 'verdict', 'confidence', 'reasons',
+                      'events', 'versions', 'sync_versions', 'last_date', 'first_date', 'models', 'android', 'manufacturers'):
+                if old.get(k):
+                    doc[k] = old[k]
+            doc['outOfScope'] = 'no events in the current release scope; field data kept from the last pull that had them'
+        keep = ('reproduced', 'not-reproduced', 'fix-proposed', 'fix-verified', 'fix-failed', 'lab-run-done', 'same-as-known')
+        if (old.get('status') in keep or str(old.get('status') or '').startswith('fix-')) and doc.get('status') == 'triaged':
             doc['status'] = old['status']          # lab/fix outcomes survive a re-pull; '*-running' never does
         batch.set(ref, doc)              # full replace (no merge): stale map entries like old bucket counts disappear
         n += 1
+        counts['cases'] += 1             # 29 Oct: was only counted in unreachable code below, so it always said 0
         if n >= 400:
             batch.commit(); batch, n = db.batch(), 0
         continue

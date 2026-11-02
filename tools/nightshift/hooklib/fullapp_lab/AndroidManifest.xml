@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Night Shift lab only: copied into the lab copy's src/productionInternalDebug by ns/fulllab.py. Never in a release. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name="com.myzesty.nslab.LabLaunch" android:exported="true">
+            <intent-filter>
+                <action android:name="com.myzesty.LAB_LAUNCH" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

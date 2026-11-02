@@ -86,6 +86,11 @@ def run(db, cfg, case_id, log=print, deny=None):
               + '\n\n'.join(lab_tl)[:30000]
               + '\n\n# Debug hooks used (repro only, never shipped)\n' + '\n'.join(os.path.relpath(h, config.REPO) for h in hooks)
               + '\n\n# Proposed fix patch (not applied)\n```diff\n' + (c.get('patch') or '(none yet)')[:8000] + '\n```\n')
+    try:                                          # 28 Oct: Kotlin callers at file:line + Kotlin as shipped (no guessing)
+        from . import kotlinmap
+        prompt += '\n' + kotlinmap.cached(cfg, {**(c or {}), 'id': case_id}, m, log)[0]
+    except Exception as e:
+        log(f'lab update: Kotlin map skipped: {str(e)[:120]}')
     # blind test: no git (later fix commits), no lab notes or old results; the caller swaps in the shipped crash files
     tools = 'Read,Grep,Glob' if deny else 'Read,Grep,Glob,Bash(git show:*),Bash(git grep:*),Bash(git -C:*)'
     txt = llm.run('root-cause-update', prompt, cfg, os.path.join(OUT, 'analysis'), f'{mref.id}.labupdate', tools=tools,

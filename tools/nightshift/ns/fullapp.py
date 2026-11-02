@@ -141,6 +141,21 @@ def _decide(case, merged, cfg):
     if gone:
         return {'mode': 'play', 'why': f'the crash happened after the screen {gone[0].split(".")[-1]}, which only the full Play app has',
                 'classes': classes}
+    # 1 Nov (ANR 4d05f9e7, 14 lab runs on the test shell): Crashlytics/Analytics name screens WITHOUT a package
+    # ('AiFeatureActivity'), so the check above never saw them. A bare screen name with no class of that name in
+    # video_gles3jni -> the full app.
+    names = {c.rsplit('.', 1)[-1] for c in idx.get('classes') or []}
+    bare = []
+    for s in (case.get('last_screens') or []):
+        s = s if isinstance(s, str) else (s.get('screen') or s.get('name') or '')
+        s = s.strip().split('.')[-1]
+        if re.fullmatch(r'[A-Z][A-Za-z0-9_]*(Activity|Fragment|Sheet|BottomSheet|Dialog|Screen)', s) and s not in bare:
+            bare.append(s)
+    gone = [s for s in bare if s not in names]
+    _t = ' '.join(str(t or '') for t in texts)
+    if gone and not ('libMYJNILIB26' in _t or 'MsgLooper' in _t or any(c.startswith('com.video.') for c in classes)):
+        return {'mode': 'play', 'why': f'the field users were on the screen {gone[0]}, which only the full app has '
+                                       '(video_gles3jni has no class of that name)', 'classes': classes}
     # 26 Oct (RealmWrapper, 12 lab attempts): video_gles3jni's own app is a TEST SHELL (its launcher is a developer menu);
     # only the engine and the editor module are the real thing. A Java crash with no engine frame and no editor-module
     # frame starts in the real app's own screens/startup, which only the full app has.

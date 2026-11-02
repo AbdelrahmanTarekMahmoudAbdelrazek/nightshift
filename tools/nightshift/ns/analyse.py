@@ -347,7 +347,7 @@ def _shrink(ev):
     return e
 
 
-OURS = ('libMYJNILIB26', 'com.myzesty', 'com.video.myzesty', 'com.ai.myzesty', 'com.picker.', 'com.common.myzesty',
+OURS = ('libMYJNILIB26', 'libImageFilter', 'com.photo.', 'com.myzesty', 'com.video.myzesty', 'com.ai.myzesty', 'com.picker.', 'com.common.myzesty',
         'com.overlay', 'myzesty')
 
 
@@ -484,6 +484,43 @@ def analyse_one(db, cfg, m, log):
                    'wait_chains': ev.get('wait_chains')}, open(field_file(m['id']), 'w'), indent=1, default=str)
     except Exception as e:
         log(f'  field instances not saved: {str(e)[:120]}')
+    kmap = ''
+    try:                                             # 28 Oct: Kotlin callers at file:line + Kotlin as shipped (no guessing)
+        from . import kotlinmap
+        _c = db.collection('cases').document(str(m.get('caseId') or m['id'].replace('m-', '', 1))).get().to_dict() or {}
+        kmap = kotlinmap.cached(cfg, {**_c, 'id': str(m.get('caseId') or '')}, m, log)[0]
+    except Exception as e:
+        log(f'  Kotlin map skipped: {str(e)[:120]}')
+    if kmap:                                         # in the EVIDENCE, so the self-check reviewer and the redo see it too
+        ev['kotlin_side'] = kmap
+    try:                                             # 28 Oct: the odd things in the user's log the theory must explain
+        from . import fieldfacts
+        _ff = fieldfacts.facts({**(_c if '_c' in dir() else {}), 'id': str(m.get('caseId') or m['id'].replace('m-', '', 1))})
+        if _ff:
+            ev['field_facts'] = _ff
+            ev['field_facts_rule'] = fieldfacts.RULE
+    except Exception as e:
+        log(f'  field facts skipped: {str(e)[:120]}')
+    try:                                             # 29 Oct: obfuscated Java/Kotlin names -> real ones (R8 mapping per build)
+        from . import retrace
+        import importlib as _il
+        _il.reload(retrace)
+        _c2 = _c if '_c' in dir() else {}
+        _vcs = re.findall(r'\((\d{6,})\)', ' '.join(str(k) for k in (_c2.get('versions') or m.get('builds') or {})))
+        _txt = [m.get('title'), m.get('subtitle'), json.dumps((m.get('fb') or {}).get('top') or [], default=str),
+                json.dumps(_c2.get('frames') or [], default=str)[:20000], str((m.get('fb') or {}).get('title') or '')]
+        _rt, _have, _miss = [], [], []
+        for _vc in dict.fromkeys(_vcs):
+            _x = retrace.explain(_txt, _vc)
+            (_have if os.path.exists(retrace.mapping_path(_vc)) else _miss).append(_vc)
+            _rt += [y for y in _x if y not in _rt]
+        if _rt:
+            ev['deobfuscated'] = _rt
+        if _miss and not _have and any(re.search(r'\b[a-z]\d?\.[a-z]{1,2}\.[a-z]{1,2}\b', str(t or '')) for t in _txt):
+            ev['deobfuscation_missing'] = (f'Java/Kotlin names are obfuscated and there is no mapping file for build(s) '
+                                           f'{", ".join(_miss[:4])}: say which method is uncertain because of it')
+    except Exception as e:
+        log(f'  retrace skipped: {str(e)[:120]}')
     prompt = ('Analyse this production problem of the MyZesty Android app (native video engine libMYJNILIB26.so + Java/Kotlin app). '
               'Answer with the JSON object described in your instructions and nothing else.\n\n'
               + json.dumps(ev, indent=1, default=str))
@@ -494,7 +531,39 @@ def analyse_one(db, cfg, m, log):
     # 28 Oct: the model may open the code itself (C++ AND the Kotlin module folders) to check who made the wrong call,
     # e.g. a Kotlin caller passing arguments in the wrong order; read-only, in the working copy
     rd = dict(tools='Read,Grep,Glob', cwd=config.REPO, timeout=1200)
-    txt = llm.run('crash-analysis', prompt, cfg, OUT, tag, model=mdl, deny=BLIND_DENY, **rd)
+    # 28 Oct: crashes in the full app (home, tasks, image editor com.photo / libImageFilter, AI tools) have their code
+    # only in the myzesty_mobile checkout: give the model that folder too (read-only), so it reads the real code
+    acfg = cfg
+    try:
+        from . import fulllab
+        fa = fulllab.checkout(cfg)
+        if fa and os.path.isdir(os.path.join(fa, 'android')):
+            acfg = {**cfg, '_add_dirs': list(cfg.get('_add_dirs') or []) + [os.path.join(fa, 'android')]}
+            prompt = (f'FULL APP SOURCE (read-only): {os.path.join(fa, "android")} — app/ = the com.myzesty app (home, tasks, '
+                      'Realm, React Native host); image_editor_java/ = the image editor (com.photo.myzesty); '
+                      'android-ai-tools-module/ = com.ai.myzesty; java-common/ and android-video-editor-module/ as shipped in '
+                      'the app. libImageFilter.so is a prebuilt library there (no C++ source): for its crashes, reason from '
+                      'the Java/Kotlin callers and the JNI signatures.\n\n' + prompt)
+    except Exception:
+        pass
+    try:                                             # the image editor's C++ (libImageFilter.so), newest copy first
+        ia = cfg.get('image_app') or {}
+        cands = [os.path.join(os.path.expanduser('~/.nightshift_kotlin'), str(ia.get('repo') or 'simple-andoird-app')),
+                 os.path.expanduser(str(ia.get('path') or '~/simple-andoird-app'))]
+        src = next((os.path.join(c, str(ia.get('src') or 'app/src/main/cpp/ImageFilter')) for c in cands
+                    if os.path.isdir(os.path.join(c, str(ia.get('src') or 'app/src/main/cpp/ImageFilter')))), None)
+        if src:
+            acfg = {**acfg, '_add_dirs': list(acfg.get('_add_dirs') or []) + [src]}
+            prompt = (f'IMAGE EDITOR NATIVE SOURCE (read-only): {src} = the C++ of {ia.get("native_lib") or "libImageFilter.so"} '
+                      '(JNI entry points in interface.cpp). Use it for frames in that library.\n\n' + prompt)
+    except Exception:
+        pass
+    adeny = BLIND_DENY
+    if BLIND_DENY:                                   # blind test: the extra folders' git history is blocked too
+        adeny = list(BLIND_DENY) + [f'{t}({d.rstrip("/")}/**/.git/**)' for d in (acfg.get('_add_dirs') or [])
+                                    for t in ('Read', 'Grep', 'Glob')] + \
+                [f'{t}({os.path.dirname(d.rstrip("/"))}/.git/**)' for d in (acfg.get('_add_dirs') or []) for t in ('Read', 'Grep', 'Glob')]
+    txt = llm.run('crash-analysis', prompt, acfg, OUT, tag, model=mdl, deny=adeny, **rd)
     a = _json(txt)
     if not a:                                        # the CLI sometimes dies on one input every time: retry smaller
         small = _shrink(ev)
@@ -658,6 +727,10 @@ def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
             if rec and (m.get('fb') or {}).get('id'):                 # the Cases tab shows the same analysis
                 keep = {k: rec.get(k) for k in ('frames', 'code', 'breadcrumbs', 'verdict', 'confidence', 'reasons', 'title', 'subtitle',
                                                  'signal', 'field_fingerprint', 'stack_groups', 'scenarios', 'repro_plan', 'android', 'models')}
+                # 29 Oct: a re-pull that found no field stack must never wipe the stack the case already has
+                for _k in ('frames', 'code', 'breadcrumbs', 'stack_groups'):
+                    if not keep.get(_k):
+                        keep.pop(_k, None)
                 keep['narrative'] = '\n\n'.join(x for x in (a.get('summary'), '**Cause** ' + (a.get('root_cause') or ''),
                                                            '**Fix direction** ' + (a.get('fix_direction') or '')) if x)
                 try:

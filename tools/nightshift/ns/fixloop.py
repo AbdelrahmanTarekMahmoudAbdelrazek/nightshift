@@ -116,7 +116,17 @@ def _ctx(case, merged):
             'field_frames': [f if isinstance(f, str) else (f.get('func') or f"{f.get('lib')} {f.get('address')}") for f in (case.get('frames') or [])[:25]],
             'analysis': {k: a.get(k) for k in ('summary', 'root_cause', 'trigger', 'fix_direction', 'wait_chains', 'hypotheses', 'evidence', 'source') if a.get(k)},
             'reproduction': {k: case.get(k) for k in ('labMatch', 'reproLevel', 'reproNatural', 'reproRate', 'repro_step', 'repro_dir')},
-            **_looper_ctx(case)}
+            **_facts_ctx(case), **_looper_ctx(case)}
+
+
+def _facts_ctx(case):
+    """28 Oct: the odd things in the user's log: the fix's theory must explain every one (and contradict none)."""
+    try:
+        from . import fieldfacts
+        f = fieldfacts.facts(case)
+        return {'field_facts': f, 'field_facts_rule': fieldfacts.RULE} if f else {}
+    except Exception:
+        return {}
 
 
 def _looper_ctx(case):
@@ -158,6 +168,28 @@ def _lab_dump(case):
 BLIND_DENY = None        # set by the worker for a blind test: paths the proposer/reviewer must not read
 
 
+
+def _kmap(case, merged, cfg):
+    """28 Oct: the Kotlin map of this crash (callers at file:line, Kotlin as shipped) + the two-part rule for app-java."""
+    try:
+        from . import kotlinmap
+        txt, _ = kotlinmap.cached(cfg, case, merged)
+        return (txt + (kotlinmap.KOTLIN_RULE if kotlinmap.owner_of(merged) == 'app-java' else '') + '\n') if txt else ''
+    except Exception:
+        return ''
+
+
+def _kneeds(case, merged, cfg):
+    """True when the owner is app-java AND the Kotlin map found real call sites (so a Kotlin fix is possible)."""
+    try:
+        from . import kotlinmap
+        if kotlinmap.owner_of(merged) != 'app-java':
+            return False
+        txt, _ = kotlinmap.cached(cfg, case, merged)
+        return 'Call at ' in txt
+    except Exception:
+        return False
+
 def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
     prompt = ('# Task\nWrite the smallest safe fix for this crash. It was reproduced on the lab phone; the fix will be '
               'verified by re-running that reproduction and then reviewed. Read the code with Read/Grep first: the '
@@ -170,15 +202,24 @@ def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
               'IMPORTANT: the diff must apply to the CURRENT working copy (that is what gets built and tested). Line '
               'numbers in the analysis are from the shipped commit and may be shifted, so Read the file as it is now '
               'and copy context lines exactly from it.\n'
+              'CODE STYLE AND REUSE (team rule): write like the code around it: same naming, the file\'s own log macro/tag, '
+              'its error-handling pattern (e.g. VisualTimeLine throws std::runtime_error("ERROR | Class::method ...") that '
+              'MsgLooper turns into a cancelled message; Kotlin uses the coroutine/dispatcher patterns of that class), same '
+              'formatting. Before adding ANY helper, check, flag or list, Grep the repo and the Kotlin modules for one that '
+              'already exists (a resync/refresh function, a bounds-check helper, a cached count) and REUSE it; never duplicate '
+              'logic. Name what you reused in the Cause paragraph.\n'
+              'FIELD FACTS: the case has field_facts (odd lines of the user\'s own log). State which fact each part of your '
+              'theory explains; a fix whose theory contradicts a fact is wrong (see field_facts_rule).\n'
               'WHERE THE FIX GOES (team rule): fix the side that made the WRONG call. If the Kotlin/Java app calls the '
               'engine wrongly (wrong order, a call after destroy or before create, a wrong id/clip/time, a value the engine '
               'does not accept), the fix is in Kotlin/Java even though the crash is in C++. The Kotlin code is in the module '
               'folders under the repo root (android-video-editor-module/, java-common/, gallerypicker/, overlay_collage/...): '
               'Read/Grep them like the C++; diff paths include that folder (b/android-video-editor-module/src/main/java/...). '
               'A Kotlin fix may also add the matching engine guard (one C++ check + LOGE) as defence in depth, in the same '
-              'diff. Log a skipped Kotlin call with Log.w("NightShift", "<function>: <reason>, call skipped") so the lab '
+              'diff. Log a skipped Kotlin call with the file\'s own TAG (never a tool name), e.g. Log.w(TAG, "<function>: <reason>, ignored"), so the lab '
               'sees it ran.\n\n'
               f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:30000]}\n```\n{_lab_dump(case)}\n'
+              + _kmap(case, merged, cfg)
               + ('# Previous rounds (fix what they say)\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
               + (lessons or '')
               + (f'# Your angle for this candidate\n{angle}\n\n' if angle else '')
@@ -191,6 +232,8 @@ def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
     files = re.findall(r'^\+\+\+ b/(\S+)', diff, re.M)
     if not files or any(f.startswith(('tools/', '.git')) or f.endswith(('.gradle', '.kts', 'CMakeLists.txt')) for f in files):
         return None, ans, f'the diff must change app code only (got {files})'
+    if _kneeds(case, merged, cfg) and not any(f.endswith(('.kt', '.java')) for f in files):
+        return None, ans, 'owner is app-java but the diff has no Kotlin/Java change: add the fix at the Kotlin caller (the engine guard alone is incomplete)'
     try:                                             # looper-wait ANR: a fix that only touches the wait (JNI/MsgLooper)
         from . import author as _au                  # hides the slow work; it must change the work itself
         added = '\n'.join(l[1:] for l in diff.splitlines() if l.startswith('+') and not l.startswith('+++'))
@@ -366,7 +409,9 @@ def tournament(worker, ref, case, merged, cfg, history, n, lessons=''):
         prompt = ('# Pick the best crash fix. Read the code (Read/Grep) where needed. Judge: fixes the root cause below (not '
                   'only the symptom), no new crash path, thread safety, behaviour for users, smallest blast radius, and that '
                   'it logs when it skips work.\n\n'
-                  f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:15000]}\n```\n{diffs}\n'
+                  + ('When the root cause owner is app-java, the candidate that fixes the Kotlin caller (with the engine guard '
+                     'as a safety net) beats an engine-only guard.\n' if _kneeds(case, merged, cfg) else '')
+                  + f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:15000]}\n```\n{diffs}\n'
                   '# Answer: ONLY a ```json block: {"pick": "A|B|C", "why": "...", "ranking": ["A","B","C"]}')
         ans = llm.run('fix-review', prompt, cfg, OUT, f"{case['id']}.critic{n}", tools='Read,Grep,Glob', cwd=config.LAB,
                       timeout=900, deny=BLIND_DENY)
@@ -702,7 +747,12 @@ def review(case, merged, cfg, patch, n):
     diff = open(patch, errors='replace').read()[:30000]
     prompt = ('# Review this crash fix like a senior reviewer of this codebase. Read the changed files and their callers '
               '(Read/Grep). Check: does it fix the root cause below; thread safety and lock order; leaks/double frees; '
-              'behaviour changes for users; error paths; style of the surrounding code.\n\n'
+              'behaviour changes for users; error paths; style of the surrounding code.\n'
+              'Also (28 Oct, blocking when they fail): (a) FIELD FACTS: go through field_facts one by one: does the fix\'s '
+              'theory explain each? A fact the theory CONTRADICTS is a blocker (the fix targets the wrong place); an '
+              'unexplained fact that points at another caller or screen is major. '
+              '(b) REUSE: Grep for an existing helper the diff duplicates (refresh/resync, bounds check, cached count): '
+              'duplicated logic is major. (c) STYLE: naming, log tag/macro, error pattern and formatting of the file.\n\n'
               f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:20000]}\n```\n'
               f'# Diff\n```diff\n{diff}\n```\n'
               '# Answer: ONLY a ```json block: {"verdict": "approve" | "changes", "summary": "...", '
@@ -721,7 +771,12 @@ def handover(case, merged, cfg, patch, note, rev):
     diff = open(patch, errors='replace').read()[:20000]
     prompt = ('Write the hand-over for a verified crash fix. Plain, specific, no hype. Answer ONLY a ```json block: '
               '{"pr_title": "...", "pr_body": "markdown: problem, root cause, fix, how it was verified (lab runs), risks", '
-              '"jira_summary": "...", "jira_description": "...", "slack_message": "3-4 lines for the team channel"}\n\n'
+              '"jira_summary": "...", "jira_description": "...", "slack_message": "3-4 lines for the team channel", '
+              '"branch_slug": "2-4 lowercase words joined by - that name the area and the fix, e.g. audio-reverse-queue-lock"}\n'
+              'Write build numbers (e.g. 800054871) and case ids inside `backticks`: Bitbucket turns bare ones into broken commit links.\n'
+              'When the diff changes Kotlin/Java AND the engine (C++), the pr_body has a section "## Native side (extra guard)": the '
+              'cause is fixed in Kotlin; the engine change is an extra guard (defence in depth) so the native side stops crashing '
+              'if a wrong call ever reaches it again; it is not the root cause fix.\n\n'
               f'Case: {json.dumps(_ctx(case, merged), default=str)[:15000]}\nVerification: {note}\n'
               + (f'Repro video (mention it in the PR, Jira and Slack text): {case.get("reproVideo")}\n' if case.get('reproVideo') else '')
               + f'Review: {json.dumps(rev, default=str)[:4000]}\nDiff:\n{diff}')

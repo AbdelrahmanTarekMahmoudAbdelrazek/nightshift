@@ -167,6 +167,12 @@ def run(worker, ref, case, merged):
                 worker.db.collection('cases').document(key).set({'engineReplay': rp}, merge=True)
             except Exception:
                 pass
+            try:                                     # 28 Oct: the board's Engine repro panel (steps, script, lab stack)
+                from . import replaycard
+                rp = replaycard.save(worker.db, key, rp, ((merged or {}).get('fb') or {}).get('top') or [],
+                                     log=lambda t: worker.log(ref, t))
+            except Exception as e:
+                worker.log(ref, f'engine repro card skipped: {str(e)[:160]}')
             worker.log(ref, f'ENGINE REPLAY HIT in {rp["minutes"]} min: {nm}: {" | ".join(calls)[:200]} (a lead, not the proof: '
                             f'the real-tap repro comes next)')
             return rp

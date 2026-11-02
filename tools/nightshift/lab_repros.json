@@ -215,5 +215,77 @@
     "stat_secs": 77
    }
   ]
+ },
+ "621b5926412e07c4e8a50c9aaa51aaf0": {
+  "expect": [
+   "VisualMedia::get_duration",
+   "VisualTimeLine::get_media_starting_time"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "hybrid: tf_621b5926_1_b: HYBRID: Crashlytics VisualMedia::get_duration: engine emptied by direct detaches, strip keeps 2 thumbs, real thumb taps seek 0 then 1.",
+    "scenario": "tf_621b5926_1_b",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 2,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "396ec9c89dd7daa94df5060a72e329ce": {
+  "expect": [
+   "com.photo.myzesty.ui.activity.resource.ResourcePresenter.mapToCategoryApi",
+   "java.lang.NullPointerException"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "hybrid: tf_396ec9c8_1_b: HYBRID: (DIRECT LAUNCH) Crashlytics mapToCategoryApi NPE: start StickerResourcesActivity without the Category extra -> setDataCategory(null).",
+    "scenario": "tf_396ec9c8_1_b",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8~a30bf155": {
+  "expect": [
+   "VisualTimeLine::getAudioOverlayId",
+   "VideoEngine::set_overlay_volume"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "ns_ga30bf15_l4_1_a: Instances 06:32:21/06:32:52/06:33:57: overlay's saved file removed, draft reopened from My Projects (pause/resume blip in the load).",
+    "scenario": "ns_ga30bf15_l4_1_a",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8~e6a57918": {
+  "expect": [
+   "VisualMedia::append_remove_bg_track_mask",
+   "RemoveBgMaskTrackBuilder::run"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "hybrid: tf_ge6a5791_3_b: HYBRID: Crashlytics ge6a5791 - engine-started builds on B, real long-press drags of B across rows -> SIGSEGV.",
+    "scenario": "tf_ge6a5791_3_b",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 2,
+    "stat_hits": 2
+   }
+  ]
  }
 }

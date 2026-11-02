@@ -315,8 +315,10 @@ def ui_fingerprint():
     UI modules (path + size + mtime). C++ files, hooks and Kotlin logic do not change the map."""
     import hashlib
     h = hashlib.sha1()
-    for mod in ('app', 'android-video-editor-module', 'java-common', 'android/java-common', 'gallerypicker', 'crop',
-                'overlay_collage', 'videotrimmerlib', 'colorpicker'):
+    mods = ('app', 'android-video-editor-module', 'java-common', 'gallerypicker', 'crop', 'overlay_collage',
+            'videotrimmerlib', 'colorpicker', 'image_editor_java', 'android-ai-tools-module', 'puzzle', 'imageeditor')
+    h.update(str(getattr(config, 'LAB_MODE', 'debug')).encode())       # the full app and the lab app never share a map
+    for mod in [m for m in mods] + ['android/' + m for m in mods]:     # the full app keeps its modules under android/
         base = os.path.join(config.LAB, mod, 'src', 'main')
         if not os.path.isdir(base):
             continue
@@ -334,6 +336,11 @@ def screen_map(worker, ref, limit=9000):
     """The real ids per screen on the lab phone. Built by the map_screens walk once per build (about 2 min) and
     grown by every run after that."""
     p = os.path.join(config.REPO, 'tools', 'stress', 'screen_map.json')
+    # 29 Oct: the full app and the lab app have different screens: one map each (a full-app run reused the lab
+    # app's map and its author guessed screens)
+    if getattr(config, 'LAB_MODE', 'debug') == 'full':
+        p = os.path.join(config.REPO, 'tools', 'stress', 'screen_map.full.json')
+    os.environ['ZESTY_SCREEN_MAP'] = p                 # every scenario run of this job merges into the same map
     stamp = os.path.join(config.REPO, 'tools', 'nightshift', 'out', 'last_install')
     try:
         small = len(json.load(open(p))) < 3            # an interrupted walk: map again
@@ -415,7 +422,7 @@ def _ctx(case, merged):
     if inst_all:
         ctx['every_field_instance'] = inst_all
     else:
-        ctx['breadcrumbs_tail'] = (case.get('breadcrumbs') or [])[-40:]
+        ctx['breadcrumbs_tail'] = (case.get('breadcrumbs') or [])[:80]   # newest first: the last 80 before the crash
     if looper_wait_frames(case):
         bw = busy_window(case)
         if bw:
@@ -664,7 +671,33 @@ def lab_facts():
     only for full-app runs, the rest only for the video_gles3jni debug build. A full-app fact steered a debug-build run
     into a setup guard ("not the Play install") on every attempt."""
     full = getattr(config, 'LAB_MODE', 'debug') == 'full'
-    return [f[11:] if f.startswith('[full app] ') else f for f in _all_facts() if f.startswith('[full app] ') == full]
+    out = [f[11:] if f.startswith('[full app] ') else f for f in _all_facts() if f.startswith('[full app] ') == full]
+    # 1 Nov: a fact 'Lab fixture "ga30bf15" ... open it with ed.open_fixture("ga30bf15")' outlived its fixture (rebuilt
+    # as ga30bf15_old_*, draft gone after a reinstall): every tap script of another crash then opened it and failed in 8 s
+    try:
+        live = {k for k, v in json.load(open(FIXTURES)).items() if isinstance(v, dict) and v and '_old_' not in k}
+    except Exception:
+        live = None
+    if live is not None:
+        out = [f for f in out if not re.search(r'open_fixture\("([^"]+)"\)', f)
+               or re.search(r'open_fixture\("([^"]+)"\)', f).group(1) in live]
+    return out
+
+
+def live_fixtures(serial=None):
+    """1 Nov: {key: what} of the lab fixtures that exist now (not '_old_' copies), for this device when given."""
+    try:
+        allfx = json.load(open(FIXTURES))
+    except Exception:
+        return {}
+    out = {}
+    for k, v in allfx.items():
+        if '_old_' in k or k.startswith('_') or not isinstance(v, dict):
+            continue
+        d = v.get(serial) if serial else next(iter(v.values()), None)
+        if isinstance(d, dict) and d.get('id'):
+            out[k] = str(d.get('what') or '')[:200]
+    return out
 
 
 def _add_fact(fact):

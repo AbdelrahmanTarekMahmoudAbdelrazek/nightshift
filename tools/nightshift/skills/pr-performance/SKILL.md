@@ -30,3 +30,9 @@ ONLY a ```json block:
 "evidence": "short code quote"}]}
 Severity: blocker = will crash/ANR/corrupt data/leak in normal use; major = likely bug or real cost; minor = small risk;
 suggestion = better way, optional. An empty findings list is a fine answer.
+
+## Per-item work on a hot thread (29 Oct)
+Work that runs once per INCOMING ITEM (each mask, frame, message, packet, progress tick) on the render, UI or engine
+thread is per-frame cost, even when the code or a comment says "once per bake/setup". Find what calls the expensive
+function and how often (Grep its callers): if a stream can call it many times per second, estimate the work per call
+(allocations, full-image passes such as distance transforms, uploads) and report it as a finding (unmeasured).

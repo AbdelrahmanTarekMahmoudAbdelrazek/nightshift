@@ -3,7 +3,7 @@ package com.myzesty.lab
 // DEBUG BUILDS ONLY (src/debug). Night Shift lab control: setup shortcuts so lab runs skip slow UI navigation.
 // Every command runs the same app code a user's tap runs (same Activity, same extras, same picker result); the
 // crash trigger itself is always real input from the lab. Send with:
-//   adb shell am broadcast -a com.myzesty.LAB -p com.myzesty --es cmd <ping|open_draft|open_draft_id|drafts|open_slideshow|slideshow_add> [--ei n 4] [--ei index 0] [--es id <draft id>]
+//   adb shell am broadcast -a com.myzesty.LAB -p com.myzesty --es cmd <ping|open_draft|open_draft_id|drafts|open_slideshow|open_quickcut|slideshow_add> [--ei n 4] [--ei index 0] [--es id <draft id>]
 //   ENGINE REPLAY (Night Shift turbo): --es cmd jni --es calls "destroyPlayer();createPlayer();getMediaStartingTime(0,1)"
 //   [--es thread bg|main] [--ei repeat 1]: calls Player's static engine methods directly, in order (sleep(ms) waits).
 //   Only primitive / String arguments. Each call logs "LAB step jni ..."; the end logs "LAB ok jni done ...".
@@ -126,6 +126,7 @@ class LabControlReceiver : BroadcastReceiver() {
                     "open_draft_id" -> openDraftId(intent.getStringExtra("id") ?: "")
                     "drafts" -> listDrafts()
                     "open_slideshow" -> openSlideshow(n)
+                    "open_quickcut" -> openSlideshow(n, "open_quickcut", slideShow = false)
                     "slideshow_add" -> deliverMedia(cmd, n, pickerMustBeOpen = false)
                     "jni" -> engineCalls(intent.getStringExtra("calls") ?: "", intent.getStringExtra("thread") ?: "bg",
                                          intent.getIntExtra("repeat", 1))
@@ -187,9 +188,12 @@ class LabControlReceiver : BroadcastReceiver() {
 
     /** Same as Home -> SlideShow -> pick the n newest clips -> Done: start QuickCutActivity(isSlideShow), then hand
      *  its picker the result the picker itself returns on Done. */
-    private fun openSlideshow(n: Int) {
-        val a = LabControl.topActivity() ?: return fail("open_slideshow", "no activity")
-        a.startActivity(Intent(a, QuickCutActivity::class.java).putExtra("isSlideShow", true))
+    private fun openSlideshow(n: Int, cmd: String = "open_slideshow", slideShow: Boolean = true) {
+        val a = LabControl.topActivity() ?: return fail(cmd, "no activity")
+        // Quick Cut is the same activity without isSlideShow (MainActivity btnQuickCut): template page -> Edit -> Advanced Edit
+        val i = Intent(a, QuickCutActivity::class.java)
+        if (slideShow) i.putExtra("isSlideShow", true)
+        a.startActivity(i)
         var tries = 0
         fun poll() {
             val t = LabControl.topActivity()
@@ -197,11 +201,11 @@ class LabControlReceiver : BroadcastReceiver() {
             // wait until the picker's grid shows media: closing it while its paging load still runs makes
             // AllMediaInteractor call requireActivity() on a detached fragment (an app crash the lab caused itself)
             if (t is QuickCutActivity && picker != null && picker.isResumed && gridLoaded(picker.view)) {
-                main.postDelayed({ deliverMedia("open_slideshow", n, pickerMustBeOpen = true) }, 600)
+                main.postDelayed({ deliverMedia(cmd, n, pickerMustBeOpen = true) }, 600)
             } else if (++tries < 75) {
                 main.postDelayed({ poll() }, 200)
             } else {
-                fail("open_slideshow", "picker did not open in 15 s (top=${t?.javaClass?.simpleName})")
+                fail(cmd, "picker did not open in 15 s (top=${t?.javaClass?.simpleName})")
             }
         }
         main.postDelayed({ poll() }, 200)

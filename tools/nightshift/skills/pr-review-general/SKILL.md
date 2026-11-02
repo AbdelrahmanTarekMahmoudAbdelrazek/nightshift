@@ -29,3 +29,14 @@ ONLY a ```json block:
 "evidence": "short code quote"}]}
 Severity: blocker = will crash/ANR/corrupt data/leak in normal use; major = likely bug or real cost; minor = small risk;
 suggestion = better way, optional. An empty findings list is a fine answer.
+
+## Bad input and empty results (29 Oct)
+For every call in the changed code that can return nothing (a null frame, end of stream, an empty result, a failed
+decode or inference, a missing file or key): follow what the code does NEXT. Is a previous value (the last frame, the
+last texture, a cached result, a default) silently reused and treated as new, stored under a new key/time, or counted
+as success? That is a finding with its scenario (e.g. a stale frame processed again and saved as a new one).
+
+## Hard-coded indexes (29 Oct)
+A literal index (0, 1, "first") where the code elsewhere has several of the same thing (renderers, layers, tracks,
+media, threads, ABIs) must be justified from the code: show that only one exists on that path, or it is a finding
+(e.g. a value always sent to renderer 0 while a transition uses renderer 1).

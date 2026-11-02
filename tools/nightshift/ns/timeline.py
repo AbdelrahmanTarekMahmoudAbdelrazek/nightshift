@@ -60,7 +60,7 @@ def signature(frames):
     return 'unknown'
 
 
-def event_timeline(logs, max_chars=7000, window=20.0):
+def event_timeline(logs, max_chars=7000, window=20.0, keep=120):
     """logs: 'HH:MM:SS.mmm message' lines (any order). Returns chronological compressed lines + facts."""
     rows = []
     for l in reversed(list(logs or [])):            # input is newest first; keep true order for equal timestamps
@@ -93,9 +93,9 @@ def event_timeline(logs, max_chars=7000, window=20.0):
     }
     text = '\n'.join(out)
     if len(text) > max_chars:                       # keep the end (the crash) whole; summarise the older part by tag
-        older = Counter(l.split()[1] for l in out[:-120] if len(l.split()) > 1)
-        text = (f'[{len(out) - 120} older compressed lines: ' + ', '.join(f'{k} {v}' for k, v in older.most_common()) + ']\n'
-                + '\n'.join(out[-120:]))[-max_chars:]
+        older = Counter(l.split()[1] for l in out[:-keep] if len(l.split()) > 1)
+        text = (f'[{max(0, len(out) - keep)} older compressed lines: ' + ', '.join(f'{k} {v}' for k, v in older.most_common()) + ']\n'
+                + '\n'.join(out[-keep:]))[-max_chars:]
     return text, facts, final
 
 
@@ -122,8 +122,9 @@ def evidence(events, group=None, max_events=20):
     mine = [e for e in events if not group or signature(e.get('frames')) == group] or events
     others = {g: c for g, c in groups.items() if g != (group or signature(mine[0].get('frames')) if mine else None)}
     per = []
-    for e in mine[:max_events]:
-        text, facts, _ = event_timeline(e.get('logs'))
+    few = len(mine) <= 3                         # 28 Oct: one or few events: give the WHOLE story (the steps that made the bad
+    for e in mine[:max_events]:                  # state happened 20-30 s before the crash and were cut at 7000 chars)
+        text, facts, _ = event_timeline(e.get('logs'), max_chars=26000 if few else 7000, keep=260 if few else 120)
         per.append({'time': e.get('time'), 'version': e.get('version'), 'device': e.get('device'), 'os': e.get('os'),
                     'process_state': e.get('process_state'), 'custom_keys': e.get('keys') or {}, 'facts': facts,
                     'timeline_oldest_first': text})

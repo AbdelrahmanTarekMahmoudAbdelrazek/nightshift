@@ -1006,6 +1006,44 @@ def human_steps(rows):
     return out
 
 
+_APP_EVENTS = [
+    (re.compile(r'MsgStartNativeRemoveBgBuild: layer (\d+) media_id (\d+)'), lambda m: f'Remove BG build starts on the overlay on row {m[1]} (clip {m[2]})'),
+    (re.compile(r'MsgChangeVisualMediaLayer: media_id (\d+) old_layer (\d+) new_layer (\d+)'), lambda m: f'Overlay dragged from row {m[2]} to row {m[3]}'),
+    (re.compile(r'MsgDeleteMedia: media_layer (\d+) media_id (\d+)'), lambda m: f'Clip {m[2]} on row {m[1]} deleted'),
+    (re.compile(r'MsgSplit\w*:?\s*(?:media_layer|layer)?\s*(\d+)?'), lambda m: 'Clip split'),
+    (re.compile(r'MsgDuplicate\w*'), lambda m: 'Clip duplicated'),
+    (re.compile(r'MsgRestoreMedia'), lambda m: 'Undo: clip restored'),
+    (re.compile(r'MsgAddVideo: media_layer ([1-9]\d*)'), lambda m: f'Video overlay on row {m[1]} ready (added or loaded)'),
+    (re.compile(r'Event: test_ve_draft_project_complete'), lambda m: 'Project finished loading'),
+    (re.compile(r'Event: test_(ve_[a-z0-9_]+) \| type: clicked'), lambda m: 'Tap: ' + m[1].replace('ve_', '').replace('_btn', '').replace('_', ' ')),
+]
+
+
+def app_events(d):
+    """1 Nov: what the APP did during the run (engine messages + tap events from logcat), so the video's step list
+    shows 'Overlay dragged from row 2 to row 3', not only the recipe's own coarse steps."""
+    out, year = [], time.strftime('%Y')
+    try:
+        lines = open(os.path.join(d, 'logcat.txt'), errors='replace').read().splitlines()
+    except OSError:
+        return out
+    for ln in lines:
+        m = re.match(r'(\d\d-\d\d \d\d:\d\d:\d\d)\.(\d+)', ln)
+        if not m or 'FA-SVC' in ln:
+            continue
+        for rx, txt in _APP_EVENTS:
+            mm = rx.search(ln)
+            if mm:
+                t = time.mktime(time.strptime(f'{year}-{m.group(1)}', '%Y-%m-%d %H:%M:%S')) + int(m.group(2)[:3]) / 1000
+                out.append((t, txt(mm)))
+                break
+    ded = []
+    for t, x in out:                                  # one line per action burst
+        if not ded or ded[-1][1] != x or t - ded[-1][0] > 2:
+            ded.append((t, x))
+    return ded
+
+
 def _video_subtitles(d, vids):
     """Each step of steps.log as a subtitle on the video (repro_video_N.srt next to it), so the video shows what the
     recipe was doing at each moment. One file 'repro_video.mp4' when ffmpeg can join the segments."""
@@ -1020,6 +1058,10 @@ def _video_subtitles(d, vids):
             if h:
                 steps.append((t, h))
     steps = human_steps(steps)
+    try:
+        steps = sorted(steps + app_events(d), key=lambda x: x[0])
+    except Exception:
+        pass
     def ts(x):
         x = max(0.0, x)
         return f'{int(x // 3600):02d}:{int(x % 3600 // 60):02d}:{int(x % 60):02d},{int(x * 1000 % 1000):03d}'

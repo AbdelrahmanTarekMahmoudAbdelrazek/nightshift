@@ -5,6 +5,7 @@ Step 2 swaps the page's data source for Firestore; the page shape does not chang
 """
 import datetime as dt
 import glob
+import re
 import json
 import os
 
@@ -80,6 +81,25 @@ def write(cfg: dict, live: bool = False) -> str:
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, 'index.html')
     open(out, 'w', encoding='utf-8').write(page)
+    # 30 Oct: previews of the new look, same code and data: /next.html (board), card2 / audio2 (new detail pages),
+    # pr2 (the PR page in the new colors). board/fresh.html holds the colors (palette C) shared by all of them.
+    def _rd(nm):
+        p_ = os.path.join(HERE, 'board', nm)
+        return open(p_, encoding='utf-8').read() if os.path.exists(p_) else ''
+    fresh, skin = _rd('fresh.html'), _rd('skin_workspace.html')
+    def _fb_page(src):
+        return src.replace('/*__NS_FIREBASE__*/null', json.dumps(_fb(cfg))) if live else src
+    def _wr(nm, src):
+        if src and '</body>' in src:
+            open(os.path.join(out_dir, nm), 'w', encoding='utf-8').write(src.replace('</body>', fresh + '\n</body>', 1))
+    if skin:
+        _wr('next.html', page.replace('</body>', skin + '\n</body>', 1))
+        # 1 Nov: the new look IS the board now ("/"); the old page stays at /classic.html
+        open(os.path.join(out_dir, 'classic.html'), 'w', encoding='utf-8').write(page)
+        _wr('index.html', page.replace('</body>', skin + '\n</body>', 1))
+    for nm in ('card2.html', 'audio2.html'):
+        _wr(nm, _fb_page(_rd(nm)))
+    _wr('pr2.html', _fb_page(_rd('pr.html')))
     prp = os.path.join(HERE, 'board', 'pr.html')         # the six-page PR review page (reads prs/<id> from Firestore)
     if os.path.exists(prp):
         pr_page = open(prp, encoding='utf-8').read()
@@ -104,4 +124,13 @@ def write(cfg: dict, live: bool = False) -> str:
         if live:
             cd_page = cd_page.replace('/*__NS_FIREBASE__*/null', json.dumps(_fb(cfg)))
         open(os.path.join(out_dir, 'card.html'), 'w', encoding='utf-8').write(cd_page)
+    # 1 Nov: every page follows the board's light / dark choice (the moon button, saved as ns.theme), not only the OS
+    th = re.search(r"<script>\(function\(\)\{var t=null;try\{t=localStorage\.getItem\('ns\.theme'\).*?</script>", page)
+    if th:
+        for fn_ in os.listdir(out_dir):
+            fp_ = os.path.join(out_dir, fn_)
+            if fn_.endswith('.html') and fn_ not in ('index.html', 'next.html'):
+                src_ = open(fp_, encoding='utf-8').read()
+                if "getItem('ns.theme')" not in src_ and '<head>' in src_:
+                    open(fp_, 'w', encoding='utf-8').write(src_.replace('<head>', '<head>\n' + th.group(0), 1))
     return out

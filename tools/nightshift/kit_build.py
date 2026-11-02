@@ -12,8 +12,8 @@ import argparse, json, os, re, shutil, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
-NS_DIRS = ['ns', 'audio', 'cards', 'skills', 'claude-plugin', 'templates', 'knowledge']
-NS_FILES = ['connect.py', 'kit_update.py', 'sentinel.py', 'shipit.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
+NS_DIRS = ['ns', 'audio', 'cards', 'skills', 'claude-plugin', 'templates', 'knowledge', 'hooklib']
+NS_FILES = ['connect.py', 'kit_update.py', 'sentinel.py', 'shipit.py', 'engineship.py', 'blindreset.py', 'symbols_rebuild.py', 'turbo_rollback.py', 'plugsetup.py', 'envcheck.py',
             'restartworker.py', 'workerlog.py', 'lab_repros.json', 'SECURITY.md', 'kit_build.py', 'joinpack.py']
 BOARD_FILES = ['index.html', 'pr.html', 'card.html', 'audio.html', 'connect.html', 'firestore.rules', 'firestore.indexes.json', 'README.md']
 STRESS_KEEP = re.compile(r'^(zesty\.py|scenarios\.py|anrsan_findings\.py|repro_slideshow_recreate\.py|screen_map\.json|README\.md)$')

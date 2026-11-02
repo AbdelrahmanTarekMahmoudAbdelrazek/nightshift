@@ -15,7 +15,9 @@ import subprocess
 
 from . import config, symbolize as sym
 
-FRAME = re.compile(r'#(\d+)\s+pc\s+([0-9a-f]+)\s+(\S+?)(?:\s+\((.+?)\))?(?:\s+\(BuildId:\s*([0-9a-f]+)\))?\s*$')
+FRAME = re.compile(r'#(\d+)\s+pc\s+([0-9a-f]+)\s+(\S+?)(?:\s+\(offset\s+0x[0-9a-f]+\))?(?:\s+\((.+?)\))?(?:\s+\(BuildId:\s*([0-9a-f]+)\))?\s*$')
+# 1 Nov: frames inside an APK carry '(offset 0x23c1c000)' before the symbol; the old pattern took 'offset 0x...) (Func'
+# as the function name, so no lab frame matched the field (0/5 on 2bc43cd6~e6a57918)
 
 
 def parse(run_dir):
@@ -65,7 +67,12 @@ def find_lib(bid, lib='libMYJNILIB26.so'):
     """The unstripped library of the build that ran on the phone (local build outputs), matched by BuildId."""
     pats = [f'app/build/intermediates/cxx/*/*/obj/arm64-v8a/{lib}',
             f'app/build/intermediates/merged_native_libs/*/*/out/lib/arm64-v8a/{lib}']
-    cands = sorted({p for pat in pats for p in glob.glob(os.path.join(config.REPO, pat))}, key=os.path.getmtime, reverse=True)
+    # 1 Nov: lab builds run in the lab folder (~/.nightshift_lab/<branch>, config.LAB), not the working copy: looking only in
+    # config.REPO found no .so, so lab frames had no file:line while the field ones had
+    roots = [config.REPO, getattr(config, 'LAB', config.REPO)] + glob.glob(os.path.expanduser('~/.nightshift_lab/*')) \
+        + glob.glob(os.path.expanduser('~/.nightshift_audio/*'))
+    cands = sorted({p for r in dict.fromkeys(roots) for pat in pats for p in glob.glob(os.path.join(r, pat))},
+                   key=os.path.getmtime, reverse=True)
     for p in cands:
         if build_id(p) == bid:
             return p

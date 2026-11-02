@@ -40,12 +40,28 @@ def build(issue_ref, cfg, use_llm=False):
     card = card if card_fp else iid
     raw = os.path.join(OUT, 'raw', iid)
     iss, versions, vrep, events, devrep, osrep = crashlytics.pull(app_id, iid, releases, days, n, raw)
+    if not events and releases:
+        # 29 Oct: a new release moved the scope (1.26.0 live, overlap 1.25.2) and this crash only happened on an older
+        # build: a scoped pull finds 0 events and the case would be rebuilt with NO stack, wiping the field data it had.
+        # A crash someone asked for by id is still that crash: pull its own versions instead (same days window).
+        iss2, versions2, vrep2, events2, devrep2, osrep2 = crashlytics.pull(app_id, iid, None, days, n, raw)
+        if events2:
+            iss, versions, vrep, events, devrep, osrep = iss2, versions2, vrep2, events2, devrep2, osrep2
+            print(f'case {iid}: no events in the current release scope ({", ".join(releases)[:80]}); '
+                  f'used its own versions ({", ".join(versions2)[:80]})')
 
     # name the frames we can (symbol store per versionCode), then split the issue into its real distinct crashes
     symbolized = 0
     for e in events:
         _, did = symbolize.symbolize_frames(e['frames'], e.get('version_code'), native_lib, (e.get('version') or '').split(' ')[0])
         symbolized += did and any(f.get('func') for f in e['frames'] if f.get('lib') == native_lib)
+        _il = str((cfg.get('image_app') or {}).get('native_lib') or '')        # 29 Oct: image app frames get names too
+        if _il and any(f.get('lib') == _il for f in e['frames']):
+            try:
+                symbolize.symbolize_frames(e['frames'], e.get('version_code'), _il, (e.get('version') or '').split(' ')[0],
+                                           relay_ok=False)
+            except Exception:
+                pass
     def sig(e):
         eng = [f for f in e['frames'] if f.get('lib') == native_lib][:3]
         return ' | '.join((f['func'].split(' + ')[0] if f.get('func') else f"0x{int(f.get('address') or 0):x}") for f in eng) or (e.get('signal') or '?')
@@ -53,6 +69,18 @@ def build(issue_ref, cfg, use_llm=False):
     if not groups.load(iid).get('groups'):          # never synced since stack groups exist: register now (local copy)
         groups.assign(iid, all_events, native_lib=native_lib)
     events, scope = groups.card_events(card, all_events, native_lib)
+    if card_fp and not events:
+        # 1 Nov: this card's events are not among the newest ones the pull read: page through the issue (all builds)
+        try:
+            extra = crashlytics.more_events(app_id, iid, days, 300, raw)
+            for e in extra:
+                symbolize.symbolize_frames(e['frames'], e.get('version_code'), native_lib, (e.get('version') or '').split(' ')[0])
+            mine, scope2 = groups.card_events(card, extra, native_lib)
+            print(f'case {card}: 0 of its events among the newest {len(all_events)}; paged {len(extra)} events, found {len(mine)}')
+            if mine:
+                events, scope, all_events = mine, scope2, extra
+        except Exception as ex:
+            print(f'case {card}: paging the issue\'s events failed: {str(ex)[:160]}')
     split_card = len(groups.load(iid).get('groups') or []) > 1
     clusters = {}
     for e in events:
@@ -104,6 +132,7 @@ def build(issue_ref, cfg, use_llm=False):
         reasons.append(f"builds {', '.join(assumed)} symbolized with the 1.25.1 library of another build (same version name); add their own APK to confirm")
     if missing:
         reasons.append(f"no symbols in the store for build(s) {', '.join(missing)}: add the release libMYJNILIB26.so with `sentinel.py symbols add <aab|apk|so> --version-code <code>`")
+    # 28 Oct: 'breadcrumbs' keeps the FULL field log (400 lines; it was 25, so the steps before the bad state were lost)
     rec = {
         'source_ref': src_ref or {}, 'issue': card, 'id': card, 'crashlytics_issue': iid, 'card_title': groups.card_title(card) if split_card else '',
         'issue_events': issue_events, 'kind': _kind(iss), 'title': iss.get('title') or iss.get('issueTitle'),
@@ -119,7 +148,7 @@ def build(issue_ref, cfg, use_llm=False):
         'verdict': verdict, 'confidence': confidence, 'reasons': reasons,
         'field_fingerprint': '\n'.join(f['func'].split(' + ')[0] for f in frames if f.get('lib') == native_lib and f.get('func'))[:2000],
         'sessions_hashed': len(events), 'csv': '', 'generated': dt.date.today().isoformat(), 'source': 'crashlytics-api (read-only, Firebase CLI login)',
-        'frames': frames, 'breadcrumbs': sample.get('logs', [])[:25], 'sample_event': {k: sample.get(k) for k in ('time', 'version', 'device', 'os', 'process_state', 'signal', 'subtitle')},
+        'frames': frames, 'breadcrumbs': sample.get('logs', [])[:400], 'sample_event': {k: sample.get(k) for k in ('time', 'version', 'device', 'os', 'process_state', 'signal', 'subtitle')},
         'stack_groups': [{'signature': g.get('stack3') or g['key'], 'key': g['key'], 'card': g['card'], 'mine': g['card'] == card, 'newStack': g.get('newStack', False),
                           'events': len(v), 'versions': sorted({x.get('version') or '?' for x in v}), 'devices': sorted({x.get('device') or '?' for x in v})}
                          for g in (groups.load(iid).get('groups') or []) for v in [[e for e in all_events if groups.key_of(e['frames'], native_lib) == g['key']]]]

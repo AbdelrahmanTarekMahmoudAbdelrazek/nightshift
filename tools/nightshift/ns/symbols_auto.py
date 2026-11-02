@@ -97,6 +97,9 @@ def ensure(cfg, codes, version_name=None, log=print):
     log(f'symbols: {len(have)} builds already stored, {len(added)} fetched, {len(failed)} missing')
     try:                                             # full debug symbols (.aab / native-debug-symbols.zip in Downloads)
         symbolize.auto_import_debug(have + added, log=log)
+        _il = str(((cfg or {}).get('image_app') or {}).get('native_lib') or '')   # 29 Oct: the image app's native lib too
+        if _il:
+            symbolize.auto_import_debug(have + added, lib=_il, log=log)
     except Exception as e:
         log(f'symbols: debug-symbol import skipped: {str(e)[:150]}')
     try:                                             # no .aab: the engine library the app repo committed for the release

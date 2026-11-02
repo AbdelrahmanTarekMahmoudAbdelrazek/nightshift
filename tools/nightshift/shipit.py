@@ -339,7 +339,7 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
     if not re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', base):
         fail(f'bad base branch {base!r}')
     kind = 'ANR' if case.get('kind') == 'ANR' else 'Crash'
-    branch = 'nightshift/' + kind.lower() + '-' + cid.replace('~', '-')[:41]
+    branch = _free_branch('nightshift/' + kind.lower() + '-' + _slug(fx, case), cid)
     title = str((fx.get('handover') or {}).get('pr_title') or f"Fix {kind.lower()}: {case.get('title', '')} ({case.get('subtitle', '')})").strip()[:200]
     if payload and str(payload.get('summary') or '').strip():
         title = str(payload['summary']).strip()[:200]
@@ -375,6 +375,7 @@ def crash_pr(cid, cfg, base=None, dry=False, payload=None):
     desc = pr_description(cid, case, fx, cfg, files_all)
     if payload and str(payload.get('description') or '').strip():   # the text the developer saw (and maybe edited)
         desc = str(payload['description']).strip()[:30000]
+    desc = bb_safe(desc, cid, board_url(cfg))
     if already:
         desc += '\n\n_Part of the fix is already on ' + ', '.join(f"{a['repo']} {a['base']}" for a in already) + '._'
     for d in done:
@@ -402,11 +403,22 @@ def pr_description(cid, case, fx, cfg, files):
     ho = fx.get('handover') or {}
     vid = case.get('reproVideoUrl') or ''
     rows = [f"## {kind}: {case.get('title', '')}", '',
-            f"**What users hit:** {case.get('subtitle') or case.get('title', '')} — {case.get('events', '?')} events, "
-            f"{case.get('real_users', '?')} users, versions {', '.join(case.get('versions') or []) or '?'}.", '']
+            f"**What users hit:** {case.get('subtitle') or case.get('title', '')} — {_n(case.get('events'), 'event')}, "
+            f"{_n(case.get('real_users'), 'user')}, builds {_hit_builds(case) or '?'}.", '']
+    tap = 'verified on the phone' if case.get('fixVerified') else (
+        f"not achieved yet ({len(case.get('authorAttempts') or []) or 'several'} lab attempts); the engine replay is the proof"
+        if re.search(r'not-reproduced|repro-failed', str(case.get('status') or '')) else 'still running')
     if ho.get('pr_body'):
-        rows += [str(ho['pr_body']).strip(), '']
-    rows += ['### Proof', f"- **Verified on the lab phone:** {str(fx.get('note') or '').strip()}"]
+        rows += [re.sub(r'(is )?still running or pending', lambda m_: (m_.group(1) or '') + tap, str(ho['pr_body']).strip()), '']
+    nn = native_note(fx.get('patch') or '', _owner(cid), ho.get('pr_body') or '')
+    if nn:
+        rows += [nn, '']
+    if case.get('engineVerified') and not case.get('fixVerified'):
+        reps = (re.search(r'(\d+) replays', str((case.get('earlyFix') or {}).get('note') or '')) or [None, None])[1]
+        rows += ['### Proof', f"- **Engine replay:** crash reproduced with every field frame on the unfixed build; clean with the fix"
+                 + (f" ({reps} replays)" if reps else '') + f". Real-tap repro: {tap}."]
+    else:
+        rows += ['### Proof', f"- **Verified on the lab phone:** {str(fx.get('note') or '').strip()}"]
     if vid:
         rows.append(f"- **Repro video (before the fix):** {b}{vid}")
     rows += [f"- **Night Shift case:** {b}/#problems/m-{cid}"]
@@ -418,6 +430,102 @@ def pr_description(cid, case, fx, cfg, files):
     rows += ['', '### Files', *[f"- `{f}`" for f in files], '',
              '_Draft opened by Night Shift from a fix verified A/B on the lab phone. A person reviews and merges it._']
     return '\n'.join(rows)[:30000]
+
+
+# ------------------------------------------------------------------ PR text / branch hygiene (28 Oct)
+_STOP = set('fix fixes fixed crash crashes anr sigsegv sigabrt sigbus native in on at of the a an when while during '
+            'and or to for with from by after before is are runs run'.split())
+
+
+def _slug(fx, case):
+    """Branch words that name the problem: the hand-over's branch_slug (e.g. audio-reverse-queue-lock), else the
+    meaningful words of the PR title (max 4)."""
+    ho = fx.get('handover') or {}
+    raw = str(ho.get('branch_slug') or '').strip().lower()
+    if not raw:
+        title = str(ho.get('pr_title') or case.get('title') or 'fix')
+        words = [w for w in re.split(r'[^a-z0-9]+', re.sub(r'([a-z])([A-Z])', r'\1-\2', title).lower()) if w and w not in _STOP]
+        raw = '-'.join(words[:4])
+    raw = re.sub(r'[^a-z0-9-]+', '-', raw).strip('-')
+    return (raw[:40].rstrip('-') or 'fix')
+
+
+NATIVE_NOTE = ('## Native side (extra guard)\n'
+               'The cause is the Kotlin call and it is fixed in Kotlin above. The engine change is an **extra guard** '
+               '(defence in depth): if a wrong call ever reaches the engine again, it is skipped and logged instead of '
+               'crashing the app. It is not the root cause fix.')
+
+
+def native_note(patch, owner, body):
+    files = re.findall(r'(?m)^\+\+\+ b/(\S+)', patch or '')
+    both = any(f.endswith(('.kt', '.java')) for f in files) and any(f.endswith(('.cpp', '.h', '.hpp', '.cc')) for f in files)
+    return NATIVE_NOTE if both and owner == 'app-java' and 'extra guard' not in (body or '').lower() else ''
+
+
+def _free_branch(want, cid):
+    """The readable branch name (no case id in it). If another case already uses it (its open PR or the branch's
+    last commit does not name this case), -2, -3 ... is added, so one case never updates another case's PR."""
+    cand = want
+    for i in range(2, 10):
+        r = subprocess.run(['git', 'ls-remote', '--heads', 'origin', cand], cwd=REPO, capture_output=True, text=True, timeout=60)
+        sha = (r.stdout.split() or [''])[0]
+        if not sha:
+            return cand                                   # free
+        subprocess.run(['git', 'fetch', '--no-tags', 'origin', f'+refs/heads/{cand}:refs/nightshift/check'], cwd=REPO,
+                       capture_output=True, timeout=120)
+        msg = subprocess.run(['git', 'log', '-1', '--format=%B', 'refs/nightshift/check'], cwd=REPO,
+                             capture_output=True, text=True).stdout
+        if cid in msg:
+            return cand                                   # this case's own branch: update it
+        cand = f'{want}-{i}'
+    return f'{want}-{cid[:8]}'
+
+
+def _owner(cid):
+    try:
+        from ns import fire
+        db = fire.client()
+        for p_ in ('m-', 'm-play-'):
+            d = db.collection('merged').document(p_ + cid).get().to_dict() or {}
+            if d:
+                return str((d.get('analysis') or {}).get('owner') or '')
+    except Exception:
+        pass
+    return ''
+
+
+def _n(v, word):
+    return f"{v if v is not None else '?'} {word}{'' if v == 1 else 's'}"
+
+
+def _hit_builds(case):
+    """Only the builds that really have events of this crash, e.g. 1.25.1 (800054871)."""
+    vs = case.get('sync_versions') or case.get('versions') or {}
+    if isinstance(vs, dict):
+        hit = [k for k, v in vs.items() if (v or 0) > 0]
+    else:
+        hit = list(vs)
+    return ', '.join(f'`{v}`' for v in hit)
+
+
+def bb_safe(text, cid, board):
+    """Bitbucket turns any 7-40 character hex/number word into a commit link, so build numbers (800054871) and case
+    ids became broken /commits/ links. Outside URLs, markdown links and code spans: the case id links to the Night
+    Shift case, other such words go in backticks."""
+    cid0 = cid.split('~')[0]
+    out = []
+    for part in re.split(r'(`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)|https?://\S+)', text or ''):
+        if not part or part.startswith(('`', '[', 'http')):
+            out.append(part)
+            continue
+
+        def rep(m):
+            w = m.group(1)
+            if w.startswith(cid0[:8]):
+                return f'[{w[:8]}]({board}/#problems/m-{cid})'
+            return f'`{w}`'
+        out.append(re.sub(r'(?<![\w/#.\-])([0-9a-fA-F]{7,40})(?![\w])', rep, part))
+    return ''.join(out)
 
 
 # ================================================================== Jira draft -> real card
@@ -530,12 +638,48 @@ def _now():
     return dt.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
 
+def pr_decide(key, cfg, decision, dry=False, payload=None):
+    """The developer's decision on the PR page -> Bitbucket: the review text as ONE comment (Night Shift's own, edited on a
+    re-run), then Approve or Request changes as the token's account. Only ever on a click."""
+    m = re.fullmatch(r'(?:([A-Za-z0-9_.-]+)-)?(\d+)', key)
+    if not m:
+        fail(f'bad PR key {key!r}')
+    c = bbwrite.creds()
+    repo, num = (m.group(1) or c['repo']), int(m.group(2))
+    text = str((payload or {}).get('description') or '').strip()
+    if text:
+        act, cid = bbwrite.upsert_comment(repo, num, 'review-decision',
+                                          ('**Approved after the Night Shift review.**\n\n' if decision == 'approve' else
+                                           '**Changes requested after the Night Shift review.**\n\n') + text[:20000], dry=dry, c=c)
+        say(f'review comment: {act}')
+    base = f"{bbwrite.API}/repositories/{c['workspace']}/{repo}/pullrequests/{num}"
+    path = '/approve' if decision == 'approve' else '/request-changes'
+    if dry:
+        say(f'would POST {path} on PR #{num}')
+        return
+    try:
+        bbwrite._req('POST', base + path, {}, c)
+    except bbwrite.BBError as e:
+        if e.status == 409 or 'already' in str(e).lower():
+            say(f'PR #{num}: already {"approved" if decision == "approve" else "marked changes requested"} by this account')
+        elif 'own pull request' in str(e).lower() or 'author' in str(e).lower():
+            fail(f'Bitbucket does not let the PR author approve their own PR ({e}); the review comment was posted')
+        else:
+            raise
+    say(f'PR #{num}: {"APPROVED" if decision == "approve" else "CHANGES REQUESTED"} in Bitbucket')
+    try:
+        fire_update('prs', f'{repo}-{num}' if m.group(1) else str(num), {'bbDecision': {'decision': decision, 'at': __import__('time').strftime('%Y-%m-%dT%H:%M:%S')}})
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest='cmd', required=True)
     sp.add_parser('check')
     a = sp.add_parser('pr-comments'); a.add_argument('--pr', required=True); a.add_argument('--dry', action='store_true'); a.add_argument('--payload')
     b = sp.add_parser('crash-pr'); b.add_argument('--case', required=True); b.add_argument('--base'); b.add_argument('--dry', action='store_true'); b.add_argument('--payload')
+    d = sp.add_parser('pr-decide'); d.add_argument('--pr', required=True); d.add_argument('--decision', required=True, choices=['approve', 'changes']); d.add_argument('--dry', action='store_true'); d.add_argument('--payload')
     j = sp.add_parser('jira-create'); j.add_argument('--case', required=True); j.add_argument('--draft', required=True); j.add_argument('--dry', action='store_true')
     a_ = ap.parse_args()
     cfg = config.load()
@@ -551,6 +695,8 @@ def main():
                 print(f'jira: {e}')
         elif a_.cmd == 'pr-comments':
             pr_comments(a_.pr, cfg, dry=a_.dry, payload=json.load(open(a_.payload)) if a_.payload else None)
+        elif a_.cmd == 'pr-decide':
+            pr_decide(a_.pr, cfg, a_.decision, dry=a_.dry, payload=json.load(open(a_.payload)) if a_.payload else None)
         elif a_.cmd == 'crash-pr':
             crash_pr(a_.case, cfg, base=a_.base, dry=a_.dry, payload=json.load(open(a_.payload)) if a_.payload else None)
         elif a_.cmd == 'jira-create':

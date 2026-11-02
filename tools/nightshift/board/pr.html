@@ -6,7 +6,7 @@
 <title>PR Review</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 /* Layout: six-page PR review (Story · Replay · Risky scenarios · Change map · Code · Decide). Header + tab bar, main column, sticky side column with review order and progress. Light only. */
 :root{
@@ -168,8 +168,11 @@ svg.seq{display:block;width:100%;height:auto;min-width:820px}
 .hlinks{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 pre.diff{margin:0;padding:8px 0;overflow-x:auto;font:12.5px/1.65 var(--mono)}
 pre.diff span{display:block;padding:0 14px;white-space:pre}
-pre.diff .a{background:#ecfdf3}pre.diff .d{background:#fef2f2}
-pre.diff .hot{box-shadow:inset 4px 0 0 #f59e0b;background:#fffbeb}
+:root{--d-add:#e6f6ec;--d-del:#fdecec;--d-hot:#fff4d6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--d-add:#0f2e1c;--d-del:#3a1717;--d-hot:#3a2c0e}}
+:root[data-theme=dark]{--d-add:#0f2e1c;--d-del:#3a1717;--d-hot:#3a2c0e}
+pre.diff{color:var(--ink)}pre.diff .a{background:var(--d-add)}pre.diff .d{background:var(--d-del)}
+pre.diff .hot{box-shadow:inset 4px 0 0 #f59e0b;background:var(--d-hot)}
 pre.diff .ln{display:inline-block;width:44px;color:var(--muted)}
 pre.diff .tgt{background:var(--accent-soft)!important;box-shadow:inset 4px 0 0 var(--accent)}
 
@@ -229,7 +232,7 @@ dialog::backdrop{background:rgba(15,23,42,.35)}
 .res{font:600 11.5px var(--mono);padding:2px 8px;border-radius:6px}
 .res.warn{background:var(--risk-bg);color:var(--risk-ink)}.res.bad{background:var(--bad);color:#fff}
 pre.snip{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 0;overflow-x:auto;font:12px/1.6 var(--mono)}
-pre.snip span{display:block;padding:0 10px;white-space:pre}pre.snip .a{background:#ecfdf3}
+pre.snip span{display:block;padding:0 10px;white-space:pre}pre.snip .a{background:var(--d-add)}
 .files{display:flex;flex-direction:column;gap:10px}
 .file{border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .fh{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 14px;background:var(--soft);border-bottom:1px solid var(--line)}
@@ -346,6 +349,20 @@ details.dropped > summary:focus-visible{outline:2px solid var(--accent);outline-
 .proof .ph{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline}
 .proof .pr .pm{margin-top:0}
 .pjs{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px}
+ol.simw{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:0;counter-reset:sw}
+ol.simw>li{counter-increment:sw;position:relative;padding:8px 0 8px 30px;border-top:1px dashed var(--line)}
+ol.simw>li:first-child{border-top:0}
+ol.simw>li::before{content:counter(sw);position:absolute;left:0;top:8px;width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent-ink);font:700 11px/20px var(--sans);text-align:center}
+.simw .sh{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px}
+.simw .sth{font:600 10.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.04em;padding:3px 6px;border-radius:5px;background:var(--hold-bg);color:var(--hold)}
+.simw .sref{font:12px var(--mono);color:var(--ink);overflow-wrap:anywhere}
+.simw .svals{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0}
+.simw .sv{font:11.5px var(--mono);background:var(--soft,#f1f5f9);border:1px solid var(--line);border-radius:5px;padding:2px 6px;overflow-wrap:anywhere}
+.simw .sb{font-size:12.5px;color:var(--muted);margin-top:2px}
+.simw .sb b{color:var(--ink);font-weight:600}
+.simstart{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 2px}
+.simend{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px}
+.simend.bad{background:var(--open-bg);color:var(--bad)}.simend.ok{background:var(--ok-bg);color:var(--ok-ink)}.simend.maybe{background:var(--risk-bg);color:var(--risk-ink)}
 ol.psteps{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
 ol.psteps li{display:grid;grid-template-columns:18px minmax(0,190px) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12.5px;padding:3px 0;border-top:1px dashed var(--line)}
 ol.psteps li:first-child{border-top:0}
@@ -406,6 +423,11 @@ td.who{font-weight:700;font-size:11.5px}td.who.opus{color:#6d28d9}td.who.sonnet{
 .sclist .scs{display:flex;flex-direction:column;gap:4px}
 .scgroup{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .scgroup em{font-style:normal;font-weight:700;min-width:20px;text-align:center;border-radius:999px;padding:0 6px;background:var(--card);border:1px solid var(--line)}
+.scgroup.fixedn span{color:var(--ok)}.sclist .sc.fixedn .scn{background:var(--ok)}.sclist .sc.fixedn b{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--ok) 60%,transparent)}
+.infield.strong{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.infield{font-size:11px;padding:1px 6px;border-radius:6px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-weight:600}
+.fixedon{font-size:11px;padding:1px 6px;border-radius:6px;background:var(--ok-bg,#dcfce7);color:var(--ok);font-weight:600}
+.sowhere{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
 .scgroup.unsafe span{color:var(--bad)}.scgroup.unproven span{color:var(--risk)}.scgroup.safe span{color:var(--ok)}
 .sclist .sc{flex-direction:row;align-items:flex-start;gap:10px;padding:9px 10px;border-radius:10px;border:1px solid transparent;background:transparent;min-height:0;box-shadow:none;position:relative}
 .sclist .sc:hover{background:var(--card);border-color:var(--line)}
@@ -474,6 +496,195 @@ svg.seq .ghost{opacity:.28}
 .repro .ract.ok{background:var(--ok-bg);color:var(--ok-ink)}.repro .ract.ok b{color:var(--ok-ink)}
 .hasfix{font:700 10.5px var(--sans);text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:5px;background:var(--ok-bg);color:var(--ok-ink)}
 
+
+/* ===== 30 Oct: Workspace look (warm, dark header and tab bar, inspector on the right) ===== */
+:root{
+  --bg:#f7f5f0; --card:#ffffff; --ink:#1c1917; --muted:#57534e; --line:#e7e2da; --soft:#fbfaf7;
+  --accent:#c2410c; --accent-soft:#ffedd5; --accent-ink:#9a3412;
+  --ok:#15803d; --ok-bg:#dcfce7; --ok-ink:#14532d; --bad:#b91c1c; --open-bg:#fee2e2; --open-ink:#7f1d1d;
+  --risk:#b45309; --risk-bg:#fef3c7; --risk-ink:#78350f; --hold:#1d4ed8; --hold-bg:#dbeafe; --wait:#7c3aed; --wait-bg:#ede9fe; --neutral:#78716c;
+  --code-bg:#1c1917; --code-fg:#f5f5f4; --code-muted:#a8a29e;
+  --sans:Manrope,Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.wrap{max-width:1440px}
+.top:has(h1){background:#1c1917;color:#fafaf9;border-radius:14px;padding:14px 18px}
+.top .num{color:#fdba74}.top h1{color:#fafaf9}
+.top:has(h1) .btn{background:#292524;border-color:#44403c;color:#fafaf9}.top:has(h1) .btn.soft{background:#fb923c;border-color:#fb923c;color:#1c1917}
+.tabs{background:#292524;border-color:#292524;padding:5px}
+.tabs button{color:#d6d3d1}.tabs button .no{color:#a8a29e}
+.tabs button:hover{background:#44403c}
+.tabs button[aria-selected="true"]{background:#fafaf9;color:#1c1917}
+.tabs .cnt{background:#44403c;border-color:#57534e;color:#e7e5e4}.tabs .cnt.bad{background:#7f1d1d;color:#fecaca}
+.cur .halo{stroke:var(--card)}
+.side{border-color:var(--line)}
+/* replay */
+.stage{gap:12px}
+.rtop{position:sticky;top:calc(env(safe-area-inset-top,0px) + 6px);z-index:15;display:flex;flex-direction:column;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:0 8px 20px -14px rgba(28,25,23,.45)}
+.rrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.rrow .mode{margin-left:0}
+.mode button[aria-pressed="true"][data-m="bug"]{background:var(--accent);color:#fff}
+.rstep{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+.pbtn{min-width:40px;height:40px;padding:0 12px}
+.pbtn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.pbtn.play{background:var(--soft);border-color:var(--line);color:var(--ink);min-width:92px}
+.pbtn:disabled{opacity:.4;cursor:default}
+.rcount{font:600 12.5px var(--mono);color:var(--muted);min-width:92px;text-align:center}
+.rkeys{font-size:12px;color:var(--muted)}
+.rkeys kbd{font:11px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--soft)}
+.rnow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+.rl,.rr{min-width:0;display:flex;flex-direction:column;gap:6px}
+.rr{align-items:flex-start}
+.rft{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.rchip{font-size:12.5px;font-weight:700;border-radius:999px;padding:3px 10px;background:var(--soft);border:1px solid var(--line)}
+.rarr{color:var(--muted)}
+.rcall{margin:0;font:700 15.5px/1.35 var(--mono);overflow-wrap:anywhere}
+.rcap{margin:0;max-width:72ch;font-size:14px}
+.rcap.bad{color:var(--open-ink)}
+.rtags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rtag{font-size:12.5px;font-weight:700;border-radius:8px;padding:3px 9px;background:var(--soft);color:var(--muted)}
+.rtag.bad{background:var(--open-bg);color:var(--bad)}.rtag.risk{background:var(--risk-bg);color:var(--risk)}.rtag.ok{background:var(--ok-bg);color:var(--ok)}
+.rtag.chip{font:500 12px var(--mono);border:1px solid var(--line)}
+.rlegend{gap:14px}
+.rlegend i.rsw{width:14px;height:10px;border-radius:3px;border:0}
+svg.seq{min-width:760px}
+.rcur{fill:var(--accent-soft);opacity:.8}
+.rname{font:500 12px var(--mono);fill:var(--ink)}.rname.on{font-weight:700}
+.rbadge{font:800 11px var(--sans);fill:#fff}
+.rtt{font:800 12px var(--sans);fill:var(--muted);letter-spacing:.04em}
+.tick{stroke:var(--line)}
+.rtk{font:800 11.5px var(--sans)}.rtl{font:600 11.5px var(--sans);fill:var(--ink)}.rtm{font:11px var(--sans);fill:var(--muted)}
+@media (max-width:820px){.rnow{grid-template-columns:1fr}.rstep{margin-left:0}.rkeys{display:none}}
+/* judges as small windows: what each one does in grey, its vote, its note */
+.jwins{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:4px}
+.jw{display:flex;flex-direction:column;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:12px;padding:0;overflow:hidden;font:inherit;color:inherit;cursor:pointer}
+.jw:hover{border-color:var(--accent)}
+.jw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.jw .jb{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:7px 10px;background:var(--soft);border-bottom:1px solid var(--line);font-size:13px}
+.jw .jv2{font-size:11px;font-weight:800;border:1.5px solid;border-radius:6px;padding:1px 6px;white-space:nowrap}
+.jw .jr{padding:7px 10px 0;font-size:12px;color:var(--neutral);line-height:1.4}
+.jw .jn{padding:5px 10px 9px;font-size:12.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.jw[aria-expanded="true"]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.jw[aria-expanded="true"] .jn{-webkit-line-clamp:unset;display:block}
+.simout{border-left:4px solid var(--neutral);border-radius:8px;padding:10px 12px;background:var(--soft);margin-top:4px}
+.simout b{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.simout p{margin:0}
+
+/* drawn status icons */
+svg.ric{width:18px;height:18px;flex:none;display:inline-block;vertical-align:middle}
+.rlegend svg.ric{width:15px;height:15px}
+.ricw{display:inline-flex}
+/* code window: light, file tab on top */
+.rcode{width:100%;background:#fffaf3;border:1px solid #f0dcc4;border-radius:10px;overflow:hidden}
+.rch{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:6px 12px;background:#fcefdf;border-bottom:1px solid #f0dcc4}
+.rfile{font:700 12px var(--mono);color:var(--accent-ink);background:#fff;border:1px solid #f0dcc4;border-radius:6px;padding:1px 8px}
+.rnote{font-size:12px;color:var(--muted)}
+pre.rsrc{margin:0;padding:10px 14px;font:12.5px/1.65 var(--mono);color:#1c1917;white-space:pre-wrap;overflow-wrap:anywhere;border-left:3px solid var(--accent);background:#fffaf3}
+.rnone{margin:0;padding:10px 14px;font-size:13px;color:var(--muted)}
+/* 30 Oct: files touched as one compact table */
+.files.ftab{gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.fileRow{border:0!important;border-radius:0!important;border-top:1px solid var(--line)!important;background:var(--card)}
+.fileRow:first-child{border-top:0!important}
+.fileRow{display:block;width:100%}
+.fsum2{width:100%;box-sizing:border-box;list-style:none;display:grid;grid-template-columns:10px minmax(0,1fr) 170px 44px 96px;gap:12px;align-items:center;padding:9px 14px;cursor:pointer}
+.fsum2::-webkit-details-marker{display:none}
+.fileRow.nofn .fsum2{cursor:default}
+.fsum2:hover{background:var(--soft)}
+.fileRow[open] .fsum2{background:var(--soft);border-bottom:1px solid var(--line)}
+.fdot{width:10px;height:10px;border-radius:50%;background:var(--neutral)}
+.fdot.core{background:var(--accent)}.fdot.new{background:var(--hold)}.fdot.skip{background:var(--line)}.fdot.ctx{background:transparent;border:1.5px dashed var(--neutral)}
+.fnm2{display:flex;align-items:baseline;gap:8px;min-width:0}
+.fnm2 b{font-size:13px;white-space:nowrap}
+.fnm2 .fdir{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.fstat{display:flex;align-items:center;gap:6px;font:600 12px var(--mono)}
+.fstat .ad{color:var(--ok)}.fstat .de{color:var(--bad)}
+.fbar{flex:1;display:flex;height:6px;border-radius:3px;background:var(--soft);overflow:hidden;min-width:40px}
+.fbar i.a{background:var(--ok)}.fbar i.d{background:var(--bad)}
+.fcount{font:12px var(--mono);color:var(--muted);text-align:right}
+.fsum2 .tagc{justify-self:end}
+.fileRow .fns .fn{grid-template-columns:14px minmax(0,260px) minmax(0,1fr);padding:8px 14px 8px 36px}
+.fileRow.ctx .fsum2{opacity:.75}
+.fmore{align-self:flex-start;margin-top:8px}
+@media (max-width:720px){.fsum2{grid-template-columns:10px minmax(0,1fr) auto;row-gap:4px}.fsum2 .fbar,.fcount{display:none}.fsum2 .tagc{grid-column:2/-1;justify-self:start}.fnm2{flex-direction:column;gap:0}}
+/* 30 Oct: Workspace layout — one dark band (breadcrumb, title, meta) and a dark tab bar, both full width; tab bar sticks */
+body{margin:0}
+#app{gap:0;padding-top:0}
+#app > #h-meta,#app > .tabs,#app > .top:has(h1){margin-top:-1px}
+#app > *{order:5;margin-bottom:16px}
+#app > .top{order:1;margin-bottom:0;background:#1c1917;box-shadow:0 0 0 100vmax #1c1917;clip-path:inset(0 -100vmax);border-radius:0}
+#app > .top:first-child{padding:12px 0 2px}
+#app > .top:first-child a{color:#fdba74!important;font-size:12px}
+#app > .top:has(h1){padding:8px 0 6px}
+#app > #h-meta{order:2;margin-bottom:0;color:#d6d3d1;background:#1c1917;box-shadow:0 0 0 100vmax #1c1917;clip-path:inset(0 -100vmax);padding:0 0 14px;font-size:12px}
+#app > .tabs{order:3;position:sticky;top:0;z-index:40;border-radius:0;border:0;padding:6px 0;background:#292524;box-shadow:0 0 0 100vmax #292524;clip-path:inset(0 -100vmax);margin-bottom:20px}
+#app > dialog{order:9}
+.rtop{top:64px}
+.sclist{top:64px;max-height:calc(100vh - 76px)}
+.side{top:64px}
+/* verdict card at the top of the inspector */
+.side .ro, .side .ro *{overflow-wrap:anywhere;min-width:0}
+.vcard{display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line);padding-bottom:14px}
+.vcard .vk{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.vcard .vt{font-size:18px;font-weight:800}
+.vgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.vgrid div{border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column}
+.vgrid b{font-size:20px;font-variant-numeric:tabular-nums}.vgrid span{font-size:12px;color:var(--muted)}
+/* risky scenarios: keep the list on the left; compact rows */
+@container (max-width:1150px){ .scwrap{grid-template-columns:minmax(220px,270px) minmax(0,1fr)} .sclist{position:sticky;max-height:calc(100vh - 76px)} .sclist .scs{display:flex} .scgroup{grid-column:auto} }
+@container (max-width:820px){ .scwrap{grid-template-columns:1fr} .sclist{position:static;max-height:none} .sclist .scs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))} .scgroup{grid-column:1/-1} }
+.sclist .sct b{-webkit-line-clamp:2;font-size:12.5px}
+.sclist .sc{padding:7px 9px}
+#p-risk > .lead{display:none}
+/* scenario sections fold open and closed */
+.fold{border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.fold > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:11px 14px;flex-wrap:wrap}
+.fold > summary::-webkit-details-marker{display:none}
+.fold > summary::before{content:"▸";color:var(--muted);width:10px}
+.fold[open] > summary::before{content:"▾"}
+.fold > summary b{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink)}
+.fold > summary .fs{font-size:12.5px;color:var(--muted)}
+.fold > summary:hover{background:var(--soft);border-radius:12px}
+.fold > .fbody{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
+.fold > .fbody > .repro,.fold > .fbody > .why{border:0;padding:0}
+.fold > .fbody > .fixcode{border:0;padding:0}
+.foldall{display:flex;gap:8px;justify-content:flex-end}
+.foldall button{min-height:32px;font-size:12.5px}
+.simout{margin-top:0}
+/* 30 Oct: Summary side list, one section at a time */
+.snav{display:grid;grid-template-columns:210px minmax(0,1fr);gap:20px;align-items:start}
+.snl{display:flex;flex-direction:column;gap:4px;position:sticky;top:64px;border-right:1px solid var(--line);padding-right:12px}
+.sni{display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;padding:9px 12px;border-radius:9px;border:1px solid transparent;background:transparent;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;min-height:40px}
+.sni:hover{background:var(--soft)}
+.sni[aria-current="true"]{background:var(--accent-soft);color:var(--accent-ink);border-color:#fed7aa}
+.sni em{font-style:normal;font:700 11px var(--mono);border-radius:999px;padding:1px 7px;background:var(--soft);border:1px solid var(--line);color:var(--muted)}
+.sns{display:flex;flex-direction:column;gap:14px;min-width:0}
+@media (max-width:760px){.snav{grid-template-columns:1fr}.snl{position:static;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:0 0 8px}.sni{flex:none}}
+/* scenario section strip */
+.sctabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;background:var(--soft);border:1px solid var(--line);border-radius:12px}
+.sct2{border:0;background:transparent;border-radius:8px;padding:8px 12px;font:inherit;font-size:13px;font-weight:700;color:var(--muted);cursor:pointer;min-height:38px}
+.sct2:hover{color:var(--ink)}
+.sct2[aria-pressed="true"]{background:var(--card);color:var(--accent-ink);box-shadow:0 1px 3px rgba(28,25,23,.12)}
+.fold.off,#scev.off{display:none}
+.fold > summary{cursor:default}.fold > summary::before{display:none}.fold > summary:hover{background:none}
+/* 30 Oct: still open? */
+.still{border:1px solid var(--line);border-radius:10px;background:var(--soft);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.soh{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.soh b{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.soh .btn{margin-left:auto;min-height:34px;font-size:12.5px}
+.sot{font-size:12px;color:var(--muted)}
+.sochip{justify-self:start;font-size:11.5px;font-weight:800;border-radius:6px;padding:2px 8px}
+.sochip.bad{background:var(--open-bg);color:var(--bad)}.sochip.ok{background:var(--ok-bg);color:var(--ok-ink)}.sochip.maybe{background:var(--risk-bg);color:var(--risk-ink)}
+.sorows{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.sorow{display:grid;grid-template-columns:96px 190px 230px minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:7px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
+.sorow:last-child{border-bottom:0}
+.sol{font:700 12px var(--mono);color:var(--accent-ink)}
+.som{font:11.5px var(--mono);color:var(--muted)}.son{color:var(--muted);overflow-wrap:anywhere}
+.sobadge{margin-left:6px}
+@media (max-width:760px){.sorow{grid-template-columns:auto auto}.som,.son{grid-column:1/-1}}
+.gate .gall{margin-top:4px;padding-top:8px;border-top:1px solid var(--line);flex-wrap:wrap}.gate .gall .note{font-size:12.5px;color:var(--muted)}
+.btn.warnbtn{border-color:#d97706;color:#b45309}
+.soline{display:flex;flex-direction:column;gap:4px;margin-top:6px}.sofix{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 4px}
+.sodet{margin-top:6px}.sodet>summary{cursor:pointer;font-size:12.5px;color:var(--muted);font-weight:700}
+.so-banner{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;border-radius:10px;background:var(--ok-bg, #dcfce7);color:var(--ink);font-size:13.5px;margin:6px 0}
 </style>
 
 </head>
@@ -525,18 +736,21 @@ svg.seq .ghost{opacity:.28}
           <div class="scbadges"><span class="sev" id="scsev"></span><span id="scmeta" class="scmeta"></span></div>
           <h2 id="sctitle"></h2>
           <p class="scq" id="scq"></p>
-          <div class="judgeline" id="scjudges"></div>
+          <div id="scsimout" class="simout" hidden></div>
+          <div id="scstill" class="still" hidden></div>
           <div class="acts">
             <button class="btn chk" type="button" id="sccheck" aria-pressed="false">I checked this</button>
             <button class="btn" type="button" id="sccomment">Note</button>
             <button class="btn soft" type="button" id="scfind">Go to its finding →</button>
           </div>
         </header>
-        <section class="scsec" id="screprosec" hidden><h3>How to reproduce</h3><div class="repro" id="screpro"></div></section>
-        <section class="scsec"><h3>Why</h3><div class="why" id="scwhy"></div></section>
-        <div id="scfix" class="fixcode" hidden></div>
-        <section class="scsec"><h3>Replay in the code</h3><div id="rp-sc"></div></section>
-        <details class="scsec evidence" id="scev"><summary><b>Evidence</b><span id="scevsum"></span></summary><div class="proof" id="scproof" hidden></div></details>
+        <div class="sctabs" id="sctabs" aria-label="Scenario sections"></div>
+        <details class="fold" data-fold="replay"><summary><b>Replay in the code</b><span class="fs" id="fs-replay"></span></summary><div class="fbody"><div id="rp-sc"></div></div></details>
+        <details class="fold" data-fold="judges"><summary><b>The judges</b><span class="fs" id="fs-judges"></span></summary><div class="fbody"><div class="judgeline" id="scjudges"></div></div></details>
+        <details class="fold" data-fold="why"><summary><b>Why</b><span class="fs" id="fs-why"></span></summary><div class="fbody"><div class="why" id="scwhy"></div></div></details>
+        <details class="fold" data-fold="repro" id="screprosec" hidden><summary><b>How to reproduce</b><span class="fs" id="fs-repro"></span></summary><div class="fbody"><div class="repro" id="screpro"></div></div></details>
+        <details class="fold" data-fold="fix" id="scfixf" hidden><summary><b>Suggested fix</b><span class="fs" id="fs-fix"></span></summary><div class="fbody"><div id="scfix" class="fixcode" hidden></div></div></details>
+        <details class="scsec evidence" id="scev" data-fold="evidence"><summary><b>Evidence</b><span id="scevsum"></span></summary><div class="proof" id="scproof" hidden></div></details>
       </div>
     </div>
   </section>
@@ -556,7 +770,8 @@ svg.seq .ghost{opacity:.28}
 
   <section class="card" role="tabpanel" id="p-dec" aria-labelledby="t-dec" hidden>
     <div class="ch"><h2>Decide</h2><span class="lead" id="count"></span></div>
-    <p class="lead">Night Shift never posts to Bitbucket. Your decisions are saved to Night Shift so they can tune the reviewers; "Copy review" gives you the text to paste into the PR.</p>
+    <p class="lead">Nothing reaches Bitbucket without your click. Your decisions are saved to Night Shift so they can tune the reviewers; <b>Approve</b> / <b>Request changes</b> below post your review text to the PR and set the decision in Bitbucket.</p>
+    <div class="acts" id="bulk" style="flex-wrap:wrap;gap:8px"><button class="btn" id="bulk-sc" type="button">✓ Yes, I checked every scenario</button><button class="btn" id="bulk-f" type="button">✓ Yes, agree with every finding</button><button class="btn" id="bulk-no" type="button">Mark every finding "Not a problem"</button></div>
     <div id="finds" style="display:flex;flex-direction:column;gap:12px"></div>
     <p class="rule"><b>Rule:</b> only <span class="tier v">Verified</span> bugs can block a merge. <span class="tier s">Suspected</span> ones go to the author as questions. <span class="tier u">Unchecked</span> ones had no line to check: shown, never blocking. Dropped ones stay in the list on Risky scenarios.</p>
     <p class="note" id="fbstat" role="status"></p>
@@ -599,192 +814,151 @@ var FB = /*__NS_FIREBASE__*/null;
   function el(tag, a, txt){ var e = document.createElementNS(NS, tag); for (var k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; }
   function h(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
 
-  function Replay(root, onCode, onSc, scName){
-    var me = this, id = 'r' + (uid++);
+  // 30 Oct: Workspace replay. A plain sequence diagram (short call names, arrows between threads, a timing track on
+  // the right for locks / waits / risk windows); the full call, what happens and the line of code sit in a panel above it.
+  var REPLAYS = [];
+  var BARK = { 'bar-hold': ['Lock held', 'var(--hold)', 'var(--hold-bg)'], 'bar-wait': ['Waiting', 'var(--wait)', 'var(--wait-bg)'],
+               'bar-risk': ['Risk window', 'var(--risk)', 'var(--risk-bg)'], 'bar-ok': ['Running', 'var(--ok)', 'var(--ok-bg)'] };
+  function rpShort(l){
+    var s = String(l || ''), m = s.match(/^([~\w:.\->\[\]]+?)\(/);
+    if (m) { var p = m[1].split(/->|\.(?=[A-Za-z_])/); return p[p.length - 1] + '()'; }
+    return s.length > 26 ? s.slice(0, 25) + '…' : s;
+  }
+  function ricSvg(kind){   // drawn icons, not font glyphs, so they look the same everywhere
+    return '<svg class="ric" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="9" fill="' + (kind === 'bad' ? 'var(--bad)' : 'var(--risk)') + '"/>' +
+      (kind === 'bad' ? '<path d="M6 6l6 6M12 6l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>' : '<path d="M9 4.5v5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="9" cy="13.2" r="1.3" fill="#fff"/>') + '</svg>';
+  }
+  function rpCol(c){ return { bad: 'var(--bad)', risk: 'var(--risk)', ok: 'var(--ok)', mut: 'var(--neutral)' }[c] || 'var(--ink)'; }
+  document.addEventListener('keydown', function(e){
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    var t = e.target; if (t && t.closest && t.closest('[role="tab"],input,textarea,select,dialog[open],[contenteditable="true"]')) return;
+    for (var i = 0; i < REPLAYS.length; i++) if (REPLAYS[i].visible()) { e.preventDefault(); REPLAYS[i].go(e.key === 'ArrowRight' ? 1 : -1); return; }
+  });
+  function Replay(root, onCode, onSc, scName, opts){
+    var me = this, id = 'r' + (uid++), NEU = !!(opts && opts.neutral);   // neutral: the New flow explains before / after; problems live only in the scenarios
     var sc = null, mode = 'bug', step = 0, timer = null;
     root.innerHTML = '';
     var stage = h('div', 'stage'); root.appendChild(stage);
-    var bar1 = h('div', 'bar'); stage.appendChild(bar1);
-    var modeBox = h('div', 'mode'); modeBox.setAttribute('aria-label', 'Version'); bar1.appendChild(modeBox);
-    var bar2 = h('div', 'bar'); stage.appendChild(bar2);
-    var prev = h('button', 'pbtn', '◀'); prev.type = 'button'; prev.setAttribute('aria-label', 'Previous step');
+    var top = h('div', 'rtop'); stage.appendChild(top);
+    var row = h('div', 'rrow'); top.appendChild(row);
+    var modeBox = h('div', 'mode'); modeBox.setAttribute('role', 'group'); modeBox.setAttribute('aria-label', 'Version'); row.appendChild(modeBox);
+    var stepper = h('div', 'rstep'); row.appendChild(stepper);
+    var prev = h('button', 'pbtn', '←'); prev.type = 'button'; prev.setAttribute('aria-label', 'Previous step');
+    var stepno = h('span', 'rcount');
+    var next = h('button', 'pbtn pri', '→'); next.type = 'button'; next.setAttribute('aria-label', 'Next step');
     var playB = h('button', 'pbtn play', '▶ Play'); playB.type = 'button';
-    var next = h('button', 'pbtn', '▶︎'); next.type = 'button'; next.setAttribute('aria-label', 'Next step');
-    var prog = h('div', 'prog'); prog.setAttribute('aria-hidden', 'true'); var fill = h('i'); prog.appendChild(fill);
-    var stepno = h('span', 'note');
-    [prev, playB, next, prog, stepno].forEach(function(x){ bar2.appendChild(x); });
-    var cap = h('div', 'caption'); cap.setAttribute('role', 'status'); cap.setAttribute('aria-live', 'polite'); stage.appendChild(cap);
+    var keys = h('span', 'rkeys'); keys.innerHTML = '<kbd>←</kbd> <kbd>→</kbd> keys';
+    [prev, stepno, next, playB, keys].forEach(function(x){ stepper.appendChild(x); });
+    var now = h('div', 'rnow'); now.setAttribute('aria-live', 'polite'); top.appendChild(now);
+    var lg = h('div', 'legend rlegend'); stage.appendChild(lg);
+    lg.innerHTML = (NEU ? '' : '<span>' + ricSvg('bad') + 'the bug happens here</span><span>' + ricSvg('risk') + 'risky step</span>') +
+      (NEU ? ['bar-hold', 'bar-wait', 'bar-ok'] : ['bar-hold', 'bar-wait', 'bar-risk', 'bar-ok']).map(function(k){ return '<span><i class="rsw" style="background:' + BARK[k][1] + '"></i>' + BARK[k][0].toLowerCase() + '</span>'; }).join('');
     var scr = h('div', 'scroll'); stage.appendChild(scr);
-    var svg = el('svg', { viewBox: '0 0 960 500', class: 'seq', role: 'img', 'aria-label': 'Message-arrow replay' }); scr.appendChild(svg);
-    var codeat = h('div', 'codeat'); stage.appendChild(codeat);
-    var lg = h('div', 'legend'); stage.appendChild(lg);
+    var svg = el('svg', { viewBox: '0 0 1000 400', class: 'seq', role: 'img', 'aria-label': 'Sequence diagram' }); scr.appendChild(svg);
 
-    function tw(node){ var w = 0; try { w = node.getComputedTextLength(); } catch(e) {} return w > 0 ? w : (node.textContent || '').length * 7.4; }
-    function xs(n){ var o = [], L = 150, R = 810; for (var i = 0; i < n; i++) o.push(L + (R - L) * i / (n - 1)); return o; }
-    function measure(items){
-      var g = el('g', {}); svg.appendChild(g);
-      var ws = items.map(function(it){ var t = el('text', { class: it.type === 'text' ? 'mw' : it.type === 'pill' ? 'ml' : 'mc' }, it.text); g.appendChild(t); return tw(t) + (it.type === 'text' ? 0 : 16); });
-      svg.removeChild(g); return ws;
-    }
-    function splitLines(items, ws, maxW){
-      var lines = [], cur = [], w = 0;
-      items.forEach(function(it, k){ var add = ws[k] + (cur.length ? 8 : 0); if (cur.length && w + add > maxW) { lines.push(cur); cur = []; w = 0; add = ws[k]; } cur.push(it); w += add; });
-      if (cur.length) lines.push(cur); return lines;
-    }
-    function availW(startX, bars){
-      var lo = 40, hi = W - 10;
-      bars.forEach(function(bx){ if (bx <= startX - 4) lo = Math.max(lo, bx + 14); else hi = Math.min(hi, bx - 14); });
-      return Math.max(220, hi - lo);
-    }
-    function placeOne(parent, items, x, y, avoid){
-      var g = el('g', {}); parent.appendChild(g);
-      var nodes = [], total = 0, gap = 8;
-      items.forEach(function(it){
-        var t = el('text', { x: 0, y: 0, class: (it.type === 'text' ? 'mw' : it.type === 'pill' ? 'ml f-' + it.c : 'mc') + ' halo' }, it.text);
-        g.appendChild(t); var w = tw(t) + (it.type === 'text' ? 0 : 16); nodes.push({ it: it, t: t, w: w }); total += w + gap;
-      });
-      total -= gap;
-      function clash(st){ return st < 40 || st + total > W - 10 || (avoid || []).some(function(bx){ return st < bx + 10 && st + total > bx - 10; }); }
-      var cands = [x, W - 10 - total];
-      (avoid || []).forEach(function(bx){ cands.push(bx + 14, bx - 14 - total); });
-      cands.sort(function(a, b){ return Math.abs(a - x) - Math.abs(b - x); });
-      var start = null;
-      for (var k = 0; k < cands.length; k++) { if (!clash(cands[k])) { start = cands[k]; break; } }
-      if (start === null) start = Math.max(40, Math.min(x, W - 10 - total));
-      var cx = start;
-      nodes.forEach(function(n){
-        if (n.it.type !== 'text') {
-          var r = el('rect', { x: cx, y: y - 13, width: n.w, height: 20, rx: 6, class: n.it.type === 'pill' ? 't-' + n.it.c : 't-chip' });
-          g.insertBefore(r, n.t); n.t.setAttribute('x', cx + n.w / 2); n.t.setAttribute('text-anchor', 'middle'); n.t.classList.remove('halo');
-        } else { n.t.setAttribute('x', cx); }
-        n.t.setAttribute('y', y + 1); cx += n.w + gap;
-      });
-    }
-    function placeRow(parent, items, x, y, avoid){
-      var lines = splitLines(items, measure(items), availW(x, avoid || []));
-      lines.forEach(function(ln, k){ placeOne(parent, ln, x, y + k * 26, avoid); });
-      return lines.length;
-    }
-    function detailItems(d){
-      var items = [];
-      if (d.crash) items.push({ type: 'pill', c: 'bad', text: d.crashText });
-      if (d.m) items.push({ type: 'text', text: d.m });
-      (d.chips || []).forEach(function(t){ items.push({ type: 'chip', text: t }); });
-      return items;
-    }
     function steps(){ return sc[mode].steps; }
-
-    function draw(){
-      if (!sc || !root.offsetParent) return;
-      var st = steps(), X = xs(sc.cols.length), top = 110;
-      svg.innerHTML = '';
-      var ys = [], hs = [], y = top;
-      function startOf(d){ return d.from === d.to ? X[d.from] + 22 : Math.min(X[d.from], X[d.to]) + 12; }
-      var BX = (function(){ var bs = sc[mode].bars || [], out = []; bs.forEach(function(b, k){   // bars on the same column side by side
-        var lane = 0; for (var j = 0; j < k; j++) { var o = bs[j]; if (o.col === b.col && !(o.to < b.from || o.from > b.to)) lane = Math.max(lane, (out[j].lane || 0) + 1); }
-        out.push({ lane: lane, x: X[b.col] + lane * 13 }); }); return out; })();
-      function barsAll(i){ return (sc[mode].bars || []).map(function(b, k){ return i >= b.from && i <= b.to ? BX[k].x : null; }).filter(function(x){ return x !== null; }); }
-      st.forEach(function(d, i){
-        var items = detailItems(d), nl = items.length ? splitLines(items, measure(items), availW(startOf(d), barsAll(i))).length : 0;
-        if ((sc[mode].bars || []).some(function(b){ return b.text && b.from === i; })) y += 22;   // room for a lifetime label above the bar
-        var hh = 44 + nl * 26 + (d.tag ? 28 : 0); ys.push(y); hs.push(hh); y += hh;
-      });
-      var H = y + 10;
-      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-      var defs = el('defs', {});
-      ['ink','bad','ok','risk','mut'].forEach(function(c){ var m = el('marker', { id: id + '-' + c, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, orient: 'auto-start-reverse' }); m.appendChild(el('path', { d: 'M0,0 L10,5 L0,10 z', class: 'mk-' + c })); defs.appendChild(m); });
-      svg.appendChild(defs);
-      svg.appendChild(el('rect', { x: 8, y: ys[step] - 30, width: W - 16, height: hs[step] - 4, rx: 10, class: 'cur-row' }));
-      sc.cols.forEach(function(c, i){
-        svg.appendChild(el('rect', { x: X[i] - 92, y: 18, width: 184, height: 52, rx: 10, class: 'hb' }));
-        svg.appendChild(el('text', { x: X[i], y: 41, 'text-anchor': 'middle', class: 'lb' }, c[0]));
-        svg.appendChild(el('text', { x: X[i], y: 59, 'text-anchor': 'middle', class: 'ls' }, c[1]));
-        svg.appendChild(el('line', { x1: X[i], y1: 70, x2: X[i], y2: H - 6, class: 'life' }));
-      });
-      var endLabels = [];
-      (sc[mode].bars || []).forEach(function(b){
-        var a = Math.min(b.from, st.length - 1), z = Math.min(b.to, st.length - 1);
-        if (a > step) return; z = Math.min(z, step);
-        var y1 = ys[a] - 16, y2 = ys[z] + 16;
-        var bxx = BX[(sc[mode].bars || []).indexOf(b)].x;
-        svg.appendChild(el('rect', { x: bxx - 5, y: y1, width: 10, height: Math.max(14, y2 - y1), rx: 3, class: b.cls }));
-        if (b.text) {                                  // lifetime label on the diagram: where it starts, and where it ends
-          var left = bxx > 300, bl = el('text', { x: left ? bxx - 10 : bxx + 10, y: y1 - 8, 'text-anchor': left ? 'end' : 'start', class: 'ms halo' }, (b.cls === 'bar-wait' ? '⏳ ' : b.cls === 'bar-hold' ? '🔒 ' : '') + b.text);
-          bl.style.fontWeight = 700; svg.appendChild(bl);
-          if (b.to <= step && b.to < st.length - 1) endLabels.push({ x: bxx, y: y2 - 2, left: left, text: b.end || (b.cls === 'bar-hold' ? 'released' : 'ends') });
-        }
-      });
-      st.forEach(function(d, i){
-        if (i > step) {                               // steps still to come: a faint outline, so the diagram is never an empty box
-          var gy = ys[i], gx1 = X[d.from], gx2 = X[d.to], gg = el('g', { class: 'ghost' });
-          gg.appendChild(el('text', { x: 24, y: gy + 4, class: 'mn' }, String(i + 1)));
-          if (d.from !== d.to) { var gd = gx2 > gx1 ? 1 : -1; gg.appendChild(el('path', { d: 'M' + (gx1 + gd * 7) + ',' + gy + ' L' + (gx2 - gd * 8) + ',' + gy, class: 'msg s-mut', 'stroke-dasharray': '4 6' })); }
-          else gg.appendChild(el('circle', { cx: gx1, cy: gy, r: 4, class: 'mk-mut' }));
-          svg.appendChild(gg); return;
-        }
-        var y = ys[i], c = d.c, x1 = X[d.from], x2 = X[d.to], g = el('g', { class: i === step ? 'cur' : '' });
-        g.appendChild(el('text', { x: 24, y: y + 4, class: 'mn' }, String(i + 1)));
-        var self = d.from === d.to;
-        if (!self) {
-          var dir = x2 > x1 ? 1 : -1;
-          var line = el('path', { d: 'M' + (x1 + dir * 7) + ',' + y + ' L' + (x2 - dir * 8) + ',' + y, class: 'msg s-' + c, 'marker-end': 'url(#' + id + '-' + c + ')' });
-          if (d.ret) line.setAttribute('stroke-dasharray', '7 5');
-          if (i === step && !reduce && !d.ret) { var len = Math.abs(x2 - x1); line.style.strokeDasharray = len; line.style.strokeDashoffset = len; line.style.transition = 'stroke-dashoffset .6s ease-out'; requestAnimationFrame(function(){ requestAnimationFrame(function(){ line.style.strokeDashoffset = 0; }); }); }
-          g.appendChild(line);
-          if (d.label) {
-            var lt = el('text', { x: (x1 + x2) / 2, y: y - 10, 'text-anchor': 'middle', class: 'ml halo f-' + c }, d.label); g.appendChild(lt);
-            var lw = tw(lt), lx = (x1 + x2) / 2;
-            barsAll(i).forEach(function(bx){ if (lx - lw / 2 < bx + 10 && lx + lw / 2 > bx - 10) lx = bx > lx ? bx - 12 - lw / 2 : bx + 12 + lw / 2; });
-            lx = Math.max(40 + lw / 2, Math.min(W - 10 - lw / 2, lx)); lt.setAttribute('x', lx);
-          }
-        } else if (d.crash) {
-          g.appendChild(el('path', { d: 'M' + (x1 - 10) + ',' + (y - 10) + ' l20,20 m0,-20 l-20,20', class: 'msg s-bad', 'stroke-width': 3.2 }));
-        } else {
-          g.appendChild(el('circle', { cx: x1, cy: y, r: 6, class: 'mk-' + c }));
-        }
-        if (d.crash && !self) g.appendChild(el('path', { d: 'M' + (x2 - 10) + ',' + (y - 10) + ' l20,20 m0,-20 l-20,20', class: 'msg s-bad', 'stroke-width': 3.2 }));
-        svg.appendChild(g);
-        var items = detailItems(d), lineY = y + 24;
-        if (items.length) lineY += 26 * placeRow(g, items, startOf(d), lineY, barsAll(i));
-        if (d.tag) {
-          var tx = X[d.tag.col], pr = el('text', { class: 'ml' }, d.tag.text); g.appendChild(pr); var w = tw(pr) + 16; g.removeChild(pr);
-          placeRow(g, [{ type: 'pill', c: d.tag.c, text: d.tag.text }], Math.max(40, tx - w / 2), lineY, barsAll(i));
-        }
-      });
-      endLabels.forEach(function(e){                  // a bar's end label goes on whichever side is free, or is left out
-        var boxes = Array.prototype.map.call(svg.querySelectorAll('text, rect[class^="t-"]'), function(n){ try { return n.getBBox(); } catch(x) { return null; } }).filter(Boolean);
-        var sides = e.left ? [true, false] : [false, true];
-        for (var k = 0; k < 2; k++) {
-          var t = el('text', { x: sides[k] ? e.x - 10 : e.x + 10, y: e.y, 'text-anchor': sides[k] ? 'end' : 'start', class: 'ms halo' }, e.text);
-          svg.appendChild(t); var bb; try { bb = t.getBBox(); } catch(x) { bb = null; }
-          if (!bb || !boxes.some(function(o){ return o.x < bb.x + bb.width + 2 && bb.x < o.x + o.width + 2 && o.y < bb.y + bb.height && bb.y < o.y + o.height; })) return;
-          svg.removeChild(t);
-        }
-      });
-      var d0 = st[step];
-      cap.textContent = d0.cap;
-      var lastFix = mode === 'fix' && step === st.length - 1, lastBad = d0.c === 'bad' && (d0.crash || step === st.length - 1);
-      var problem = d0.c === 'bad' || d0.c === 'risk' || (d0.tag && (d0.tag.c === 'bad' || d0.tag.c === 'risk'));
-      cap.className = 'caption' + (lastBad ? ' bad' : (lastFix || (sc.verdict === 'safe' && step === st.length - 1)) && !problem ? ' good' : '');
-      if (d0.sc && onSc) {                           // this step shows a scenario's problem: link to it
-        var sl = h('button', 'btn soft', (scName ? scName(d0.sc) : 'Open the scenario') + ' →'); sl.type = 'button';
-        sl.style.marginLeft = 'auto'; sl.style.flexShrink = '0';
-        sl.addEventListener('click', function(){ onSc(d0.sc); }); cap.appendChild(sl); cap.style.gap = '12px';
-      }
-      fill.style.width = ((step + 1) / st.length * 100) + '%';
-      stepno.textContent = 'Step ' + (step + 1) + ' of ' + st.length;
-      // code at this step
-      codeat.innerHTML = '';
-      var lbl = h('div', 'lbl'); lbl.appendChild(h('span', 'st', 'Code at this step')); codeat.appendChild(lbl);
-      if (d0.code) { var pre = h('pre', '', d0.code); codeat.appendChild(pre); }
-      else { codeat.appendChild(h('span', 'note', d0.hunk ? 'This step runs changed code. Open the diff to see the line.' : 'No changed code runs in this step.')); }
-      if (d0.hunk) { var go = h('button', 'btn soft', 'Show in the diff →'); go.type = 'button'; go.addEventListener('click', function(){ onCode(d0.hunk, d0.line); }); lbl.appendChild(go); go.style.marginLeft = 'auto'; }
-      // legend
-      lg.innerHTML = '';
-      var colors = { 'bar-hold': ['var(--hold-bg)','var(--hold)'], 'bar-ok': ['var(--ok-bg)','var(--ok)'], 'bar-wait': ['var(--card)','var(--muted)'], 'bar-risk': ['var(--risk-bg)','var(--risk)'] };
-      (sc[mode].bars || []).forEach(function(b){ var s = h('span'); var i = h('i'); i.style.background = colors[b.cls][0]; i.style.borderColor = colors[b.cls][1]; if (b.cls === 'bar-wait') i.style.borderStyle = 'dashed'; s.appendChild(i); s.appendChild(document.createTextNode(sc.cols[b.col][0] + ': ' + b.text)); lg.appendChild(s); });
-    }
+    function bars(){ return (sc[mode].bars || []).filter(function(b){ return !NEU || b.cls !== 'bar-risk'; }); }
+    function cOf(d){ var c = d.crash ? 'bad' : d.c || 'ink'; return NEU && (c === 'bad' || c === 'risk') ? 'ink' : c; }
     function n(){ return steps().length; }
+    function txt(parent, a, s){ var t = el('text', a, s); parent.appendChild(t); return t; }
+    function badge(parent, x, y, c){
+      var g = el('g', { transform: 'translate(' + (x - 9) + ' ' + (y - 9) + ')' }); g.innerHTML = ricSvg(c).replace(/^<svg[^>]*>|<\/svg>$/g, ''); parent.appendChild(g);
+    }
+    function drawTop(){
+      var st = steps(), d = st[step] || {}, cols = sc.cols;
+      now.innerHTML = '';
+      var L = h('div', 'rl'), R = h('div', 'rr'); now.appendChild(L); now.appendChild(R);
+      var ft = h('div', 'rft'); L.appendChild(ft);
+      ft.appendChild(h('span', 'rchip', (cols[d.from] || [''])[0])); ft.appendChild(h('span', 'rarr', d.from === d.to ? '↻' : '→'));
+      if (d.from !== d.to) ft.appendChild(h('span', 'rchip', (cols[d.to] || [''])[0]));
+      var bad = !NEU && (d.crash || d.c === 'bad');
+      if (bad || (!NEU && d.c === 'risk')) { var ic = h('span', 'ricw'); ic.innerHTML = ricSvg(bad ? 'bad' : 'risk'); ft.appendChild(ic); }
+      L.appendChild(h('p', 'rcall', d.label || ''));
+      var capP = h('p', 'rcap' + (bad ? ' bad' : ''), d.cap || ''); L.appendChild(capP);
+      var tags = h('div', 'rtags'); L.appendChild(tags);
+      if (d.crash && !NEU) tags.appendChild(h('span', 'rtag bad', d.crashText || 'crash'));
+      if (d.tag && !(NEU && (d.tag.c === 'bad' || d.tag.c === 'risk'))) tags.appendChild(h('span', 'rtag ' + (d.tag.c || 'ink'), d.tag.text));
+      bars().forEach(function(b){ if (step >= b.from && step <= b.to) { var K = BARK[b.cls] || BARK['bar-ok'], t = h('span', 'rtag', K[0] + ' on ' + (cols[b.col] || [''])[0] + (b.text ? ': ' + b.text : ''));
+        t.style.background = K[2]; t.style.color = K[1]; tags.appendChild(t); } });
+      (d.chips || []).forEach(function(c){ tags.appendChild(h('span', 'rtag chip', c)); });
+      if (d.sc && onSc && !NEU) { var sl = h('button', 'btn soft', (scName ? scName(d.sc) : 'Open the scenario') + ' →'); sl.type = 'button'; sl.addEventListener('click', function(){ onSc(d.sc); }); tags.appendChild(sl); }
+      var code = h('div', 'rcode'); R.appendChild(code);   // a light code window: file tab on top, the code below
+      var where = d.file ? String(d.file).split('/').pop() + (d.line ? ':' + d.line : '') : '';
+      var ch = h('div', 'rch'); code.appendChild(ch);
+      ch.appendChild(h('span', 'rfile', where || (d.code ? 'code' : 'no code')));
+      if (d.m && String(d.m).indexOf(where || '\u0000') < 0) ch.appendChild(h('span', 'rnote', d.m));
+      if (d.code) code.appendChild(h('pre', 'rsrc', typeof dedent === 'function' ? dedent(d.code) : d.code));
+      else code.appendChild(h('p', 'rnone', d.hunk ? 'This step runs changed code. Open the diff to see the line.' : 'No single line of code for this step.'));
+      if (d.hunk && onCode) { var go = h('button', 'btn soft', 'Show in the diff →'); go.type = 'button'; go.addEventListener('click', function(){ onCode(d.hunk, d.line); }); R.appendChild(go); }
+      stepno.textContent = 'Step ' + (step + 1) + ' of ' + st.length;
+      prev.disabled = step === 0; next.disabled = step >= st.length - 1;
+    }
+    function draw(){
+      if (!sc) return;
+      drawTop();
+      if (!root.offsetParent) return;
+      var st = steps(), bs = bars(), cols = sc.cols, nc = cols.length;
+      var VW = Math.max(760, Math.min(1100, Math.round(scr.clientWidth || 1000))), GR = Math.round(Math.min(250, VW * 0.25)), x0 = 20, x1 = VW - GR, colW = (x1 - x0) / nc, HEAD = 60, RH = 54, top0 = HEAD + 20;
+      function X(i){ return x0 + colW * (i + 0.5); }
+      function Y(k){ return top0 + k * RH + RH / 2; }
+      var H = top0 + st.length * RH + 20;
+      svg.setAttribute('viewBox', '0 0 ' + VW + ' ' + H); svg.innerHTML = '';
+      var defs = el('defs', {});
+      ['ink', 'bad', 'risk', 'ok', 'mut', 'acc'].forEach(function(k){ var m = el('marker', { id: id + '-' + k, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, orient: 'auto-start-reverse' });
+        m.appendChild(el('path', { d: 'M0 0 L10 5 L0 10 z', style: 'fill:' + (k === 'acc' ? 'var(--accent)' : rpCol(k)) })); defs.appendChild(m); });
+      svg.appendChild(defs);
+      svg.appendChild(el('rect', { x: x0, y: Y(step) - RH / 2 + 2, width: x1 - x0, height: RH - 4, rx: 8, class: 'rcur' }));
+      cols.forEach(function(c, i){
+        var w = Math.min(colW - 14, 200);
+        svg.appendChild(el('rect', { x: X(i) - w / 2, y: 6, width: w, height: HEAD - 10, rx: 9, class: 'hb' }));
+        txt(svg, { x: X(i), y: 27, 'text-anchor': 'middle', class: 'lb' }, c[0]);
+        if (c[1]) { var sub = String(c[1]), fit = Math.floor((w - 12) / 6.6); txt(svg, { x: X(i), y: 44, 'text-anchor': 'middle', class: 'ls' }, sub.length > fit ? sub.slice(0, fit - 1) + '…' : sub); }
+        svg.appendChild(el('line', { x1: X(i), y1: HEAD - 4, x2: X(i), y2: H - 8, class: 'life' }));
+      });
+      st.forEach(function(d, k){
+        var y = Y(k), on = k === step, c = cOf(d), kind = on ? 'acc' : c;
+        var stroke = on ? 'var(--accent)' : rpCol(c), sw = on ? 2.8 : 1.8, name = rpShort(d.label);
+        var g = el('g', { opacity: k > step ? .4 : 1, class: 'rstep-g' }); g.style.cursor = 'pointer';
+        g.addEventListener('click', function(){ stop(); step = k; draw(); });
+        g.appendChild(el('rect', { x: x0, y: y - RH / 2 + 2, width: x1 - x0, height: RH - 4, fill: 'transparent' }));
+        txt(g, { x: x0 + 6, y: y + 4, class: 'mn' }, String(k + 1));
+        if (d.from === d.to) {
+          var x = X(d.from), right = d.from < nc - 1;
+          var p = right ? 'M' + (x + 8) + ' ' + (y - 10) + ' h 26 a 6 6 0 0 1 6 6 v 8 a 6 6 0 0 1 -6 6 h -24' : 'M' + (x - 8) + ' ' + (y - 10) + ' h -26 a 6 6 0 0 0 -6 6 v 8 a 6 6 0 0 0 6 6 h 24';
+          g.appendChild(el('path', { d: p, fill: 'none', style: 'stroke:' + stroke, 'stroke-width': sw, 'marker-end': 'url(#' + id + '-' + kind + ')' }));
+          var room = Math.floor((right ? x1 - x - 52 : x - x0 - 52) / 7.4), nm = name.length > room ? name.slice(0, Math.max(5, room) - 1) + '…' : name;
+          txt(g, { x: right ? x + 48 : x - 48, y: y + 4, 'text-anchor': right ? 'start' : 'end', class: 'rname' + (on ? ' on' : '') }, nm);
+          if (c === 'bad' || c === 'risk') badge(g, right ? x + 22 : x - 22, y + 20, c);
+        } else {
+          var xa = X(d.from), xb = X(d.to), dir = xb > xa ? 1 : -1;
+          var ln = el('line', { x1: xa + dir * 8, y1: y + 6, x2: xb - dir * 10, y2: y + 6, style: 'stroke:' + stroke, 'stroke-width': sw, 'marker-end': 'url(#' + id + '-' + kind + ')' });
+          if (d.ret) ln.setAttribute('stroke-dasharray', '7 5'); g.appendChild(ln);
+          var fit = Math.max(6, Math.floor((Math.abs(xb - xa) - 24) / 7.4)), nm2 = name.length > fit ? name.slice(0, fit - 1) + '…' : name;
+          txt(g, { x: (xa + xb) / 2, y: y - 2, 'text-anchor': 'middle', class: 'rname' + (on ? ' on' : '') }, nm2);
+          if (c === 'bad' || c === 'risk') badge(g, xb - dir * 22, y + 20, c);
+        }
+        svg.appendChild(g);
+      });
+      // timing track on the right, like a profiler: one bar per lock, wait or risk window
+      var tx = x1 + 28, tw = VW - tx - 10;
+      txt(svg, { x: tx, y: 26, class: 'rtt' }, 'TIMING');
+      svg.appendChild(el('line', { x1: tx - 14, y1: HEAD - 4, x2: tx - 14, y2: H - 8, class: 'tick' }));
+      st.forEach(function(d, k){ svg.appendChild(el('line', { x1: tx - 18, y1: Y(k), x2: tx - 10, y2: Y(k), class: 'tick' })); });
+      var lanes = Math.max(1, bs.length), bw = Math.max(8, Math.min(22, (tw - 120) / lanes - 6)), lx = tx + lanes * (bw + 6) + 4;
+      bs.forEach(function(b, j){
+        var K = BARK[b.cls] || BARK['bar-ok'], a = Math.min(b.from, st.length - 1), z = Math.min(b.to, st.length - 1);
+        var y1 = Y(a) - RH / 2 + 6, y2 = Y(z) + RH / 2 - 6, bx = tx + j * (bw + 6);
+        var r = el('rect', { x: bx, y: y1, width: bw, height: y2 - y1, rx: 4, style: 'fill:' + K[1] }); if (b.cls === 'bar-wait') r.setAttribute('opacity', '.75');
+        svg.appendChild(r);
+        var ly = y1 + 13 + j * 2;
+        txt(svg, { x: lx, y: ly, class: 'rtk', style: 'fill:' + K[1] }, K[0]);
+        txt(svg, { x: lx, y: ly + 15, class: 'rtl' }, (cols[b.col] || [''])[0]);
+        txt(svg, { x: lx, y: ly + 30, class: 'rtm' }, 'steps ' + (a + 1) + '–' + (z + 1));
+        if (y2 - y1 > 80 && b.end) { var e = String(b.end); txt(svg, { x: lx, y: y2 - 4, class: 'rtm' }, 'ends: ' + (e.length > 22 ? e.slice(0, 21) + '…' : e)); }
+      });
+      if (!bs.length) txt(svg, { x: tx, y: Y(0) + 4, class: 'rtm' }, 'No lock or wait');
+    }
     function stop(){ if (timer) { clearInterval(timer); timer = null; } playB.textContent = '▶ Play'; }
     function play(){
       if (timer) { stop(); return; }
@@ -800,11 +974,14 @@ var FB = /*__NS_FIREBASE__*/null;
     }
     me.load = function(s, m, i){
       stop(); sc = s; modeBox.innerHTML = '';
-      Object.keys(s.modes).forEach(function(k){ var b = h('button', '', s.modes[k]); b.type = 'button'; b.dataset.m = k; b.addEventListener('click', function(){ stop(); setMode(k); step = 0; draw(); }); modeBox.appendChild(b); });
-      modeBox.hidden = Object.keys(s.modes).length < 2;
+      Object.keys(s.modes).forEach(function(k){ if (!s[k] || !(s[k].steps || []).length) return; var b = h('button', '', s.modes[k]); b.type = 'button'; b.dataset.m = k; b.addEventListener('click', function(){ stop(); setMode(k); step = 0; draw(); }); modeBox.appendChild(b); });
+      modeBox.hidden = modeBox.children.length < 2;
       setMode(m || 'bug'); step = Math.max(0, Math.min(i || 0, s[mode].steps.length - 1)); draw();
     };
+    me.visible = function(){ return !!(sc && root.offsetParent); };
+    me.go = function(d){ stop(); var k = Math.max(0, Math.min(n() - 1, step + d)); if (k !== step) { step = k; draw(); } };
     me.draw = draw; me.stop = stop;
+    REPLAYS.push(me);
   }
 
   // ---------- Night Shift PR page: reads prs/<id> and shows the six-page review ----------
@@ -865,6 +1042,7 @@ var FB = /*__NS_FIREBASE__*/null;
             var rec = d.data(); rec.id = d.id;
             Object.keys(rec).forEach(function(kj){ var k = kj.replace(/Json$/, ''); if (k !== kj && rec[kj] && rec[k] == null) { try { rec[k] = JSON.parse(rec[kj]); } catch(e) { rec[k] = null; } } });   // any field stored as JSON text
             if (first === null) { first = rec.head + '|' + rec.reviewedAt; firstDraw = rec.redrawAt || ''; render(rec); return; }
+            if (first !== null && rec.head + '|' + rec.reviewedAt === first && (rec.stillOpenAt || '') !== (window.__nsStillAt || '')) { window.__nsStillAt = rec.stillOpenAt || ''; if (window.__nsStill) window.__nsStill(rec); }
             if (rec.head + '|' + rec.reviewedAt === first && (rec.redrawAt || '') !== firstDraw) { firstDraw = rec.redrawAt || ''; if (window.__nsRedrawn) window.__nsRedrawn(rec); return; }
             if (rec.head + '|' + rec.reviewedAt !== first) { $('h-status').innerHTML = ''; $('h-status').appendChild(document.createTextNode(rec.stage === 'reviewing' ? 'A new review is running… ' : 'A newer review is ready. ')); if (rec.stage !== 'reviewing') { var b = mk('button', 'btn soft', 'Reload'); b.type = 'button'; b.onclick = function(){ location.reload(); }; $('h-status').appendChild(b); } }
           }, function(e){ fail('Could not read the review: ' + (e.message || e)); });
@@ -996,6 +1174,10 @@ var FB = /*__NS_FIREBASE__*/null;
     if (rec.sample) hp.appendChild(pill('SAMPLE PR · written for this prototype, not a real PR', 'background:var(--bad);color:#fff'));
     if (rec.draft) hp.appendChild(pill('Draft'));
     hp.appendChild(pill(TYPE[rec.type] || rec.type || 'PR', 'background:var(--accent-soft);color:var(--accent-ink)'));
+    if (rec.linkedIssue) {                       // 28 Oct: the Night Shift case this PR fixes, one click away
+      var li = document.createElement('a'); li.href = 'index.html#problems/m-' + rec.linkedIssue; li.target = '_blank'; li.rel = 'noopener';
+      li.appendChild(pill('fixes case ' + String(rec.linkedIssue).slice(0, 8) + ' ↗', 'background:var(--ok-bg);color:var(--ok-ink)')); hp.appendChild(li);
+    }
     if (rec.verdict && VERD[rec.verdict]) hp.appendChild(pill(VERD[rec.verdict][0], rec.verdict === 'approve' ? 'background:var(--ok-bg);color:var(--ok-ink)' : rec.verdict === 'blocking' ? 'background:var(--bad);color:#fff' : ''));
     hp.appendChild(pill(claims ? 'Description checked' : rec.description ? 'Description not checked' : 'No description: code only', 'background:var(--soft);color:var(--muted);border:1px solid var(--line)'));
     var adds = 0, dels = 0; ((rec.code || {}).files || []).forEach(function(f){ adds += f.add || 0; dels += f.del || 0; });
@@ -1056,7 +1238,7 @@ var FB = /*__NS_FIREBASE__*/null;
       if (!rec.description) { t.appendChild(mk('span', 'by', 'No description')); t.appendChild(document.createTextNode(' ')); }
       t.appendChild(document.createTextNode(view.tldr || rec.headline || ''));
     }
-    p.appendChild(t);
+    p.appendChild(t); var __goal = t;
     // before / adds
     var ps = mk('div', 'ps'), b1 = mk('div', 'psb prob'), b2 = mk('div', 'psb sol');
     var bf = view.before || {}, ad = view.adds || {};
@@ -1120,22 +1302,42 @@ var FB = /*__NS_FIREBASE__*/null;
     var ta = inPr.reduce(function(a, f){ return a + f.add; }, 0), td = inPr.reduce(function(a, f){ return a + f.del; }, 0);
     var ch2 = mk('div', 'ch'); ch2.appendChild(mk('h2', null, 'Files touched'));
     ch2.appendChild(mk('span', 'lead', inPr.length + ' file' + (inPr.length === 1 ? '' : 's') + ' · +' + ta + ' −' + td)); p.appendChild(ch2);
-    var fl = mk('div', 'files');
-    FL.forEach(function(f){
-      var fb = mk('div', 'file' + (f.tag === 'ctx' ? ' ctx' : '')), fh = mk('div', 'fh');
-      var nmw = mk('div', 'fnm'); nmw.appendChild(mk('b', 'mono', f.name));
-      var dir = String(f.path || '').split('/').slice(0, -1).join('/'); if (dir) nmw.appendChild(mk('span', 'fdir mono', dir + '/'));
-      fh.appendChild(nmw);
-      if (f.tag !== 'ctx') { var dd = mk('span', 'dd'); dd.appendChild(mk('span', 'ad', '+' + f.add)); dd.appendChild(mk('span', 'de', '−' + f.del)); fh.appendChild(dd); }
-      var tg = TAGS[f.tag] || TAGS.core; fh.appendChild(mk('span', 'tagc ' + tg[1], tg[0]));
-      fb.appendChild(fh); var fns = mk('div', 'fns');
-      f.fns.forEach(function(fn){
-        var row = mk(fn.hunk ? 'button' : 'div', 'fn'); if (fn.hunk) { row.type = 'button'; row.dataset.hunk = fn.hunk; }
-        row.appendChild(mk('span', 'dot ' + (fn.dot === 'r' || fn.dot === 'y' ? fn.dot : 'g'))); row.appendChild(mk('b', null, fn.name || '')); row.appendChild(mk('span', null, fn.note || '')); fns.appendChild(row);
-      });
-      if (f.fns.length) fb.appendChild(fns); fl.appendChild(fb);
+    var fl = mk('div', 'files ftab');   // 30 Oct: one compact row per file; its functions open on click; long lists fold after 8
+    var maxCh = Math.max.apply(null, inPr.map(function(f){ return f.add + f.del; }).concat([1]));
+    FL.forEach(function(f, k){
+      var fb = mk('details', 'file fileRow' + (f.tag === 'ctx' ? ' ctx' : '')), sm = mk('summary', 'fsum2');
+      var tg = TAGS[f.tag] || TAGS.core;
+      sm.appendChild(mk('span', 'fdot ' + tg[1]));
+      var nmw = mk('span', 'fnm2'); nmw.appendChild(mk('b', 'mono', f.name));
+      var dir = String(f.path || '').split('/').slice(0, -1).join('/'); if (dir) { var dd0 = mk('span', 'fdir mono', dir + '/'); dd0.title = dir; nmw.appendChild(dd0); }
+      sm.appendChild(nmw);
+      var stat = mk('span', 'fstat');
+      if (f.tag !== 'ctx') {
+        stat.appendChild(mk('span', 'ad', '+' + f.add)); stat.appendChild(mk('span', 'de', '−' + f.del));
+        var bar = mk('span', 'fbar'), w = Math.max(4, Math.round((f.add + f.del) / maxCh * 100)), ai = mk('i', 'a'), di = mk('i', 'd');
+        ai.style.width = (w * f.add / Math.max(1, f.add + f.del)) + '%'; di.style.width = (w * f.del / Math.max(1, f.add + f.del)) + '%'; bar.appendChild(ai); bar.appendChild(di); stat.appendChild(bar);
+      }
+      sm.appendChild(stat);
+      sm.appendChild(mk('span', 'fcount', f.fns.length ? f.fns.length + ' fn' : ''));
+      sm.appendChild(mk('span', 'tagc ' + tg[1], tg[0]));
+      fb.appendChild(sm);
+      if (f.fns.length) {
+        var fns = mk('div', 'fns');
+        f.fns.forEach(function(fn){
+          var row = mk(fn.hunk ? 'button' : 'div', 'fn'); if (fn.hunk) { row.type = 'button'; row.dataset.hunk = fn.hunk; }
+          row.appendChild(mk('span', 'dot ' + (fn.dot === 'r' || fn.dot === 'y' ? fn.dot : 'g'))); row.appendChild(mk('b', null, fn.name || '')); row.appendChild(mk('span', null, fn.note || '')); fns.appendChild(row);
+        });
+        fb.appendChild(fns);
+      } else { fb.classList.add('nofn'); sm.addEventListener('click', function(e){ e.preventDefault(); }); }
+      if (k >= 8) fb.hidden = true;
+      fl.appendChild(fb);
     });
     p.appendChild(fl);
+    if (FL.length > 8) {
+      var more = mk('button', 'btn fmore', 'Show all ' + FL.length + ' files'); more.type = 'button';
+      more.addEventListener('click', function(){ var open = more.dataset.open === '1'; fl.querySelectorAll('.fileRow').forEach(function(x, i){ if (i >= 8) x.hidden = open; }); more.dataset.open = open ? '' : '1'; more.textContent = open ? 'Show all ' + FL.length + ' files' : 'Show fewer'; });
+      p.appendChild(more);
+    }
     // is it ready
     if ((view.ready || []).length) {
       var ch3 = mk('div', 'ch'); ch3.appendChild(mk('h2', null, 'Is it ready?')); p.appendChild(ch3);
@@ -1151,10 +1353,41 @@ var FB = /*__NS_FIREBASE__*/null;
       p.appendChild(dn);
     }
     if (view.heads) { var h = mk('div', 'heads'); h.appendChild(mk('b', null, 'Heads up')); h.appendChild(document.createTextNode(' ' + view.heads)); p.appendChild(h); }
+    (function(){ var ref = __goal.nextSibling; [ch3, dn, h].forEach(function(x){ if (x && x.parentNode === p) p.insertBefore(x, ref); }); })();   // 30 Oct: 'Is it ready?' and 'Heads up' right under the goal
     var acts = mk('div', 'acts');
     if (SC.length) { var go = mk('button', 'btn pri', 'Review the scenarios →'); go.type = 'button'; go.dataset.go = 't-risk'; acts.appendChild(go); }
     if (view.flow) { var g2 = mk('button', 'btn', (/fix$/.test(rec.type || '') ? 'Watch the replay first' : 'See the new flow first')); g2.type = 'button'; g2.dataset.go = 't-replay'; acts.appendChild(g2); }
     p.appendChild(acts);
+    (function(){   // 30 Oct: the Summary is a side list of sections; one section shows at a time
+      var kids = Array.prototype.slice.call(p.children), groups = [], cur = null;
+      function start(name){ cur = { name: name, els: [] }; groups.push(cur); }
+      kids.forEach(function(el){
+        if (el === acts) return;
+        var c = el.classList;
+        if (c.contains('tldr')) start('Overview');
+        else if (c.contains('ch')) { var t2 = ((el.querySelector('h2') || el).textContent || '').trim(); if (!(cur && cur.name === 'Overview' && /ready/i.test(t2))) start(t2); }
+        else if (c.contains('heads')) { if (!(cur && cur.name === 'Overview')) start('Heads up'); }
+        else if (c.contains('ps')) start('Before and after');
+        else if (el.matches && el.matches('details.dvc')) start('Description vs code');
+        else if (c.contains('rm')) start('Risk');
+        if (!cur) start('Overview');
+        cur.els.push(el);
+      });
+      if (groups.length < 2) return;
+      var wrap = mk('div', 'snav'), nav = mk('nav', 'snl'), body = mk('div', 'snb'); nav.setAttribute('aria-label', 'Summary sections');
+      groups.forEach(function(g, i){
+        var b = mk('button', 'sni'); b.type = 'button'; b.dataset.i = i; b.appendChild(mk('span', null, g.name));
+        var n = g.name === 'Files touched' ? (inPr || []).length : g.name === 'Overview' ? (view.ready || []).length : 0; if (n) b.appendChild(mk('em', null, String(n)));
+        nav.appendChild(b);
+        var sec = mk('section', 'sns'); g.els.forEach(function(e){ sec.appendChild(e); }); g.sec = sec; body.appendChild(sec);
+      });
+      function show(i){ groups.forEach(function(g, k){ g.sec.hidden = k !== i; nav.children[k].setAttribute('aria-current', k === i ? 'true' : 'false'); }); try { localStorage.setItem('ns.pr.sumsec', groups[i].name); } catch(e) {} }
+      nav.addEventListener('click', function(e){ var b = e.target.closest('.sni'); if (b) show(+b.dataset.i); });
+      wrap.appendChild(nav); wrap.appendChild(body); p.insertBefore(wrap, acts && acts.parentNode === p ? acts : null);
+      var dvc = p.querySelector('details.dvc'); if (dvc) dvc.open = true;
+      var sv = null, si = 0; try { sv = localStorage.getItem('ns.pr.sumsec'); } catch(e) {}
+      groups.forEach(function(g, k){ if (g.name === sv) si = k; }); show(si);
+    })();
   }
   function riskMeter(r){
     var lv = r.score >= 65 ? 'high' : r.score >= 35 ? 'medium' : 'low', LV = { high: 'High risk', medium: 'Medium risk', low: 'Low risk' };
@@ -1188,8 +1421,13 @@ var FB = /*__NS_FIREBASE__*/null;
     var findLinks = {}; (view.finding_links || []).forEach(function(l){ findLinks[l.finding] = l; });
     // o.old: a review made before the line check and judges, so nothing in it is Verified
     var RANK = { verified: 0, suspected: 1, safe: 2 };
-    var SC = (view.scenarios || []).map(function(s, i){ var o = Object.assign({}, s); o.verdict = NORM[s.verdict] || 'suspected'; o.old = !s.proof; o.finding = s.finding != null ? 'f' + s.finding : null; o._i = i; return o; })
-      .sort(function(a, b){ var SV = { blocker: 0, major: 1, minor: 2, suggestion: 3 }; return (RANK[a.verdict] - RANK[b.verdict]) || ((SV[a.severity] != null ? SV[a.severity] : 4) - (SV[b.severity] != null ? SV[b.severity] : 4)) || (a._i - b._i); });   // the hunt ranks verified bugs first
+    // 1 Nov: a bug the Still-open check found fixed on a newer branch/PR gets its own group; safe scenarios are not listed
+    var SOFIX = {}; ((rec.stillOpen || {}).items || []).forEach(function(x){ if (x.summary === 'fixed' || x.summary === 'fixed-elsewhere') { if (x.scenario) SOFIX['s:' + x.scenario] = x; SOFIX['f:' + x.finding] = x; } });
+    var TRANK = { verified: 0, suspected: 1, fixed: 2, safe: 3 };
+    var SC = (view.scenarios || []).map(function(s, i){ var o = Object.assign({}, s); o.verdict = NORM[s.verdict] || 'suspected'; o.old = !s.proof; o.finding = s.finding != null ? 'f' + s.finding : null; o._i = i;
+        o.fixedNew = o.verdict !== 'safe' ? (SOFIX['s:' + s.id] || (s.finding != null ? SOFIX['f:' + s.finding] : null)) : null; o.tier = o.fixedNew ? 'fixed' : o.verdict; return o; })
+      .sort(function(a, b){ var SV = { blocker: 0, major: 1, minor: 2, suggestion: 3 }; return (TRANK[a.tier] - TRANK[b.tier]) || ((SV[a.severity] != null ? SV[a.severity] : 4) - (SV[b.severity] != null ? SV[b.severity] : 4)) || (a._i - b._i); });   // the hunt ranks verified bugs first
+    var SC_ALL = SC; SC = SC.filter(function(s){ return s.tier !== 'safe'; });
     var scById = {}; SC.forEach(function(s, i){ scById[s.id] = i; });
     var HUNKS = (view.hunks || []).map(function(h){ var o = Object.assign({}, h); o.links = (h.links || []).map(function(l){ return [l[0] === 'flow' ? 'crash' : l[0], l[1], l[2]]; }).filter(function(l){ return l[0] === 'crash' ? !!MAIN : scById[l[0]] != null; }); return o; });
     var hunkIds = {}; HUNKS.forEach(function(h){ hunkIds[h.id] = true; });
@@ -1201,6 +1439,14 @@ var FB = /*__NS_FIREBASE__*/null;
     var CODE = rec.code || { files: [] };
 
     summary(rec, view, claims, SC);
+    (function(){   // 30 Oct: verdict and counts at the top of the inspector
+      var side = document.querySelector('.side'); if (!side) return; var old = side.querySelector('.vcard'); if (old) old.parentNode.removeChild(old);
+      var vc = mk('div', 'vcard'); vc.appendChild(mk('span', 'vk', 'Verdict')); vc.appendChild(mk('span', 'vt', VERD[rec.verdict] ? VERD[rec.verdict][0] : 'Review'));
+      var g = mk('div', 'vgrid');
+      [['verified', 'var(--bad)'], ['suspected', 'var(--risk)'], ['safe', 'var(--ok)']].forEach(function(x){ var d = mk('div'), b = mk('b', null, String(SC_ALL.filter(function(s){ return s.verdict === x[0]; }).length)); b.style.color = x[1]; d.appendChild(b); d.appendChild(mk('span', null, x[0])); g.appendChild(d); });
+      var d4 = mk('div'), b4 = mk('b', null, String(SC.filter(function(s){ return (s.field || []).length; }).length)); b4.style.color = 'var(--accent)'; d4.appendChild(b4); d4.appendChild(mk('span', null, 'seen in the field')); g.appendChild(d4);
+      vc.appendChild(g); side.insertBefore(vc, side.firstChild);
+    })();
     if (!MAIN) $('t-replay').hidden = true; else { $('t-replay-l').textContent = isFix ? 'Replay' : 'New flow'; $('flow-title').textContent = view.flow.title || ''; $('flow-lead').textContent = view.flow.lead || ''; }
     if (!SC.length) { $('sc-body').hidden = true; $('riskhead').textContent = 'No scenarios for this PR.'; }
     if (!(view.paths || []).length) $('t-map').hidden = true;
@@ -1248,22 +1494,42 @@ var FB = /*__NS_FIREBASE__*/null;
     }
     var codeJump = function(h, l){ if (hunkIds[h]) goCode(h, l); };
     var rpMain = new Replay($('rp-main'), codeJump, function(id){ goScenario(id); },
-                            function(id){ var k = scById[id]; return k == null ? 'Open the scenario' : 'See scenario ' + (k + 1); });
+                            function(id){ var k = scById[id]; return k == null ? 'Open the scenario' : 'See scenario ' + (k + 1); }, { neutral: true });
     var rpSc = new Replay($('rp-sc'), codeJump);
+    (function(){   // 30 Oct: a scenario's sections open one at a time from a tab strip
+      var KEY = 'ns.pr.scsec', pick = 'replay'; try { pick = localStorage.getItem(KEY) || 'replay'; } catch(e) {}
+      var NAMES = { judges: 'Judges', repro: 'How to reproduce', why: 'Why', fix: 'Suggested fix', replay: 'Replay in the code', evidence: 'Evidence' };
+      var bar = $('sctabs');
+      function secs(){ return Array.prototype.slice.call(document.querySelectorAll('#sc-body details[data-fold]')); }
+      function sync(){
+        var ss = secs().filter(function(d){ return !d.hidden; }), cur = pick;
+        if (!ss.some(function(d){ return d.dataset.fold === cur; })) cur = ss.length ? ss[0].dataset.fold : '';
+        bar.innerHTML = '';
+        ss.forEach(function(d){ var k = d.dataset.fold, b = mk('button', 'sct2', NAMES[k] || k); b.type = 'button'; b.setAttribute('aria-pressed', k === cur ? 'true' : 'false');
+          b.addEventListener('click', function(){ pick = k; try { localStorage.setItem(KEY, k); } catch(e) {} sync(); }); bar.appendChild(b); });
+        secs().forEach(function(d){ var on = d.dataset.fold === cur; d.open = on; d.classList.toggle('off', !on); });
+        REPLAYS.forEach(function(r){ r.draw(); });
+      }
+      window.__scTabsSync = function(){ setTimeout(sync, 0); };
+      secs().forEach(function(d){ var s = d.querySelector('summary'); if (s) s.addEventListener('click', function(e){ e.preventDefault(); }); });
+      sync();
+    })();
 
     // scenarios
-    var scs = $('scs'), lastTier = null, TIERNAME = { verified: 'Verified', suspected: 'Suspected', safe: 'Safe' };
+    var scs = $('scs'), lastTier = null, TIERNAME = { verified: 'Verified', suspected: 'Suspected', fixed: 'Fixed on a newer commit', safe: 'Safe' };
     SC.forEach(function(s, i){
-      if (s.verdict !== lastTier) { lastTier = s.verdict; var gh = mk('div', 'scgroup ' + CLS[s.verdict]); gh.setAttribute('role', 'presentation');
-        gh.appendChild(mk('span', null, TIERNAME[s.verdict] || s.verdict)); gh.appendChild(mk('em', null, String(SC.filter(function(o){ return o.verdict === s.verdict; }).length))); scs.appendChild(gh); }
+      if (s.tier !== lastTier) { lastTier = s.tier; var gh = mk('div', 'scgroup ' + (s.tier === 'fixed' ? 'fixedn' : CLS[s.verdict])); gh.setAttribute('role', 'presentation');
+        gh.appendChild(mk('span', null, TIERNAME[s.tier] || s.tier)); gh.appendChild(mk('em', null, String(SC.filter(function(o){ return o.tier === s.tier; }).length))); scs.appendChild(gh); }
       var b = mk('button', 'sc'); b.type = 'button'; b.setAttribute('role', 'tab'); b.id = 'sc-' + s.id; b.tabIndex = i ? -1 : 0;
-      b.classList.add(CLS[s.verdict]);
+      b.classList.add(s.tier === 'fixed' ? 'fixedn' : CLS[s.verdict]);
       b.appendChild(mk('span', 'scn', String(i + 1)));
       var tx = mk('span', 'sct'); tx.appendChild(mk('b', null, s.title));
       var row = mk('span', 'row');
       if (s.severity && s.verdict !== 'safe') row.appendChild(mk('span', 'svx ' + s.severity, s.severity));
       if (s.verdict !== 'safe' && KIND[s.kind]) row.appendChild(mk('span', 'kind ' + s.kind, s.kind === 'timing' ? 'timing' : s.kind === 'condition' ? 'only if…' : 'every time'));
       if (s.fixCode) row.appendChild(mk('span', 'hasfix', 'fix'));
+      if ((s.field || []).length) row.appendChild(mk('span', 'infield' + (s.fieldStrength === 'path' ? ' strong' : ''), s.fieldStrength === 'path' ? 'in the field · same path' : 'in the field · same function'));
+      if (s.fixedNew) { var fo = (s.fixedNew.fixedOn || [])[0] || ((s.fixedNew.results || []).filter(function(r){ return r.state === 'fixed'; })[0]) || {}; row.appendChild(mk('span', 'fixedon', 'fixed on ' + (fo.label || 'a newer commit'))); }
       var dn = mk('span', 'done', '✓ checked'); dn.hidden = true; row.appendChild(dn); tx.appendChild(row); b.appendChild(tx);
       b.title = s.q || '';
       b.addEventListener('click', function(){ pickSc(i); });
@@ -1280,10 +1546,46 @@ var FB = /*__NS_FIREBASE__*/null;
       if (s.severity && s.verdict !== 'safe') meta.appendChild(mk('span', 'svx ' + s.severity, s.severity));
       if (s.pre_existing) meta.appendChild(mk('span', 'svx', 'existed before · still open'));
       meta.appendChild(mk('span', 'scnum', 'Scenario ' + (i + 1) + ' of ' + SC.length));
-      var jl = $('scjudges'); jl.innerHTML = '';
-      ((s.proof || {}).judges || []).forEach(function(j){ var c = mk('span', 'jv ' + (j[1] === 'confirmed' ? 'ok' : j[1] === 'refuted' ? 'bad' : 'maybe'));
-        c.appendChild(mk('b', null, j[1] === 'confirmed' ? '✓' : j[1] === 'refuted' ? '✕' : '?')); c.appendChild(document.createTextNode(' ' + j[0] + ' ' + (j[1] === 'confirmed' ? 'confirmed' : j[1] === 'refuted' ? 'refuted' : 'unsure')));
-        c.title = j[2] || ''; jl.appendChild(c); });
+      var jl = $('scjudges'); jl.innerHTML = ''; jl.className = 'jwins';   // 30 Oct: each judge is a small window: what it does (grey), its vote, its note
+      var JROLE = { Skeptic: 'Tries hard to prove the scenario wrong. Confirms only what the code forces.',
+        Simulator: 'Steps through the code with real values, like a debugger that reads instead of runs.',
+        Reachability: 'Checks that a user of the release build gets here from a real screen.',
+        'Screen gate': 'Checks the screen does not block this action (disabled button, loading dialog).',
+        'Field match': 'Looks for real user crashes in Crashlytics and Play that end in the same code.' };
+      var JV = { confirmed: ['var(--bad)', 'Confirmed'], refuted: ['var(--ok)', 'Refuted'], unsure: ['var(--risk)', 'Unsure'], holds: ['var(--bad)', 'Holds'], clears: ['var(--ok)', 'Clears'], na: ['var(--neutral)', 'n/a'] };
+      var wins = ((s.proof || {}).judges || []).map(function(j){ return [j[0], JROLE[j[0]] || 'Expert in ' + String(j[0]).replace(/ judge$/i, '').toLowerCase() + '. Checks the path and grades how bad it is.', j[1] === 'confirmed' || j[1] === 'refuted' ? j[1] : 'unsure', j[2] || '']; });
+      var sim0 = (s.proof || {}).sim;
+      if (sim0 && (sim0.steps || []).length && !wins.some(function(w){ return w[0] === 'Simulator'; })) wins.unshift(['Simulator', JROLE.Simulator, sim0.end === 'outcome' ? 'confirmed' : sim0.end === 'guard' ? 'refuted' : 'unsure',
+        sim0.end === 'outcome' ? (sim0.outcome || 'It reached the outcome.') : sim0.end === 'guard' ? 'Stopped by ' + (sim0.stopped_at || 'a guard') : 'Could not finish' + (sim0.unknown ? ': needs ' + sim0.unknown : '')]);
+      if (s.reach && s.reach.state) wins.push(['Reachability', JROLE.Reachability, s.reach.state === 'release' ? 'holds' : s.reach.state === 'latent' ? 'clears' : 'na',
+        s.reach.state === 'release' ? 'Yes: ' + (s.reach.path || 'a release user reaches this from a real screen.') : s.reach.state === 'latent' ? 'No: only ' + (s.reach.gate || 'a debug build') + ' reaches it. Kept as latent.' : 'Not shown: no judge found the screen that leads here.']);
+      if (s.uiGate && s.uiGate.state) wins.push(['Screen gate', JROLE['Screen gate'], s.uiGate.state === 'open' ? 'holds' : 'clears',
+        s.uiGate.state === 'open' ? 'Nothing on the screen stops the user doing this in that state.' : 'The screen blocks this action: ' + [].concat(s.uiGate.evidence || []).join('; ')]);
+      if (s.verdict !== 'safe') wins.push(['Field match', JROLE['Field match'], (s.field || []).length ? 'holds' : 'na',
+        (s.field || []).length ? 'Yes: users already crashed here: ' + s.field.map(function(f){ return f.frame + ' (' + (f.events || '?') + ' events)'; }).join('; ') : 'No real crash ends in this code yet.']);
+      wins.forEach(function(w){
+        var v = JV[w[2]] || JV.na, b = mk('button', 'jw'); b.type = 'button'; b.setAttribute('aria-expanded', 'false');
+        var hb = mk('span', 'jb'); hb.appendChild(mk('b', null, w[0])); var vb = mk('span', 'jv2', v[1]); vb.style.color = v[0]; vb.style.borderColor = v[0]; hb.appendChild(vb); b.appendChild(hb);
+        b.appendChild(mk('span', 'jr', w[1])); b.appendChild(mk('span', 'jn', w[3]));
+        b.addEventListener('click', function(){ b.setAttribute('aria-expanded', b.getAttribute('aria-expanded') === 'true' ? 'false' : 'true'); });
+        jl.appendChild(b);
+      });
+      var so = $('scsimout');
+      so.hidden = !(sim0 && sim0.end);
+      if (sim0 && sim0.end) { var sc2 = sim0.end === 'outcome' ? 'var(--bad)' : sim0.end === 'guard' ? 'var(--ok)' : 'var(--risk)'; so.style.borderColor = sc2; so.innerHTML = '';
+        var sb2 = mk('b', null, 'Simulator: ' + (sim0.end === 'outcome' ? 'it reached the bug' : sim0.end === 'guard' ? 'a guard in the code stops it' : 'it needs a fact the code cannot show')); sb2.style.color = sc2; so.appendChild(sb2);
+        so.appendChild(mk('p', null, sim0.end === 'outcome' ? (sim0.outcome || '') : sim0.end === 'guard' ? (sim0.stopped_at || '') : (sim0.unknown || ''))); }
+      // one-line summaries on the folded sections, so a closed section still says what is inside
+      var nHold = wins.filter(function(w){ return w[2] === 'confirmed' || w[2] === 'holds'; }).length;
+      $('fs-judges').textContent = nHold + ' of ' + wins.length + ' hold it · ' + wins.map(function(w){ return w[0] + ' ' + ((JV[w[2]] || JV.na)[1]).toLowerCase(); }).join(' · ');
+      $('fs-repro').textContent = s.repro ? (s.repro.steps || []).length + ' steps' + (s.repro.actual ? ' · with this PR: ' + String(s.repro.actual).slice(0, 90) + (String(s.repro.actual).length > 90 ? '…' : '') : '') : '';
+      $('fs-why').textContent = (s.why || []).map(function(w){ return w[1]; }).join(' · ');
+      var ftxt = (!s.fixCode && s.finding) ? String(((rec.findings || [])[+String(s.finding).slice(1)] || {}).fix || '').trim() : '';
+      var fsteps = (!s.fixCode && s.fix && (s.fix.steps || []).length) ? s.fix.steps : null;
+      $('scfixf').hidden = !s.fixCode && !ftxt && !fsteps; $('fs-fix').textContent = (!s.fixCode && (ftxt || fsteps)) ? 'in words · no code diff was written for this one' : s.fixCode ? String(s.fixCode.file || '').split('/').pop() + (s.fixCode.line ? ':' + s.fixCode.line : '') + ' · suggestion, not compiled' : '';
+      $('fs-replay').textContent = s.bug ? ((s.bug.steps || []).length + ' steps' + (s.fix && (s.fix.steps || []).length ? ' · with the suggested fix: ' + s.fix.steps.length + ' steps' : '')) : '';
+      if (window.__scTabsSync) window.__scTabsSync();
+      if (window.__nsStillPaint) window.__nsStillPaint();
       var why = $('scwhy'); why.innerHTML = '';
       (s.why || []).forEach(function(w){ var d = mk('div', w[0] !== 'plain' ? w[0] : ''); d.appendChild(mk('b', null, w[1])); d.appendChild(document.createTextNode(w[2])); why.appendChild(d); });
       var rpx = $('screpro'); rpx.innerHTML = ''; $('screprosec').hidden = !s.repro;
@@ -1296,7 +1598,22 @@ var FB = /*__NS_FIREBASE__*/null;
         rpx.appendChild(ea);
       }
       var fx = $('scfix');
-      fx.innerHTML = ''; fx.hidden = !s.fixCode;
+      fx.innerHTML = ''; fx.hidden = !s.fixCode && !ftxt && !fsteps;
+      if (!s.fixCode && (ftxt || fsteps)) {         // 1 Nov: the review wrote the fix in words / as a replay, but no diff
+        var fh0 = mk('div', 'fh'); fh0.appendChild(mk('b', null, 'Suggested fix')); fh0.appendChild(mk('span', 'pm', 'no code diff for this finding: the fix as the review described it')); fx.appendChild(fh0);
+        if (ftxt) fx.appendChild(mk('p', null, ftxt));
+        var wc = mk('button', 'btn soft', 'Write it as code'); wc.type = 'button';
+        wc.addEventListener('click', function(){
+          if (!live) { wc.textContent = 'Open the live board to run it'; return; }
+          wc.disabled = true; wc.textContent = 'Queued… (1–3 min)';
+          live.db.collection('jobs').add({ action: 'pr-review', issue: String(rec.id) + '|' + s.id + '|Write the suggested fix as a real code change: fixCode with file, line and a diff of the exact lines. Keep the story and facts.',
+            requestedBy: live.user.email.toLowerCase(), status: 'queued', queuedAt: firebase.firestore.FieldValue.serverTimestamp() })
+            .then(function(){ wc.textContent = 'Writing the code… it appears here when done'; })
+            .catch(function(e){ wc.disabled = false; wc.textContent = 'Could not queue: ' + (e.message || e); });
+        });
+        fx.appendChild(wc);
+        if (fsteps) { var ol = mk('ol', 'fixsteps'); fsteps.forEach(function(st){ var t = Array.isArray(st) ? [st[0], st[1]].filter(Boolean).join(' · ') : [st.line || st.at || '', st.text || st.say || st.label || ''].filter(Boolean).join(' · '); if (t) ol.appendChild(mk('li', null, t)); }); if (ol.children.length) { fx.appendChild(mk('p', 'pm', 'The replay with the fix (see "Suggested fix" in Replay in the code):')); fx.appendChild(ol); } }
+      }
       if (s.fixCode) {
         var fh = mk('div', 'fh'); fh.appendChild(mk('b', null, 'Suggested fix'));
         if (s.fixCode.file) fh.appendChild(mk('span', 'mono', s.fixCode.file + (s.fixCode.line ? ':' + s.fixCode.line : '')));
@@ -1326,6 +1643,42 @@ var FB = /*__NS_FIREBASE__*/null;
           c.appendChild(mk('b', null, (j[1] === 'confirmed' ? '✓ Confirmed' : j[1] === 'refuted' ? '✕ Refuted' : '? Could not prove it')));
           c.appendChild(mk('span', 'pl', j[2])); jw.appendChild(c);
         });
+        var sim = s.proof.sim;
+        if (sim && (sim.steps || []).length) {      // 29-30 Oct: the Simulator's walk with real values, one card per line
+          var sc_ = mk('div', 'pr ' + (sim.end === 'outcome' ? 'bad' : sim.end === 'guard' ? 'ok' : 'maybe'));
+          var hs = mk('div', 'ph'); hs.appendChild(mk('span', 'pk', 'Simulator walk')); hs.appendChild(mk('span', 'pm', 'static · steps through the code with concrete values · ' + (sim.matched || '') + ' lines match')); sc_.appendChild(hs);
+          var fmtv = function(v){ return typeof v === 'string' ? v : JSON.stringify(v); };
+          var keys = Object.keys(sim.start || {});
+          if (keys.length) { var stw = mk('div', 'simstart'); stw.appendChild(mk('b', null, 'Start')); keys.forEach(function(k){ stw.appendChild(mk('span', 'sv', k + ' = ' + fmtv(sim.start[k]))); }); sc_.appendChild(stw); }
+          var ol3 = mk('ol', 'simw');
+          sim.steps.forEach(function(x){
+            var li = mk('li'); var h = mk('div', 'sh');
+            if (x.thread) h.appendChild(mk('span', 'sth', x.thread));
+            h.appendChild(mk('span', 'sref', x.line || ''));
+            li.appendChild(h);
+            if (x.state && typeof x.state === 'object' && Object.keys(x.state).length) {
+              var vs = mk('div', 'svals'); Object.keys(x.state).forEach(function(k){ vs.appendChild(mk('span', 'sv', k + ' = ' + fmtv(x.state[k]))); }); li.appendChild(vs);
+            }
+            if (x.branch) { var b = mk('div', 'sb'); b.appendChild(mk('b', null, '→ ')); b.appendChild(document.createTextNode(x.branch)); li.appendChild(b); }
+            ol3.appendChild(li); });
+          sc_.appendChild(ol3);
+          var en = mk('div', 'simend ' + (sim.end === 'outcome' ? 'bad' : sim.end === 'guard' ? 'ok' : 'maybe'));
+          en.appendChild(mk('b', null, sim.end === 'outcome' ? '✕ Reached the outcome: ' : sim.end === 'guard' ? '✓ Stopped by ' : '? Could not finish' + (sim.unknown ? ': needs ' : '')));
+          en.appendChild(document.createTextNode(sim.end === 'outcome' ? (sim.outcome || '') : sim.end === 'guard' ? (sim.stopped_at || 'a guard') : (sim.unknown || '')));
+          sc_.appendChild(en);
+          if (sim.base) sc_.appendChild(mk('p', 'pl', sim.base === 'same' ? 'Before this PR: the same walk ends the same way (an older bug).' : sim.base === 'different' ? 'Before this PR: the same walk does not end this way (new with this PR).' : 'Before this PR: this path did not exist.'));
+          if ((s.field || []).length) {   // 1 Nov: a link to the crash, and what the match means (same function, not proof of this path)
+            var pf_ = mk('p', 'pl'); pf_.appendChild(document.createTextNode('Real crashes in the same function: '));
+            s.field.forEach(function(f, k){ if (k) pf_.appendChild(document.createTextNode('; '));
+              var a_ = mk('a', null, (f.frame || '?') + ' · ' + (f.events || '?') + ' events'); a_.href = '/#problems/m-' + encodeURIComponent(f.card || ''); a_.target = '_blank'; a_.rel = 'noopener'; pf_.appendChild(a_);
+              if (f.strength === 'path' && f.log) { pf_.appendChild(mk('span', 'infield strong', 'same path')); pf_.appendChild(mk('span', 'som', ' the crash\'s last log lines show this action: ')); pf_.appendChild(mk('code', null, f.log)); }
+              else if (f.lastAction) { pf_.appendChild(mk('span', 'som', ' · right before the crash users did something else: ')); pf_.appendChild(mk('code', null, f.lastAction)); } });
+            var shared = SC.filter(function(o){ return o !== s && (o.field || []).some(function(g){ return s.field.some(function(f){ return f.card === g.card; }); }); }).length;
+            if (s.fieldStrength !== 'path') pf_.appendChild(mk('span', 'som', ' · this path runs through that function' + (shared ? '; ' + shared + ' other scenario' + (shared > 1 ? 's do' : ' does') + ' too, so the crash backs all of them but proves none on its own' : '; the crash does not prove it took this exact path')));
+            sc_.appendChild(pf_);
+          }
+          pf.appendChild(sc_);
+        }
         pf.appendChild(jw);
       }
       rpSc.load(s, mode || 'bug', stepIdx || 0);
@@ -1337,10 +1690,10 @@ var FB = /*__NS_FIREBASE__*/null;
       openDlg({ title: 'Note on scenario ' + (curSc + 1), ctx: s.title, text: texts['sc-' + s.id] || '', label: 'Your note (kept in this browser)', ok: 'Save note', onOk: function(t){ texts['sc-' + s.id] = t; save(); } }); });
     $('scfind').addEventListener('click', function(){ var s = SC[curSc]; select($('t-dec')); var f = document.querySelector('.find[data-id="' + s.finding + '"]'); if (f) { f.scrollIntoView({ block: 'center' }); var b = f.querySelector('button[data-v]'); if (b) b.focus(); } });
     function marks(){ SC.forEach(function(o){ $('sc-' + o.id).querySelector('.done').hidden = !checked[o.id]; }); }
-    (function(){ var u = SC.filter(function(s){ return s.verdict === 'verified'; }).length, sa = SC.filter(function(s){ return s.verdict === 'safe'; }).length;
+    (function(){ var u = SC.filter(function(s){ return s.verdict === 'verified'; }).length, sa = SC_ALL.filter(function(s){ return s.verdict === 'safe'; }).length;
       var dr = (view.dropped || []).length;
       if (SC.length && SC[0].old) $('riskhead').textContent = 'Older review: reviewed before the line check and the judges. Press Re-review for verified results.';
-      else if (SC.length) $('riskhead').textContent = u + ' verified bug' + (u === 1 ? '' : 's') + ' · ' + (SC.length - u - sa) + ' suspected · ' + sa + ' safe' + (dr ? ' · ' + dr + ' dropped by the checks' : ''); })();
+      else if (SC.length) $('riskhead').textContent = u + ' verified bug' + (u === 1 ? '' : 's') + ' · ' + (SC.length - u) + ' suspected · ' + sa + ' safe (not listed)' + (dr ? ' · ' + dr + ' dropped by the checks' : ''); })();
     if ((view.dropped || []).length) {
       var dd = mk('details', 'dropped'), ds = mk('summary');
       ds.appendChild(mk('b', null, 'Dropped by the checks (' + view.dropped.length + ')')); ds.appendChild(mk('span', null, 'ideas the hunters raised that did not survive. Kept so you can see why.'));
@@ -1409,6 +1762,7 @@ var FB = /*__NS_FIREBASE__*/null;
     $('wholecount').textContent = (CODE.files || []).length ? (CODE.files.length + ' files · +' + ta + ' −' + td + ' · every line of the PR, tap a file to open it') : (rec.codeCut ? 'too big to keep on the board: open it in Bitbucket' : 'not available');
 
     // decide
+    var MARK = {};
     FINDS.forEach(function(f){
       var d = mk('div', 'find' + (f.sev === 'major' || f.sev === 'blocker' ? ' major' : '')); d.dataset.id = f.id;
       var row = mk('div', 'frow'); row.appendChild(mk('span', 'sev ' + (f.sev === 'blocker' ? 'unsafe' : f.sev === 'major' ? 'major' : 'minor'), f.sev.toUpperCase()));
@@ -1426,6 +1780,7 @@ var FB = /*__NS_FIREBASE__*/null;
       if (f.hunk && hunkIds[f.hunk]) { var c = mk('button', null, 'See code'); c.type = 'button'; c.addEventListener('click', function(){ goCode(f.hunk); }); acts.appendChild(c); }
       [['agree', 'Agree'], ['no', 'Not a problem'], ['ask', 'Ask author']].forEach(function(v){ var b = mk('button', null, v[1]); b.type = 'button'; b.dataset.v = v[0]; b.setAttribute('aria-pressed', dec[f.id] === v[0] ? 'true' : 'false'); acts.appendChild(b); });
       var saved = mk('div'); saved.hidden = true; d.appendChild(saved);
+      MARK[f.id] = function(v){ mark(v); };
       function mark(v){ dec[f.id] = v; save(); feedback(f, v, texts[f.id] || ''); acts.querySelectorAll('button[data-v]').forEach(function(o){ o.setAttribute('aria-pressed', o.dataset.v === v ? 'true' : 'false'); }); progress(); }
       function show(v, t){ saved.className = 'saved' + (v === 'ask' ? ' ask' : ''); saved.innerHTML = ''; saved.appendChild(mk('b', null, v === 'ask' ? 'Question for the author' : 'Comment on ' + f.where)); saved.appendChild(document.createTextNode(t)); saved.hidden = false; }
       if (dec[f.id] && dec[f.id] !== 'no' && texts[f.id]) show(dec[f.id], texts[f.id]);
@@ -1452,6 +1807,91 @@ var FB = /*__NS_FIREBASE__*/null;
         $('fbstat').textContent = 'Prototype: on the live board this saves to prs/' + rec.id + '/feedback/' + String(rec.head || '').slice(0, 12) + '_' + f.id + ' (' + v + ').';
       }
     }
+    (function(){   // 30 Oct: "Still open?": is a verified finding already fixed on newer code (another branch or PR)?
+      var ST = { open: ['Still open', 'bad'], fixed: ['Fixed', 'ok'], changed: ['Code changed · needs a look', 'maybe'] };
+      var SUM = { open: ['Still open', 'bad'], fixed: ['Fixed', 'ok'], 'fixed-elsewhere': ['Fixed on a newer branch', 'ok'], changed: ['Code changed · needs a look', 'maybe'] };
+      var SO = rec.stillOpen || null; window.__nsStillAt = rec.stillOpenAt || '';
+      function itemFor(sid, fid){ return SO ? (SO.items || []).filter(function(x){ return (sid && x.scenario === sid) || (fid && 'f' + x.finding === fid); })[0] : null; }
+      function ask(btn){
+        if (!live) { btn.textContent = 'Open the live board to run it'; return; }
+        btn.disabled = true; btn.textContent = 'Queued…';
+        live.db.collection('jobs').add({ action: 'pr-review', issue: String(rec.id) + '|still', requestedBy: live.user.email.toLowerCase(), status: 'queued',
+          queuedAt: firebase.firestore.FieldValue.serverTimestamp() })
+          .then(function(){ btn.textContent = 'Checking… this box updates when done'; })
+          .catch(function(e){ btn.disabled = false; btn.textContent = 'Could not queue: ' + (e.message || e); });
+      }
+      function when(t){ return t ? String(t).replace('T', ' ').slice(0, 16) + ' UTC' : ''; }
+      function paintScenario(){        // 1 Nov: one line first (where it is still open / where it was fixed, with links); the rows on demand
+        var host = $('scstill'); if (!host) return; var s = SC[curSc];
+        host.innerHTML = ''; host.hidden = !s || (s.verdict !== 'verified' && s.verdict !== 'suspected'); if (host.hidden) return;
+        var it = itemFor(s.id, s.finding), head = mk('div', 'soh');
+        head.appendChild(mk('b', null, 'Still open?'));
+        var rows = it ? (it.results || []).filter(function(r){ return r.state !== 'absent'; }) : [];
+        var skipped = it ? (it.results || []).filter(function(r){ return r.state === 'absent'; }) : [];
+        if (it) { var sm = SUM[it.summary] || SUM.changed; head.appendChild(mk('span', 'sochip ' + sm[1], sm[0])); head.appendChild(mk('span', 'sot', 'checked ' + when(SO.at))); }
+        else head.appendChild(mk('span', 'sot', SO ? 'no newer code touches this finding' : 'not checked yet'));
+        var b = mk('button', 'btn', it || SO ? 'Check again' : 'Check if fixed'); b.type = 'button'; b.addEventListener('click', function(){ ask(b); }); head.appendChild(b);
+        host.appendChild(head);
+        if (!it) return;
+        var link = function(txt, url, cls){ var a = url ? mk('a', cls || 'sol', txt) : mk('span', cls || 'sol', txt); if (url) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; } return a; };
+        var line = mk('div', 'soline');
+        var fixed = rows.filter(function(r){ return r.state === 'fixed'; }), open_ = rows.filter(function(r){ return r.state === 'open'; }), chg = rows.filter(function(r){ return r.state === 'changed'; });
+        if (fixed.length) {
+          fixed.forEach(function(r){ var p = mk('div', 'sofix'); p.appendChild(mk('span', 'sochip ok', 'Fixed')); p.appendChild(document.createTextNode(' on '));
+            p.appendChild(link(r.label, r.url)); if (r.kind === 'pr') p.appendChild(mk('span', 'som', ' (' + (r.prState === 'MERGED' ? 'merged into ' : 'open, into ') + r.branch + ')'));
+            var wh = (r.where || []).length ? r.where : (r.changed || []).map(function(fn){ return { fn: fn }; });
+            if (wh.length) { p.appendChild(document.createTextNode(' · in ')); wh.slice(0, 3).forEach(function(w, k){ if (k) p.appendChild(document.createTextNode(', '));
+              p.appendChild(mk('span', 'sowhere', w.fn.split('::').pop() + '()' + (w.file ? ' ' + w.file + (w.line ? ':' + w.line : '') : ''))); }); }
+            if (r.stoppedAt) p.appendChild(mk('span', 'som', ' · the bug path now stops at ' + r.stoppedAt));
+            (r.commits || []).slice(0, 3).forEach(function(c, k){ p.appendChild(document.createTextNode(k ? ' · ' : ' · commit ')); p.appendChild(link(c.sha.slice(0, 8), c.url, 'sol mono')); p.appendChild(mk('span', 'som', ' ' + c.subject.slice(0, 60))); });
+            line.appendChild(p); });
+        }
+        var bits = [];
+        if (open_.length) bits.push('still open on ' + open_.map(function(r){ return r.label; }).join(', '));
+        if (chg.length) bits.push('changed on ' + chg.map(function(r){ return r.label; }).join(', ') + ' (needs a look)');
+        if (skipped.length) bits.push(skipped.length + ' branch' + (skipped.length > 1 ? 'es' : '') + ' without this code, skipped');
+        if (bits.length) line.appendChild(mk('div', 'som', bits.join(' · ')));
+        host.appendChild(line);
+        if (rows.length) {
+          var det = mk('details', 'sodet'), sum = mk('summary', null, 'Details · ' + rows.length + ' place' + (rows.length > 1 ? 's' : '') + ' checked'); det.appendChild(sum);
+          var ul = mk('div', 'sorows');
+          rows.forEach(function(r){
+            var row = mk('div', 'sorow'), st = ST[r.state] || ST.changed;
+            row.appendChild(link(r.label, r.url));
+            row.appendChild(mk('span', 'sochip ' + st[1], st[0]));
+            row.appendChild(mk('span', 'som', [r.kind === 'pr' ? (r.prState === 'MERGED' ? 'merged into ' : 'open, into ') + r.branch : 'branch head', r.commit].filter(Boolean).join(' · ')));
+            var nt = mk('span', 'son', [r.fixFn ? (r.fixFnChanged ? 'the suggested-fix function ' + r.fixFn + ' changed' : '') : '', r.via, r.note].filter(Boolean).join(' · '));
+            (r.commits || []).slice(0, 3).forEach(function(c){ nt.appendChild(document.createTextNode(' · ')); nt.appendChild(link(c.sha.slice(0, 8), c.url, 'sol mono')); nt.appendChild(document.createTextNode(' ' + c.subject.slice(0, 50))); });
+            row.appendChild(nt);
+            ul.appendChild(row);
+          });
+          det.appendChild(ul); host.appendChild(det);
+        }
+      }
+      function paintBanner(){          // the whole page knows: verified bugs fixed since the review
+        var old = $('so-banner'); if (old) old.parentNode.removeChild(old);
+        if (!SO || !(SO.items || []).length) return;
+        var fx = SO.items.filter(function(x){ return x.summary === 'fixed' || x.summary === 'fixed-elsewhere'; });
+        if (!fx.length) return;
+        var where = {}; fx.forEach(function(x){ (x.results || []).forEach(function(r){ if (r.state === 'fixed') where[r.label] = 1; }); });
+        var bn = mk('div', 'so-banner'); bn.id = 'so-banner';
+        bn.appendChild(mk('span', 'sochip ok', 'Since the review'));
+        bn.appendChild(document.createTextNode(' ' + fx.length + ' of ' + SO.items.length + ' verified bug' + (SO.items.length > 1 ? 's are' : ' is') + ' fixed on ' + Object.keys(where).join(', ')
+          + ' · ' + (SO.items.length - fx.length) + ' still open · checked ' + when(SO.at)));
+        var st = $('h-status'); if (st && st.parentNode) st.parentNode.insertBefore(bn, st);
+      }
+      function paintFinds(){
+        document.querySelectorAll('.find[data-id]').forEach(function(d){
+          var old = d.querySelector('.sobadge'); if (old) old.parentNode.removeChild(old);
+          var it = itemFor(null, d.dataset.id); if (!it) return; var sm = SUM[it.summary] || SUM.changed;
+          var fixedAt = (it.results || []).filter(function(r){ return r.state === 'fixed'; })[0];
+          var row = d.querySelector('.frow') || d; row.appendChild(mk('span', 'sobadge sochip ' + sm[1], (fixedAt ? 'Fixed on ' + fixedAt.label : sm[0])));
+        });
+      }
+      window.__nsStill = function(n){ SO = n.stillOpen || null; paintScenario(); paintFinds(); paintBanner(); };
+      window.__nsStillPaint = paintScenario;
+      paintScenario(); paintFinds(); paintBanner();
+    })();
     function progress(){
       var nc = SC.filter(function(s){ return checked[s.id]; }).length, nf = FINDS.filter(function(f){ return dec[f.id]; }).length;
       $('pg-sc').textContent = nc + ' / ' + SC.length; $('pb-sc').style.width = (SC.length ? nc / SC.length * 100 : 100) + '%';
@@ -1465,10 +1905,28 @@ var FB = /*__NS_FIREBASE__*/null;
       var rows = [[SC.every(function(s){ return checked[s.id]; }), 'Every scenario checked (' + nc + '/' + SC.length + ')'],
                   [unsafe.every(function(s){ return !s.finding || !!dec[s.finding]; }), 'Each verified bug has an answer on its finding']];
       var gate = $('gate'); gate.innerHTML = ''; var ok = true;
-      rows.forEach(function(r){ var d = mk('div'); d.appendChild(mk('i', r[0] ? 'y' : '', r[0] ? '✓' : '')); d.appendChild(document.createTextNode(r[1])); gate.appendChild(d); ok = ok && r[0]; });
-      $('approvebtn').disabled = !ok || unsafe.some(function(s){ return s.finding && dec[s.finding] !== 'no'; });
+      rows.forEach(function(r, k){ var d = mk('div'); d.appendChild(mk('i', r[0] ? 'y' : '', r[0] ? '✓' : '')); d.appendChild(document.createTextNode(r[1])); if (k === 0 && !r[0]) { var go = mk('button', 'btn', 'Go to scenarios'); go.type = 'button'; go.style.marginLeft = '10px'; go.addEventListener('click', function(){ var t = document.querySelector('[aria-controls="p-risk"], #t-risk'); if (t) t.click(); }); d.appendChild(go); var all = mk('button', 'btn', '✓ I checked all ' + SC.length); all.type = 'button'; all.style.marginLeft = '6px'; all.addEventListener('click', function(){ $('bulk-sc').click(); }); d.appendChild(all); } gate.appendChild(d); ok = ok && r[0]; });
+      if (!rows[1][0] && gate.children[1]) {           // 30 Oct: the findings row gets its own 'all' button too
+        var fa = mk('button', 'btn', '✓ Agree on all ' + FINDS.filter(function(f){ return !dec[f.id]; }).length); fa.type = 'button'; fa.style.marginLeft = '10px';
+        fa.title = 'Answers "Agree" on every finding that has no answer yet';
+        fa.addEventListener('click', function(){ FINDS.forEach(function(f){ if (!dec[f.id] && MARK[f.id]) MARK[f.id]('agree'); }); progress(); $('sent').textContent = 'Findings without an answer marked "Agree".'; });
+        gate.children[1].appendChild(fa);
+      }
+      if (!rows[0][0] || !rows[1][0]) {
+        var both = mk('div', 'gall'), bb = mk('button', 'btn pri', '✓ Check all'); bb.type = 'button';
+        bb.title = 'Marks every scenario checked and answers "Agree" on every finding that has no answer yet';
+        bb.addEventListener('click', function(){ SC.forEach(function(s){ checked[s.id] = true; }); save(); marks();
+          FINDS.forEach(function(f){ if (!dec[f.id] && MARK[f.id]) MARK[f.id]('agree'); }); progress();
+          $('sent').textContent = 'All ' + SC.length + ' scenarios checked; findings without an answer marked "Agree".'; });
+        both.appendChild(bb); both.appendChild(mk('span', 'note', 'every scenario checked + "Agree" on findings without an answer')); gate.appendChild(both);
+      }
+      // 1 Nov: once both checks are done the reviewer decides; Approve no longer waits for every verified bug to be "Not a problem"
+      var open_ = unsafe.filter(function(s){ return s.finding && dec[s.finding] !== 'no'; }).length;
+      $('approvebtn').disabled = !ok;
       $('sendbtn').disabled = !ok;
-      $('approvebtn').title = $('approvebtn').disabled ? 'Only Verified bugs can block: Approve opens once each one is marked "Not a problem"' : '';
+      $('approvebtn').title = !ok ? 'Approve opens once every scenario is checked and each verified bug has an answer'
+        : open_ ? 'You agreed with ' + open_ + ' verified bug' + (open_ > 1 ? 's' : '') + ': approving ships ' + (open_ > 1 ? 'them' : 'it') + '. Request changes asks the author to fix ' + (open_ > 1 ? 'them' : 'it') + '.' : '';
+      $('approvebtn').classList.toggle('warnbtn', ok && open_ > 0);
     }
 
     // dialog
@@ -1490,15 +1948,24 @@ var FB = /*__NS_FIREBASE__*/null;
       var parts = [], list = [];
       FINDS.forEach(function(f){ if (dec[f.id] && dec[f.id] !== 'no' && texts[f.id]) { parts.push('• ' + f.where + ': ' + texts[f.id]); list.push((dec[f.id] === 'ask' ? 'Question: ' : 'Comment: ') + f.title); } });
       var intro = kind === 'Request changes' ? 'Requesting changes. ' + (view.tldr || '') : 'Approving. All scenarios checked.';
-      openDlg({ title: kind + ' on #' + rec.id, ctx: 'Copy this and paste it into the PR. Night Shift does not post to Bitbucket.', list: list, label: 'Review text',
-        text: intro + (parts.length ? '\n\n' + parts.join('\n') : ''), ok: 'Copy review',
+      var dec2 = kind === 'Approve' ? 'approve' : 'changes';
+      openDlg({ title: kind + ' on #' + rec.id, ctx: 'On OK this text is posted to the PR as your review comment and the PR is ' + (dec2 === 'approve' ? 'APPROVED' : 'marked CHANGES REQUESTED') + ' in Bitbucket (with the Night Shift token). Edit it first if you like.', list: list, label: 'Review text',
+        text: intro + (parts.length ? '\n\n' + parts.join('\n') : ''), ok: kind + ' in Bitbucket',
         onOk: function(t){
-          var done = function(){ $('sent').textContent = 'Copied. Paste it into the PR on Bitbucket.'; };
-          try { navigator.clipboard.writeText(t).then(done, function(){ $('sent').textContent = 'Could not copy: select the text in the box and copy it.'; }); } catch(e) { $('sent').textContent = 'Could not copy automatically.'; }
+          try { navigator.clipboard.writeText(t); } catch(e) {}
+          if (!live || !live.db || !live.user) { $('sent').textContent = 'Sign in on the board to send it (the text is copied).'; return; }
+          live.db.collection('jobs').add({ action: 'bb-review', issue: String(rec.id) + '|' + dec2, requestedBy: live.user.email.toLowerCase(), status: 'queued',
+            queuedAt: firebase.firestore.FieldValue.serverTimestamp(), description: String(t).slice(0, 30000) })
+            .then(function(){ $('sent').textContent = (dec2 === 'approve' ? 'Approving' : 'Requesting changes on') + ' #' + rec.id + ' in Bitbucket… watch the Jobs tab on the board.'; })
+            .catch(function(e){ $('sent').textContent = 'Could not queue: ' + (e.message || e) + ' (the text is copied: paste it into the PR)'; });
         } });
     }
     $('sendbtn').addEventListener('click', function(){ copyReview('Request changes'); });
     $('approvebtn').addEventListener('click', function(){ copyReview('Approve'); });
+    // 28 Oct: one-click checklist: every scenario checked / every finding answered at once
+    $('bulk-sc').addEventListener('click', function(){ SC.forEach(function(s){ checked[s.id] = true; }); save(); marks(); progress(); $('sent').textContent = 'All ' + SC.length + ' scenarios marked as checked.'; });
+    $('bulk-f').addEventListener('click', function(){ FINDS.forEach(function(f){ if (MARK[f.id]) MARK[f.id]('agree'); }); progress(); $('sent').textContent = 'All findings marked "Agree".'; });
+    $('bulk-no').addEventListener('click', function(){ FINDS.forEach(function(f){ if (MARK[f.id]) MARK[f.id]('no'); }); progress(); $('sent').textContent = 'All findings marked "Not a problem".'; });
 
     // redraw one diagram: the developer says what was unclear; only that diagram changes (findings and verdict stay)
     var redrawing = {};

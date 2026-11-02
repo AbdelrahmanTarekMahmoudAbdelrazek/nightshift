@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -147,18 +148,43 @@ def _fs(rec):
     return out
 
 
-def _board_crashes(db, k=40):
+def _board_crashes(db, k=400):
     out = []
     try:
         for d in db.collection('cases').stream():
             c = d.to_dict() or {}
-            fr = [f.get('fn', '') if isinstance(f, dict) else str(f) for f in (c.get('frames') or [])][:4]
+            fr = [(f.get('func') or f.get('fn') or '') if isinstance(f, dict) else str(f) for f in (c.get('frames') or [])][:4]   # 30 Oct: cases store 'func'
+            bc = [str(x.get('message') if isinstance(x, dict) else x) for x in (c.get('breadcrumbs') or [])]
+            ts = [re.match(r'\s*(\d\d:\d\d:\d\d\.\d+)', x) for x in (bc[:1] + bc[-1:])]
+            if len(ts) == 2 and all(ts) and ts[0].group(1) > ts[1].group(1):
+                bc = bc[::-1]                        # stored newest first: oldest first here, so the tail is the end
+            # 1 Nov: the crash's last log lines (user actions before it crashed)
             out.append({'id': d.id, 'title': (c.get('title') or '')[:120], 'kind': c.get('kind', ''), 'events': c.get('events', 0),
-                        'frames': fr})
+                        'frames': fr, 'logs': [x[:200] for x in bc[-60:]]})
     except Exception:
         pass
     out.sort(key=lambda x: -(x.get('events') or 0))
     return out[:k]
+
+
+def _field_index(crashes):
+    """30 Oct: crashes users already had, for the field match: board cases (top frames) + the stack groups split out of
+    mixed Crashlytics issues (out/stackgroups/*.json: 'stack3' = the group's top three frames)."""
+    out = [{'card': c.get('id'), 'title': c.get('title'), 'events': c.get('events'), 'frames': c.get('frames') or [],
+            'logs': c.get('logs') or []} for c in crashes or [] if c.get('frames')]
+    have = {c['card'] for c in out}
+    sg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'out', 'stackgroups')
+    for f in (os.listdir(sg) if os.path.isdir(sg) else []):
+        try:
+            g = json.load(open(os.path.join(sg, f)))
+        except Exception:
+            continue
+        for x in g.get('groups') or []:
+            fr = [y.strip() for y in str(x.get('stack3') or '').split('|') if y.strip()]
+            if fr:
+                if x.get('card') not in have:   # a split card already pulled as a case carries its own logs above
+                    out.append({'card': x.get('card'), 'title': x.get('title'), 'events': x.get('sampled'), 'frames': fr})
+    return out
 
 
 def _call(skill, prompt, cfg, tag, cwd, tools='Read,Grep,Glob', timeout=1200, meter=None, model=None):
@@ -398,7 +424,13 @@ ERROR_PATHS = (
 
 SEATS = [('bugs', 'Bugs, error paths, lifetime and threading', ['pr-review-general', 'pr-silent-failure', 'pr-lifetime']),
          ('flows', 'User flows: every way in and out of the changed code', ['pr-userflows']),
-         ('rest', 'Performance, memory, ANR and design', ['pr-performance', 'pr-memory', 'pr-anr', 'pr-architecture', 'pr-simplify'])]
+         ('rest', 'Performance, memory, ANR and design', ['pr-performance', 'pr-memory', 'pr-anr', 'pr-architecture', 'pr-simplify']),
+         # 29 Oct: the three seats above missed a mode that never showed, a shared GL-state change for every clip, a cache
+         # committed with holes and the install cost of a big feature PR: a 4th seat for exactly those questions
+         ('impact', 'Impact: off-path regressions, every new mode end to end, persisted data, build and install', ['pr-impact']),
+         # 29 Oct: the seats above read forward from the diff; this one starts at every crash / wrong value / freeze / lost
+         # edit near the change and walks BACK to the changed lines (the deep bugs three calls away)
+         ('backward', 'Backward: from every bad outcome near the change back to the changed lines', ['pr-backward'])]
 
 
 def _seats(diff):
@@ -420,7 +452,7 @@ HUNT_FORMAT = (
     "\"evidence\": \"the code on that line, copied exactly\"}], \"scenarios\": [{\"title\": \"what if ...\", \"q\": \"the question\", "
     "\"claim\": \"verified|suspected|safe\", \"kind\": \"always|timing|condition\", \"finding\": index in YOUR findings or null, "
     "\"why\": [[\"bad|ok|risk|plain\", \"label\", \"text\"]], \"proof\": [{\"file\": \"\", \"line\": 0, \"code\": \"copied exactly\", "
-    "\"text\": \"what this step shows\"}, {\"text\": \"a step that is not code\"}], \"pre_existing\": false, \"repro\": {\"setup\": \"\", \"steps\": [\"\"], "
+    "\"text\": \"what this step shows\"}, {\"text\": \"a step that is not code\"}], \"pre_existing\": false, \"skips\": [\"what can stop this path, and why it does not here\"], \"entry\": \"how a user of the RELEASE build gets there: screen > button > ... (or debug-only / no-ui / flag-off)\", \"needs\": \"every state the outcome needs (a job still running, an empty cache, a first run on that input) or none\", \"repro\": {\"setup\": \"\", \"steps\": [\"\"], "
     "\"expected\": \"\", \"actual\": \"\"}}]}\n"
     "repro is for QA, who test by hand in the app and do not read code or logs: setup = the project to start from "
     "(\"a project with 3 video clips on the main track\"), steps = 3-7 numbered user actions in the app's words (tap, "
@@ -437,7 +469,46 @@ HUNT_FORMAT = (
     "something else happens first (a compile fails, a file is missing): say what in why. Speed, memory, battery and image effects are unmeasured: say so, do not claim them. "
     "CALLERS: the change map lists every caller of each changed function (draft restore, undo, looper messages, export). "
     "For each caller in a different state than the one the PR is about (another playhead, playing, restoring a draft), "
-    "check what the new code does there; a different outcome is its own scenario.")
+    "check what the new code does there; a different outcome is its own scenario. "
+    "SKIPS: for every scenario, list in \"skips\" what can stop the path from running (a cache hit, an early return, a "
+    "null check, a done/ready flag, a debounce, a debug-only gate) and give a variant scenario for each one that changes "
+    "the outcome (\"first time on this input\" vs \"cached\"). STATE GRID: for every changed function try these states and "
+    "make a scenario for each one that changes the outcome: empty / one / the last item / many; paused / playing / a "
+    "background job still running; right after undo or redo; a restored draft; after the app was killed and reopened; "
+    "the same action twice quickly; the feature off.")
+
+
+ALL_USERS = re.compile(r'never use|without (using|the feature)|every (user|clip|media|project|frame|install)|all users|'
+                       r'plain clip|not using|feature (is )?off|unrelated|regress', re.I)
+
+
+def _needs_check(view, findings, log=print, pr=None):
+    """29 Oct: a SUSPECTED scenario about users who never use the feature (an off-path regression) must not sit
+    unranked and outside the findings: it keeps a severity, is labelled 'needs a check' with what to test, and is
+    counted in the findings so the verdict sees it. (A judge's 'unsure' on such a scenario is not a 'no'.)"""
+    have = {str(f.get('scenario') or '') for f in findings}
+    n = 0
+    for s in view.get('scenarios') or []:
+        if s.get('verdict') != 'suspected':
+            continue
+        frm = ' '.join(s.get('from') or [])
+        text = ' '.join(str(x) for x in (s.get('title'), s.get('q')))
+        if not (ALL_USERS.search(text) or frm.startswith('Impact')):
+            continue
+        s['severity'] = s.get('severity') or 'major'
+        s['needsCheck'] = ('Could affect users who never use this feature; the judges could not settle it from the code. '
+                           'Check it before merging: ' + str((s.get('repro') or {}).get('setup') or s.get('q') or '')[:300])
+        if s.get('id') not in have:
+            pf = (s.get('proof') or {}).get('steps') or []
+            ref = next((x[0] for x in pf if x and isinstance(x[0], str) and ':' in x[0]), '')
+            findings.append({'severity': s['severity'], 'confidence': 60, 'title': 'Needs a check: ' + str(s.get('title', ''))[:160],
+                             'problem': s['needsCheck'], 'fix': 'Gate the change on the feature, or test the case above.',
+                             'file': ref.rsplit(':', 1)[0], 'line': int(ref.rsplit(':', 1)[1]) if ref.rsplit(':', 1)[-1].isdigit() else 0,
+                             'tier': 'suspected', 'needs_check': True, 'scenario': s.get('id'),
+                             'category': frm or 'Impact'})
+        n += 1
+    if n:
+        log(f"PR #{(pr or {}).get('id', '')}: {n} suspected all-users scenario(s) kept as 'needs a check'")
 
 
 def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
@@ -461,7 +532,34 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     # Blind first: everything before the description check sees only the code, never the author's description.
     meta = head + "## Description\n(withheld: blind review, judge the code only)\n\n" + rest
     meta_full = head + f"## Description\n{desc or '(none)'}\n\n" + rest
-    dtext = f"## Diff\n```diff\n{diff[:60000]}\n```\n" + ('(diff truncated: read the files for the rest)\n' if len(diff) > 60000 else '')
+    # 29 Oct: #3189 was 316k chars, mostly vendored headers; the 60k cut hid the renderer and build changes from the
+    # seats. Vendored/generated/binary sections are dropped from the text (listed by name), and every file that still
+    # does not fit is named so the seats open it themselves.
+    _secs = re.split(r'(?=^diff --git )', diff, flags=re.M)
+    _vend = re.compile(r'(^|/)(third_party|third-party|vendor|vendored|external|extern|generated|gen)/|\.(min\.js|lock|svg|png|jpg|webp|tflite|onnx|bin|so|aar|jar)$', re.I)
+    _keep, _drop = [], []
+    for _s in _secs:
+        _m = re.match(r'diff --git a/(\S+)', _s)
+        if _m and (_vend.search(_m.group(1)) or 'Binary files' in _s[:400]):
+            _drop.append(_m.group(1))
+        else:
+            _keep.append(_s)
+    _code = ''.join(_keep)
+    _over = [re.match(r'diff --git a/(\S+)', x).group(1) for x in re.split(r'(?=^diff --git )', _code[150000:], flags=re.M)
+             if re.match(r'diff --git a/(\S+)', x)]
+    _cut = _code[:150000]
+    _tail = _code[150000:]
+    if _tail and re.search(r'diff --git a/(\S+)', _cut[-20000:] or ''):    # the file cut in the middle is also listed
+        _last = re.findall(r'^diff --git a/(\S+)', _cut, re.M)
+        if _last and _last[-1] not in _over:
+            _over.insert(0, _last[-1])
+    dtext = f"## Diff\n```diff\n{_cut}\n```\n"
+    if _drop:
+        dtext += (f"(left out of the diff text as vendored/generated/binary, {len(_drop)} file(s): "
+                  + ', '.join(_drop[:40]) + (' ...' if len(_drop) > 40 else '') + ")\n")
+    if _over:
+        dtext += ("## Files NOT shown above (the diff text was too long): you MUST Read each one that is in your seat's "
+                  "area before answering\n" + '\n'.join('- ' + f for f in _over[:80]) + '\n')
     tag = f"pr{pr['id']}.{pr['head'][:8]}"
     fbtext = ('## What reviewers answered on earlier findings (weigh it; the code decides)\n```json\n'
               + json.dumps(notes, indent=0)[:6000] + '\n```\n\n') if notes else ''
@@ -479,6 +577,14 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     st.start('Classify', 'Opus')
     cls = _json(_call('pr-classify', meta + dtext[:25000] + '\n## Crashes and ANRs on the Night Shift board\n```json\n'
                       + json.dumps(crashes, indent=0)[:12000] + '\n```\n', cfg, tag + '.classify', wt, tools='', timeout=600, meter=st))
+    # 28 Oct: a PR that names its Night Shift case (the case link Night Shift's own PRs carry, or a case id) is linked
+    # to it for sure; the classifier only sees the top board crashes and missed small ones (#3214 -> 6e2486dd)
+    mcase = re.search(r'#problems/m-(?:play-)?([0-9a-f]{32}(?:~[0-9a-f]{8})?)', desc or '') or \
+        re.search(r'(?<![0-9a-f])([0-9a-f]{32}(?:~[0-9a-f]{8})?)(?![0-9a-f])', (desc or '') + ' ' + str(pr.get('source') or ''))
+    if mcase:
+        if cls.get('linked_issue') != mcase.group(1):
+            log(f"PR #{pr['id']}: linked to Night Shift case {mcase.group(1)[:12]} (named in the PR)")
+        cls['linked_issue'] = mcase.group(1)
     log(f"PR #{pr['id']}: {cls.get('type','?')} ({cls.get('confidence','?')}%) - {str(cls.get('reason',''))[:120]}")
     st.end(f"{cls.get('type', '?')} ({cls.get('confidence', '?')}%)")
 
@@ -550,7 +656,8 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     res, hunted = {}, []
     hmodel = (cfg.get('llm') or {}).get('model_hunt') or 'sonnet'
     bmodel = (cfg.get('llm') or {}).get('model_hunt_bugs') or 'opus'     # bugs / error paths / lifetime: the subtle ones
-    smodel = lambda key: bmodel if key in ('bugs', 'flows') else hmodel   # the two seats that find behaviour bugs: Opus
+    big = len(diff) > 60000                         # 29 Oct: the Impact seat needs Opus only on big PRs (cost)
+    smodel = lambda key: bmodel if key in ('bugs', 'flows', 'backward') or (key == 'impact' and big) else hmodel
     who = ' + '.join(sorted({smodel(k).capitalize() for k, _, _ in seats}))
     st.start(f"Hunt ({len(seats)} seats: " + ', '.join(f"{k} {smodel(k)}" for k, _, _ in seats) + ")" if inc is None
              else f"Hunt: new commits only ({len(seats)} seats)", who, '' if inc is None else 'rerun')
@@ -575,6 +682,43 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
             hunted += scs
             res[cat] = {'summary': str(a_.get('summary') or '')[:900], 'findings': fs, 'scenarios': scs, 'skill': '+'.join(guides),
                         'plugin': 'nightshift skills (' + ', '.join(guides) + ')', 'skill_used': bool(txt), 'answered': bool((txt or '').strip())}
+    # 29 Oct: COVERAGE (no AI to find it): changed code files that no seat cited in a finding or a proof step get one
+    # small extra seat that reads only them, so a bug in a file nobody opened is not missed silently
+    try:
+        _cited = set()
+        for _r in res.values():
+            for _x in (_r.get('findings') or []):
+                _cited.add(str(_x.get('file') or '').split('/')[-1])
+            for _x in (_r.get('scenarios') or []):
+                for _p in (_x.get('proof') or []):
+                    if isinstance(_p, dict) and _p.get('file'):
+                        _cited.add(str(_p['file']).split('/')[-1])
+        _code_ext = re.compile(r'\.(c|cc|cpp|h|hpp|kt|java|glsl|frag|vert|gradle|kts|cmake|txt|xml)$', re.I)
+        _vend = re.compile(r'(^|/)(third_party|third-party|vendor|vendored|external|generated)/|CMakeLists\.txt$', re.I)
+        _left = [f for f in files if _code_ext.search(f) and not _vend.search(f) and f.split('/')[-1] not in _cited
+                 and not f.split('/')[-1].endswith('.h')]
+        if _left and inc is None:
+            log(f"PR #{pr['id']}: coverage: {len(_left)} changed file(s) no seat cited -> sweeper seat: " + ', '.join(x.split('/')[-1] for x in _left[:12]))
+            _sw = _call('', common + "\n\n# Your seat: Sweeper (coverage)\nThe other seats did not cite these changed files. "
+                        "Read EACH one now (Read tool) and its diff, and report only real defects in them (bugs, bad input "
+                        "handling, per-item work on hot threads, hard-coded indexes, shared-state changes that reach every "
+                        "user). Files:\n" + '\n'.join('- ' + f for f in _left[:30]) + '\n\n'
+                        + llm.skill_text('pr-review-general') + HUNT_FORMAT,
+                        cfg, f"{tag}.seat-sweep", wt, tools='Read,Grep,Glob', timeout=1200, meter=st, model=hmodel)
+            _a = _json(_sw)
+            _fs = [x for x in (_a.get('findings') or []) if isinstance(x, dict) and (x.get('confidence') or 0) >= 60]
+            _cat = 'Coverage: files no other seat looked at'
+            for x in _fs:
+                x['category'] = _cat
+            _scs = [x for x in (_a.get('scenarios') or []) if isinstance(x, dict) and x.get('title')]
+            for k, x in enumerate(_scs):
+                x['id'], x['from'] = f"sweep-{k + 1}", [_cat]
+            hunted += _scs
+            res[_cat] = {'summary': str(_a.get('summary') or '')[:900], 'findings': _fs, 'scenarios': _scs,
+                         'skill': 'pr-review-general', 'plugin': 'nightshift skills (coverage sweeper)',
+                         'skill_used': bool(_sw), 'answered': bool((_sw or '').strip())}
+    except Exception as _e:
+        log(f"PR #{pr['id']}: coverage sweep skipped ({str(_e)[:120]})")
     pc = cfg.get('pr_review') or {}
     if prev and prev.get('head') == pr['head'] and pc.get('carry_forward', True) and not pc.get('_no_carry'):
         old_sc = []                                  # same code reviewed again: earlier problems are re-judged, never just lost
@@ -661,6 +805,7 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
         items = [{'id': x['id'], 'kind_of_item': 'scenario', 'title': x.get('title'), 'q': x.get('q'), 'claim': x.get('verdict'),
                   'hunter_severity': (findings[x['finding']].get('severity') if isinstance(x.get('finding'), int) and x['finding'] < len(findings) else None),
                   'kind': x.get('kind', ''), 'why': x.get('why'), 'pre_existing': bool(x.get('pre_existing')),
+                  'entry': x.get('entry'), 'needs': x.get('needs'),
                   'proof': [{'line': q[0], 'text': q[1]} for q in (x.get('proof') or {}).get('steps') or []]} for x in todo]
         items += [{'id': 'f%d' % i, 'kind_of_item': 'finding', 'title': findings[i].get('title'), 'claim': 'suspected',
                    'severity': findings[i].get('severity'), 'problem': findings[i].get('problem'),
@@ -675,14 +820,58 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                             + "## Items (unsigned)\n```json\n" + json.dumps(items, indent=1)[:50000] + '\n```\n\n' + dtext,
                             cfg, f"{tag}.judge-{name.split()[0].lower()}", wt, tools='Read,Grep,Glob', timeout=1500, meter=st)
                 return name, {v.get('id'): v for v in (_json(txt).get('votes') or []) if isinstance(v, dict)}
-            with ThreadPoolExecutor(len(names)) as ex:
+            sim_items = [x for x in items if x.get('kind_of_item') == 'scenario' and x.get('claim') in ('verified', 'suspected')]
+            sims = []
+
+            def simulate():
+                # 29 Oct: the Simulator walks each problem scenario through the code with concrete values (static: it
+                # reads, nothing runs). The files as they were BEFORE the PR are copied next to it for the base walk.
+                if not sim_items:
+                    return []
+                bdir = os.path.join(wt, '.nightshift_base')
+                try:
+                    for f_ in files:                  # code files only, as bytes: a binary (model, image) cannot be decoded
+                        if not re.search(r'\.(c|cc|cpp|h|hpp|kt|java|glsl|frag|vert|gradle|kts|cmake|txt|xml|mk)$', f_, re.I):
+                            continue
+                        r_ = subprocess.run(['git', 'show', f'HEAD:{f_}'], cwd=wt, capture_output=True, timeout=60)
+                        if r_.returncode == 0 and b'\0' not in r_.stdout[:8000]:
+                            os.makedirs(os.path.dirname(os.path.join(bdir, f_)), exist_ok=True)
+                            open(os.path.join(bdir, f_), 'wb').write(r_.stdout)
+                    txt = _call('pr-simulate', "# Your role: Simulator\n" + meta
+                                + "## Code before the PR\nThe changed files as they were BEFORE this PR are under "
+                                  "`.nightshift_base/<same path>` (Read them there for the base walk). Everything else on disk "
+                                  "is the PR head.\n\n" + cmtext
+                                + "## Scenarios to simulate\n```json\n" + json.dumps(sim_items, indent=1)[:50000] + '\n```\n\n' + dtext,
+                                cfg, f"{tag}.simulate", wt, tools='Read,Grep,Glob', timeout=1800, meter=st)
+                    return [x for x in (_json(txt).get('sims') or []) if isinstance(x, dict)]
+                except Exception as e_:
+                    log(f"PR #{pr['id']}: simulator skipped ({str(e_)[:120]})")
+                    return []
+            with ThreadPoolExecutor(len(names) + 1) as ex:
+                fut_sim = ex.submit(simulate)
                 for name, v in ex.map(judge, names):
                     if v:
                         votes[name] = v
+                sims = fut_sim.result()
+            shutil.rmtree(os.path.join(wt, '.nightshift_base'), ignore_errors=True)
+            if sims:
+                votes['Simulator'] = prvisual.sim_votes(view, sims, wt, diff)
+                _sv = [v['vote'] for v in votes['Simulator'].values()]
+                log(f"PR #{pr['id']}: simulator walked {len(_sv)} scenario(s): {_sv.count('confirmed')} reached the outcome, "
+                    f"{_sv.count('refuted')} stopped by a guard, {_sv.count('unsure')} could not finish")
         before = {x['id'] for x in view.get('scenarios') or []}
         judged = [n for n in names if n in votes]
-        prvisual.tiers(view, votes, judged, wt, diff, findings)
+        prvisual.tiers(view, votes, judged + (['Simulator'] if 'Simulator' in votes else []), wt, diff, findings)
         prvisual.finding_tiers(findings, view, votes, judged, wt, diff)
+        prvisual.reach(view, votes, judged, wt, diff, findings)
+        try:
+            nf = prvisual.field_match(view, wt, diff, _field_index(crashes))
+            if nf:
+                log(f"PR #{pr['id']}: {nf} scenario(s) end in a function users already crashed in (field-seen)")
+        except Exception as e_:
+            log(f"PR #{pr['id']}: field match skipped ({str(e_)[:120]})")
+        prvisual.gate_checks(view, votes, judged, wt, diff, findings)
+        _needs_check(view, findings, log, pr)
         sc = view.get('scenarios') or []
         ft = [f.get('tier') for f in findings]
         st.end(f"scenarios: {sum(1 for x in sc if x['verdict'] == 'verified')} verified · {sum(1 for x in sc if x['verdict'] == 'suspected')} suspected · "
@@ -831,8 +1020,22 @@ def redraw(db, cfg, arg, log=print):
     pid, target, note = (str(arg).split('|', 2) + ['', ''])[:3]
     pid, target, note = pid.strip(), target.strip(), note.strip()[:700]
     path = os.path.join(OUT, f'{pid}.json')
-    if not re.fullmatch(r'\d{1,6}', pid) or not os.path.exists(path):
+    if not re.fullmatch(r'\d{1,6}', pid):
         raise RuntimeError(f'redraw: no saved review for PR #{pid}')
+    if not os.path.exists(path):
+        # 2 Nov: the review was made on another computer: rebuild the saved copy from the board (Firestore)
+        d = db.collection('prs').document(pid).get().to_dict() if db is not None else None
+        if not d or d.get('stage') != 'reviewed':
+            raise RuntimeError(f'redraw: no saved review for PR #{pid} (on this computer or on the board)')
+        for k in list(d):
+            if k.endswith('Json') and d[k] and d.get(k[:-4]) is None:
+                try:
+                    d[k[:-4]] = json.loads(d[k])
+                except Exception:
+                    pass
+        os.makedirs(OUT, exist_ok=True)
+        json.dump(d, open(path, 'w'), ensure_ascii=False, default=str)
+        log(f'PR #{pid}: saved review rebuilt from the board (it was made on another computer)')
     rec = json.load(open(path))
     view = rec.get('view') or {}
     scs = view.get('scenarios') or []
@@ -903,6 +1106,10 @@ def redraw(db, cfg, arg, log=print):
 def run(db, cfg, log=print, only=None, local=None, force=False, parallel=3, stop=None):
     """Review all open PRs (or `only` one id). local=(base, head, title) reviews two local commits instead (testing).
     only = '<id>|<flow or scenario id>|<note>' redraws one diagram of that PR's saved review instead (see redraw)."""
+    if only and str(only).endswith('|still'):   # 30 Oct: "Still open?" for one PR ('<id>|still') or all ('all|still')
+        from . import stillopen
+        importlib.reload(stillopen)
+        return stillopen.run(db, cfg, only, log)
     if only and '|' in str(only):
         return redraw(db, cfg, only, log)
     from . import bitbucket
@@ -961,7 +1168,8 @@ def run(db, cfg, log=print, only=None, local=None, force=False, parallel=3, stop
             old = d.to_dict() if d.exists else None
         except Exception:
             pass
-        if old and old.get('head') == p['head'] and old.get('stage') == 'reviewed' and not force:
+        # 30 Oct: a PR a person asked for by number (the board's Re-review button) is reviewed again even at the same head
+        if old and old.get('head') == p['head'] and old.get('stage') == 'reviewed' and not force and not only:
             log(f"PR #{p['id']}: unchanged since the last review, skipped")
             continue
         if not p.get('local'):
@@ -1007,5 +1215,13 @@ def run(db, cfg, log=print, only=None, local=None, force=False, parallel=3, stop
         return rec
     with ThreadPoolExecutor(max(1, parallel)) as ex:
         done = [r for r in ex.map(go, todo) if r]
+    if not local:                                    # 30 Oct: right after a review, is any verified finding already fixed elsewhere?
+        try:
+            from . import stillopen
+            for r in done:
+                if r.get('stage') == 'reviewed' and stillopen.items_of(r):
+                    stillopen.run(db, cfg, f"{r.get('id')}|still", log)
+        except Exception as e:
+            log(f'still-open check skipped: {str(e)[:160]}')
     log(f"PR review done: {len(done)} reviewed, {len(prs) - len(todo)} unchanged")
     return done

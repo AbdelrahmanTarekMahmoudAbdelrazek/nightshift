@@ -114,6 +114,26 @@ def list_events(app_id, issue, versions=None, days=30, page_size=20):
     return _get(f'{_base(app_id)}/events', p).get('events', [])
 
 
+def more_events(app_id, issue, days=30, max_events=300, raw_dir=None):
+    """1 Nov: every page of an issue's events (all versions), up to max_events. A split card (one stack group of a
+    mixed issue) can have only 2 events among hundreds: the newest 20 the normal pull reads often hold none of them,
+    and the root cause was then written from the group's 3 frame names alone (no threads, logs, file:line)."""
+    out, tok = [], None
+    for _ in range(max(1, max_events // 50)):
+        p = _interval(days) + [('filter.issue.id', issue), ('page_size', 50)]
+        if tok:
+            p.append(('page_token', tok))
+        rep = _get(f'{_base(app_id)}/events', p)
+        out += rep.get('events', []) or []
+        tok = rep.get('nextPageToken')
+        if not tok or len(out) >= max_events:
+            break
+    if raw_dir:
+        os.makedirs(raw_dir, exist_ok=True)
+        json.dump(out, open(os.path.join(raw_dir, 'events_all.json'), 'w'), indent=1)
+    return [summarise_event(e) for e in out]
+
+
 def release_display_names(app_id, issue, releases, days):
     """Version display names (e.g. '1.25.1 (800054867)') for this issue, restricted to the configured releases."""
     rep = report(app_id, 'topVersions', issue=issue, days=days, page_size=50)

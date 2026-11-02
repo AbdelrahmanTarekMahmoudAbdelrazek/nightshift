@@ -10,6 +10,7 @@ Read-only on both consoles.
 """
 import datetime as dt
 import hashlib
+import json
 import re
 from collections import Counter
 
@@ -326,6 +327,14 @@ def _devices(samples, src):
     return [{'device': e['device'], 'date': _day(e['time']), 'version': e['version'], 'os': e['os'], 'src': src} for e in samples]
 
 
+def _bytes(doc):
+    """Rough size of a Firestore write, to keep each commit under the 10 MB request limit."""
+    try:
+        return len(json.dumps(doc, default=str))
+    except Exception:
+        return 50_000
+
+
 def per_build(P, F):
     """{versionCode: {'play': events, 'fb': events}} from each console's per-build counts."""
     out = {}
@@ -344,7 +353,7 @@ def write_cards(db, cases, units, real, cardinfo, run_id):
     """cases/<issue>~<fp8> for every split card (own events, versions, devices; own lab/repro/fix fields later).
     The plain issue card gets the same summary fields. Nothing a card already has (analysis, lab results) is touched."""
     from firebase_admin import firestore
-    batch, n = db.batch(), 0
+    batch, n, size = db.batch(), 0, 0
     for uid, smp in units.items():
         ci = cardinfo.get(uid) or {}
         if ci.get('cards', 1) <= 1:
@@ -366,8 +375,9 @@ def write_cards(db, cases, units, real, cardinfo, run_id):
                             'status': old.get('status') or 'new', 'last_date': max((_day(x['time']) for x in smp), default='')})
         batch.set(db.collection('cases').document(uid), doc, merge=True)
         n += 1
-        if n >= 400:
-            batch.commit(); batch, n = db.batch(), 0
+        size += _bytes(doc)
+        if n >= 400 or size > 6_000_000:
+            batch.commit(); batch, n, size = db.batch(), 0, 0
     for cid, c in cases.items():                     # a card no registry knows any more (an earlier trial keying): off the board
         if c.get('parentIssue') and sgroups.is_card(cid) and cid not in units and not c.get('retired'):
             batch.set(db.collection('cases').document(cid), {'retired': True, 'sync_run': 'retired', 'stackCards': 0}, merge=True)
@@ -493,7 +503,7 @@ def build(db, cfg, log=print):
         g = next((g for g in sgroups.load(fbo['id']).get('groups') or [] if k and g['key'] == k), None)
         if g:
             heir[g['card']] = (oid, d)
-    batch, n, keep = db.batch(), 0, set()
+    batch, n, keep, size = db.batch(), 0, set(), 0
     for i, (lab, pid, fid, proof, s) in enumerate(rows):
         uid = fid
         fid = real.get(uid) if uid else None
@@ -546,8 +556,9 @@ def build(db, cfg, log=print):
                 doc[k] = prev[k]
         batch.set(db.collection('merged').document(mid), doc)
         n += 1
-        if n >= 400:
-            batch.commit(); batch, n = db.batch(), 0
+        size += _bytes(doc)
+        if n >= 400 or size > 6_000_000:             # 1 Nov: Firestore refuses a commit over ~10 MB ("write too big"):
+            batch.commit(); batch, n, size = db.batch(), 0, 0   # the merge failed on 30 and 31 Oct and the board kept old rows
     for mid, d in old.items():                       # rows the consoles no longer list: hide, keep PR/notes
         if not play_ok and d.get('play') and not d.get('fb'):   # Play could not be read: its Play-only rows are not 'gone'
             continue

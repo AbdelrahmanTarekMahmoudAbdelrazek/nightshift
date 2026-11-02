@@ -52,9 +52,13 @@ Method:
    native engine crashes because the Kotlin/Java app called it wrongly (wrong order, a call after destroy or before
    create, a wrong id / clip / layer / time, a value the engine API does not accept), owner is "app-java" even when
    every crashing frame is C++. Owner is "engine" only when the engine does the wrong thing with a valid call (its
-   own bug: a missing return, a race inside the engine, its own rounding). When both are wrong (the app sends a bad
-   call AND the engine has no guard for it), owner is the side that made the wrong call; fix_direction names that
-   fix first and the engine guard as defence in depth. owner_why says which call was wrong, with file:line.
+   own bug: a missing return, a race inside the engine, its own rounding). When the app's wrong call created the state
+   that crashed, owner is "app-java" even if the engine is also fragile there: the wrong call is THE CAUSE, the engine
+   weakness is only a missing guard (defence in depth), never a second cause.
+8. How to write it when the cause is a wrong app call: root_cause STARTS with the trigger, i.e. the wrong Kotlin call
+   (file:line, what it sends vs what it should send, what state that creates), then one short part "Engine (needs a
+   guard): ..." saying where the engine should refuse or survive that state. summary and fix_direction follow the
+   same order: the Kotlin fix first (the real fix), the engine guard second (hardening). owner_why says which call was wrong, with file:line.
 
 Answer with ONE JSON object, no prose around it:
 {
@@ -82,10 +86,30 @@ Mermaid rules (the board renders them, keep them valid):
   `classDef bad fill:#fde8e8,stroke:#a32d2d` and `classDef good fill:#e8f5e9,stroke:#2e7d32` lines.
 - Use `\n` only through the JSON string escaping; one statement per line.
 
-## Check the Kotlin caller's arguments (28 Oct, SpeedFragment lesson)
-When a lab or field log shows an engine message whose ids or values do not match the user's state (e.g.
-`MsgSetMediaCurveSpeed layer 0 media_id 0 index 1` while clip 1 is selected, a seek past the timeline end, a layer
-or media id that does not exist), do not leave it as an open question: find every Kotlin/Java caller of that call
+## Check the Kotlin caller's arguments
+When a lab or field log shows an engine message whose ids or values do not match the user's state (an index that
+points at a different item than the one selected, a time past the timeline end, a layer or media id that does not
+exist), do not leave it as an open question: find every Kotlin/Java caller of that call
 (Grep `Player.<method>(` in android-video-editor-module/, java-common/, gallerypicker/) and compare each call's
 argument ORDER and values with the `external fun` declaration in java-common Player.kt. A swapped or wrong argument
 is a wrong call from the app: owner "app-java", cite caller file:line and the declaration line.
+
+## Field facts (28 Oct)
+The evidence has `field_facts`: the odd lines of the user's own log (rejected engine calls, duplicate ids, empty timeline,
+instant at_end, timeouts). The root cause must explain EVERY one and contradict none; name in `evidence` which fact each
+step of the trigger explains. When a fact shows an engine message with no tap before it (e.g. MsgSortMedia right after a
+pause), find who sends it in `kotlin_side` (the Kotlin map: message -> JNI -> Kotlin callers). Several screens can keep
+their OWN copy of the same data (a list, an index, a selection); when the engine rejects what the app sends, check every
+copy and every caller, not only the first one you find.
+
+
+## Which screen and which code the user was in (28 Oct)
+- The screen class in an event (`firebase_screen_class`) names the ACTIVITY only. One activity can host several
+  screens or modes, and each has its own UI code and its own event-name prefix. Before you name a caller, grep the code
+  for the exact event names in the timeline (the `action_view` / event string). The file that logs them is the screen
+  whose code ran. Follow THAT screen's handlers to the engine call. Don't assume the activity's main handler is the caller.
+- Drags, swipes and long presses are usually NOT logged as events. An engine message with no tap before it (e.g. a
+  reorder or seek) can come from a gesture on that screen's list. Look at the gesture callbacks (ItemTouchHelper,
+  drag/drop listeners, scroll listeners) of the screen the event prefix points to.
+- Say in `root_cause` which screen and which file/function sent the bad call, and why you know (the event names and
+  the code that logs them).

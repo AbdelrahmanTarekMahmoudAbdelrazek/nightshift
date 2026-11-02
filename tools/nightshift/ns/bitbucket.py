@@ -131,3 +131,15 @@ def branches(limit=40, query=None):
                     'author': ((t.get('author') or {}).get('user') or {}).get('display_name') or (t.get('author') or {}).get('raw', '').split('<')[0].strip(),
                     'message': (t.get('message') or '').strip().splitlines()[0][:120] if t.get('message') else ''})
     return out
+
+
+def recent_prs(dests, since, repo=None, main=None, limit=150):
+    """30 Oct, still-open check: PRs into any of `dests` (branch names) that are open, or merged since `since`
+    (ISO time). Read-only."""
+    c = creds()
+    repo = repo or c['repo']
+    main = main or c['repo']
+    q = '(' + ' OR '.join(f'destination.branch.name = "{d}"' for d in dests if d) + f') AND updated_on > {since}'
+    url = (f"{API}/repositories/{c['workspace']}/{repo}/pullrequests?state=OPEN&state=MERGED&pagelen=50&sort=-updated_on&q="
+           + urllib.parse.quote(q))
+    return [_row(p, repo, main) for p in _paged(url, c, limit=limit) if p.get('state') in ('OPEN', 'MERGED')]   # q drops the state filter

@@ -1,0 +1,45 @@
+diff --git a/app/src/main/cpp/audio/AudioPlayer.cpp b/app/src/main/cpp/audio/AudioPlayer.cpp
+index d11b4a9..75ea42a 100644
+--- a/app/src/main/cpp/audio/AudioPlayer.cpp
++++ b/app/src/main/cpp/audio/AudioPlayer.cpp
+@@ -7,6 +7,18 @@
+ #include <chrono>
+ 
+ #include "AudioPlayer.h"
++#include <sys/system_properties.h>
++#include <cstdlib>
++// Night Shift lab hooks (debug builds only, default off), reusable for any audio-thread race:
++//   adb shell setprop debug.zesty.hook.slow_audio_ms 150   -> each playback audio callback takes ~150 ms longer
++//                                                            (a slow phone: the field OPPO logged a 159 ms callback)
++//   adb shell setprop debug.zesty.hook.audio_probe 1       -> logs "NS_PROBE audio_cb" about 4 times a second while the
++//                                                            playback callback really pulls samples (not silent)
++static int ns_prop_int(const char *name) {
++    char v[PROP_VALUE_MAX] = {0};
++    if (__system_property_get(name, v) <= 0) return 0;
++    return atoi(v);
++}
+ #include "player/VideoEngine.h"
+ /** @brief about AudioPlayer: it is used for make an object that will play the sound
+  * @param player a pointer to the video engine
+@@ -200,6 +212,21 @@ oboe::DataCallbackResult AudioPlayer::onAudioReady(oboe::AudioStream *oboeStream
+         return oboe::DataCallbackResult::Stop;
+     }
+ 
++    {   // Night Shift lab hooks: properties read about 4 times a second, not on every callback
++        static std::atomic<int64_t> ns_next{0};
++        static std::atomic<int> ns_slow{0}, ns_probe{0};
++        int64_t ns_now = std::chrono::duration_cast<std::chrono::milliseconds>(
++                std::chrono::steady_clock::now().time_since_epoch()).count();
++        if (ns_now >= ns_next.load()) {
++            ns_slow = ns_prop_int("debug.zesty.hook.slow_audio_ms");
++            ns_probe = ns_prop_int("debug.zesty.hook.audio_probe");
++            ns_next = ns_now + 250;
++            if (ns_probe.load() > 0 && !shouldBeSilent.load())
++                LOGI("NS_PROBE audio_cb pulling samples (slow_audio_ms=%d)", ns_slow.load());
++        }
++        if (ns_slow.load() > 0 && !shouldBeSilent.load())
++            std::this_thread::sleep_for(std::chrono::milliseconds(ns_slow.load()));
++    }
+     if(shouldBeSilent.load()) {
+         memset(audioData, 0, num_samples * kChannelCount * sizeof(float));
+         return oboe::DataCallbackResult::Continue;

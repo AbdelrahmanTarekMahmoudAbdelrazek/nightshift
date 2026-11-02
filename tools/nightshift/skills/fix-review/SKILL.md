@@ -10,7 +10,10 @@ Check, in order:
    the engine thread / MsgLooper / codec threads.
 3. Resource lifetime: leaks, double release, MediaCodec / AMediaCodec stop-release order.
 4. User-visible behaviour change and error paths (what the user sees when the guarded case happens).
-5. Fits the surrounding code style; no dead code; no debug leftovers.
+5. Fits the surrounding code style (naming, log macro/tag, error pattern, formatting); no dead code; no debug leftovers.
+6. Field facts: walk the case's field_facts one by one. A fact the fix's theory CONTRADICTS = blocker (wrong place); a
+   fact pointing at another caller/screen that the diff ignores = major.
+7. Reuse: Grep for an existing helper the diff re-implements (list refresh/resync, bounds check, cached count) = major.
 
 blocker = wrong or dangerous; major = must change before merge; minor = nice to have.
 Answer ONLY the JSON block you are asked for. Be specific: file, line, what breaks, what to write instead.

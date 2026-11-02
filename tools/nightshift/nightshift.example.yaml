@@ -4,9 +4,9 @@
 
 profile:                                  # one project = one profile. A second team copies this file and changes these lines.
   name: MyZesty
-  repos: video_gles3jni, android-video-editor-module, java-common, gallerypicker   # its Bitbucket repos; the FIRST is the main (native) repo
+  repos: video_gles3jni, android-video-editor-module, java-common, gallerypicker, image_editor_java, android-ai-tools-module, simple-andoird-app   # its Bitbucket repos; the FIRST is the main (native) repo
   review_repos: video_gles3jni            # repos whose open PRs PR Review reviews (add android-video-editor-module etc. to review Kotlin PRs)
-  code_packages: com.video., com.common., com.myzesty.   # Java/Kotlin packages that count as "our code" in stacks
+  code_packages: com.video., com.common., com.myzesty., com.photo., com.ai.myzesty.   # Java/Kotlin packages that count as "our code" in stacks
   jira_keys: MZ                           # Jira project keys Card Issue accepts (comma-separated)
 
 app:
@@ -18,6 +18,7 @@ app:
   release_builds: 3                # its newest 3 builds; older builds ignored
   release_overlap_days: always     # keep the previous version too: always the last 2 releases (or a number of days)
   release_overlap_builds: 3        # how many of the previous version's newest builds stay in scope
+  release_count: 3                 # releases in scope: the live one + the 2 before it (e.g. 1.26.0, 1.25.2, 1.25.1)
   release_versions: auto           # (CSV triage scoping; auto = follow the board)
   live_version: 1.25.1
 
@@ -105,7 +106,19 @@ analysis:
   parallel: 3                             # root causes at once
   skip_pure_java: true                    # no root cause (no tokens) for crashes with no libMYJNILIB26 frame
 
+full_app:                         # the whole MyZesty app (home, tasks, image editor com.photo / libImageFilter, AI tools)
+  path: ~/myzesty_mobile          # checkout used for full-app crashes: read by the root cause, built for repro + fix
+  base_branch: development
+  pins: 1.25.2=062ff8f1a84cd88da671e239e4f95c6413109376   # version=commit the build was really made from (tip of release/1.25.2 does not start)
+
+image_app:                        # the image editor's native library (prebuilt into myzesty_mobile's jniLibs)
+  native_lib: libImageFilter.so
+  repo: simple-andoird-app          # Bitbucket repo with its C++ (app/src/main/cpp/ImageFilter); Night Shift keeps a fresh copy in ~/.nightshift_kotlin
+  src: app/src/main/cpp/ImageFilter
+  path: ~/simple-andoird-app        # fallback: the person's own checkout (may be old)
+
 pr_review:
+  integration_repos: android-video-editor-module, java-common, gallerypicker   # repos that call the video engine's JNI (the image app and AI tools have their own native code)
   since: "2026-09-01"           # only open PRs created on/after this date are reviewed
   feedback_notes: false         # earlier Decide answers ("not a problem") are NOT shown to reviews; every run starts clean
   carry_forward: false          # re-review of the same code re-judges the previous run's problems. OFF for the stability test; set true after

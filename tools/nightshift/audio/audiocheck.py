@@ -201,7 +201,9 @@ class Check:
             line = sh(f'git rev-list --first-parent --reverse {tip}..{control}', quiet=True).split()
             m = next((c for c in line if subprocess.run(['git', 'merge-base', '--is-ancestor', tip, c], cwd=REPO).returncode == 0), None)
             if not m:
-                raise RuntimeError('the branch is in the control but its merge commit was not found')
+                # 31 Oct: the branch IS today's lab code (the nightly golden check of CPP-x.y.z once the lab sits on it), or
+                # it came in off the main line: no separate change to add or take out, so measure the code as it is
+                return '', f"already today's lab code ({tip[:10]}): nothing to add or take out", []
             a, b, how = f'{m}^1', m, f'already merged into the control by {m[:10]}'
         else:
             a = sh(f'git merge-base {tip} {control}', quiet=True).strip()
@@ -312,6 +314,46 @@ class Check:
             pass
         return cmd
 
+    # ── 1 Nov: the phone side, so a check does not die on a phone that went away or filled up ──
+    def phone_ready(self, wait=180):
+        """The lab phone must answer adb. It drops off USB now and then (30 Oct: device not found): wait for it."""
+        ser = os.environ.get('ANDROID_SERIAL', '')
+        t_end = time.time() + wait
+        while True:
+            st = sh('adb get-state', check=False, quiet=True).strip()
+            if st == 'device':
+                return
+            if time.time() > t_end:
+                raise RuntimeError(f'the lab phone{(" " + ser) if ser else ""} is not connected to the Mac (adb: '
+                                   f'{st or "no device"}) after waiting {wait // 60} min: plug it in / unlock it and run the check again')
+            print(f'… waiting for the lab phone (adb: {st or "no device"})', flush=True)
+            sh('adb reconnect', check=False, quiet=True)
+            time.sleep(15)
+
+    def free_space(self, keep=''):
+        """Delete what the audio checks themselves left on the phone: the test-clip copies (ns_audio_*, ns_fresh_*).
+        Every check made a new 35 s copy and never removed it, until installs failed with INSUFFICIENT_STORAGE (23, 25 Oct)."""
+        keep_q = f" | grep -v '{os.path.basename(keep)}'" if keep else ''
+        sh(f'adb shell "ls {PHONE_DIR}/ns_audio_*.mp4 {PHONE_DIR}/ns_fresh_*.mp4 2>/dev/null{keep_q} | xargs rm -f"', check=False, quiet=True)
+        sh('adb shell "content delete --uri content://media/external/video/media --where \\"_data LIKE \'%ns_audio_%\' OR _data LIKE \'%ns_fresh_%\'\\"" ', check=False, quiet=True)
+        sh('adb shell pm trim-caches 4G', check=False, quiet=True)
+
+    def drop_exports(self, t_phone):
+        """The videos this check exported (3 per side) are only needed until they are pulled or the dump is read."""
+        import shlex
+        try:
+            t0 = int(t_phone) - 5
+        except ValueError:
+            return
+        rows = sh('adb shell ' + shlex.quote('content query --uri content://media/external/video/media '
+                                             '--projection _data:date_added'), check=False, quiet=True)
+        for m in re.finditer(r'_data=(\S+?), date_added=(\d+)', rows):
+            path, at = m.group(1), int(m.group(2))
+            if at >= t0 and PHONE_DIR not in path and re.search(r'/MyZesty[^/]*/', path):
+                sh(f'adb shell rm -f "{path}"', check=False, quiet=True)
+                sh('adb shell ' + shlex.quote(f"content delete --uri content://media/external/video/media --where \"_data='{path}'\""),
+                   check=False, quiet=True)
+
     def build(self, key, wt):
         os.makedirs(APKS, exist_ok=True)
         apk = os.path.join(APKS, f'{key}-{tap.VERSION}.apk')
@@ -337,7 +379,14 @@ class Check:
             cached = False
         else:
             cached = True
+        self.phone_ready()
+        self.free_space()
         out = sh(f'adb install -r -t "{apk}"', timeout=600, check=False)
+        if 'Success' not in out and 'INSUFFICIENT_STORAGE' in out:      # still full: clear the app's cache too, then once more
+            print('⚠ the phone is out of space: clearing what the checks left and the app cache, then installing again', flush=True)
+            sh(f'adb shell pm clear --cache-only {PKG}', check=False, quiet=True)
+            self.free_space()
+            out = sh(f'adb install -r -t "{apk}"', timeout=600, check=False)
         if 'Success' not in out and any(k in out for k in ('INSTALL_FAILED_VERSION_DOWNGRADE', 'INSTALL_FAILED_UPDATE_INCOMPATIBLE',
                                                             'signatures do not match', 'INSTALL_FAILED_ALREADY_EXISTS')):
             print('⚠ the phone has another build of the app (Play/release or another signing): uninstalling it once', flush=True)
@@ -353,7 +402,9 @@ class Check:
         clip = os.path.join(ASSETS, p['clip'])
         dst = f'{PHONE_DIR}/{p["clip"]}'
         sh(f'adb shell mkdir -p {PHONE_DIR}', check=False)
-        if p['clip'] not in sh(f'adb shell ls {PHONE_DIR}', check=False, quiet=True):
+        self.phone_ready()
+        self.free_space(keep=dst)      # 1 Nov: free_space ran AFTER the push and its ns_audio_* glob deleted the test clip itself,
+        if p['clip'] not in sh(f'adb shell ls {PHONE_DIR}', check=False, quiet=True):   # so the copy below was a 0-byte file (00:00)
             sh(f'adb push "{clip}" {dst}', timeout=300)
         # 2026-10-21: the scenario takes the NEWEST video in the gallery. Lab runs copy other clips to new names
         # (ns_fresh_*, 100 s), and "touch" does not change the gallery date, so every export since Oct 20 used a 100 s
@@ -408,8 +459,12 @@ class Check:
         dump = os.path.join(run_dir, 'dump.f32')
         log = sh('adb logcat -d', check=False, quiet=True)
         if CAPTURE == 'export_file':
-            return self.export_file(run_dir, dump, log, t_phone, p)
+            try:
+                return self.export_file(run_dir, dump, log, t_phone, p)
+            finally:
+                self.drop_exports(t_phone); self.free_space()
         sh(f'adb exec-out run-as {PKG} cat {DUMP} > "{dump}"', timeout=300, check=False)
+        self.drop_exports(t_phone); self.free_space()
         open(os.path.join(run_dir, 'run.log'), 'w').write(
             ''.join(l + '\n' for l in log.splitlines() if re.search(r'AUD split|underfill|OVERRUN', l)))
         seams = [float(m.group(1)) for m in re.finditer(r'AUD split at ([0-9.]+) s', log)]

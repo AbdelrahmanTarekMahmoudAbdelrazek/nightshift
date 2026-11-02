@@ -51,7 +51,7 @@ def _now():
 #                  worker.serve_others: true      -> also the jobs of people whose own worker is not online (the lab host)
 # No owner set = the old behaviour: this worker runs every job.
 SHARED_ACTIONS = ('sync', 'sync-full', 'audio-branches')       # board-wide work: whichever worker is online first
-SHIP_ACTIONS = ('bb-comments', 'crash-pr', 'jira-create')       # post to Bitbucket / Jira: the board host only
+SHIP_ACTIONS = ('bb-comments', 'crash-pr', 'jira-create', 'bb-review')       # post to Bitbucket / Jira: the board host only
 PHONE_ACTIONS = ('reproduce', 'draft-fix', 'audio-check')
 WORKER_ALIVE_S = 180
 
@@ -639,6 +639,13 @@ class Worker:
         if not ok:
             raise RuntimeError('no root cause was written, so the lab step was not queued (see the log above)')
         from firebase_admin import firestore as _fs
+        if (self.cfg.get('worker') or {}).get('one_job', True) and case['id'] == ((ref.get().to_dict() or {}).get('issue')):
+            # 28 Oct: ONE job per Start. The same job document goes back to the queue as the phone step: one row on the
+            # board, one log from pull to the hand-over, one Cancel. It still waits for the phone like any Reproduce.
+            self._continue_as = 'reproduce'
+            self.log(ref, 'Start 3/3: Reproduce on the lab phone continues in THIS job (waits for the phone if it is busy); '
+                          'it goes on by itself to the engine repro, the fix, the phone check, the review and the hand-over drafts')
+            return
         who = (ref.get().to_dict() or {}).get('requestedBy') or 'Start'
         nj = self.db.collection('jobs').add({'action': 'reproduce', 'issue': case['id'], 'requestedBy': who,
                                              'status': 'queued', 'queuedAt': _fs.SERVER_TIMESTAMP, 'chainedFrom': ref.id})
@@ -902,10 +909,40 @@ class Worker:
                 self._early_patch = _fx.early(self, ref, case, merged, self._replay)
             except Exception as e:
                 self.log(ref, f'early fix failed: {str(e)[:200]}; the normal fix stage runs after the repro')
+            if self._early_patch and self._turbo().get('ship_on_replay'):
+                # OPTION A (28 Oct): the engine replay crashed with every field frame and this fix ran it clean, so the
+                # review + PR/Jira texts are written NOW (status fix-verified-engine) and the developer can open the
+                # draft PR at once; the real-tap search below goes on as the background proof (video + steps)
+                try:
+                    import importlib.util as _iu
+                    _sp = _iu.spec_from_file_location('engineship', os.path.join(config.REPO, 'tools/nightshift/engineship.py'))
+                    _es = _iu.module_from_spec(_sp)
+                    _sp.loader.exec_module(_es)
+                    _es.run(self.db, self.cfg, case['id'], log=lambda t: self.log(ref, t), worker=self, ref=ref, rp=self._replay)
+                except BaseException as e:            # SystemExit included: never stop the real-tap proof for this
+                    self.log(ref, f'engine-verified hand-over skipped: {str(e)[:200]}; the normal hand-over comes after the real-tap check')
             if self._early_patch:
                 self.log(ref, 'early fix kept; reinstalling the unfixed crash build for the real-tap repro')
                 self._install(ref, [])
-        if not hit and not ladder_only and self._turbo().get('live'):
+        tapped = False
+        if not hit and not ladder_only and self._turbo().get('tapflow', True):
+            # 28 Oct: the real-tap repro written FROM the engine repro + the full field log, a checkpoint after every tap,
+            # FULL and HYBRID variants, time-boxed (turbo.tap_budget_min, default 30)
+            from . import tapflow
+            importlib.reload(tapflow)
+            try:
+                tapped = True
+                hit = tapflow.run(self, ref, case, merged, self._replay)
+            except Exception as e:
+                if 'cancelled from the board' in str(e):
+                    raise
+                self.log(ref, f'tap repro failed: {str(e)[:200]}; the live agent takes over')
+                hit = None
+            if hit:
+                attempts.append(hit)
+            elif not getattr(self, '_budget', None):   # time box for what follows: the long searches rarely pay off
+                self._budget = int(self._turbo().get('author_budget_min') or 45)
+        if not hit and not ladder_only and self._turbo().get('live') and not (tapped and self._turbo().get('skip_live_after_tap', True)):
             # TURBO: the live agent drives the phone one action at a time (screen + log after each); classic author if it misses
             from . import live
             importlib.reload(live)
@@ -1339,20 +1376,31 @@ class Worker:
             if hooks:
                 self.log(ref, f'full app: {len(hooks)} engine debug hook(s) of video_gles3jni skipped')
             hooks = []
+        # 28 Oct: the reusable hook library (tools/nightshift/hooklib/*.diff, every hook default OFF behind a
+        # debug.zesty.hook.* property) goes into every lab debug build, so any recipe or the live agent can switch
+        # e.g. slow_audio_ms on with a setprop, without writing its own level-5 patch
+        lib = [] if (getattr(self, '_play_mode', False) or getattr(self, '_full_mode', False)) else \
+            sorted(os.path.relpath(x, config.REPO) for x in glob.glob(os.path.join(config.REPO, 'tools/nightshift/hooklib/*.diff')))
         try:
-            for h in hooks:
+            for h in lib + [x for x in hooks if x not in lib]:
                 p = os.path.join(config.REPO, h)
                 if self.run_cmd(ref, f'git --no-optional-locks apply "{p}"', 60, cwd=config.LAB) == 0 or \
-                        self.run_cmd(ref, f'git --no-optional-locks apply --recount "{p}"', 60, cwd=config.LAB) == 0:
+                        self.run_cmd(ref, f'git --no-optional-locks apply --recount "{p}"', 60, cwd=config.LAB) == 0 or \
+                        self.run_cmd(ref, f'git --no-optional-locks apply --ignore-whitespace "{p}"', 60, cwd=config.LAB) == 0:
                     applied.append(p)
                     self.log(ref, f'debug hook applied for this build only: {h}')
+                elif h in lib:
+                    self.log(ref, f'hook library: {h} does not apply to this lab code; built without it')
                 elif getattr(self, '_hooks_strict', False):
                     raise RuntimeError(f'patch does not apply to the lab code: {h}')
             if self.install_app(ref):
                 raise RuntimeError(f'build/install failed ({self._build_cause()}): the phone still has the old app, so this run would prove nothing')
         finally:
             for p in reversed(applied):            # the working tree goes back exactly as it was; never committed
-                subprocess.run(['git', '--no-optional-locks', 'apply', '-R', p], cwd=config.LAB, capture_output=True, timeout=60)
+                r_ = subprocess.run(['git', '--no-optional-locks', 'apply', '-R', p], cwd=config.LAB, capture_output=True, timeout=60)
+                if r_.returncode:
+                    subprocess.run(['git', '--no-optional-locks', 'apply', '-R', '--ignore-whitespace', p], cwd=config.LAB,
+                                   capture_output=True, timeout=60)
                 self.log(ref, f'debug hook reverted: {os.path.relpath(p, config.REPO)}')
 
     def _step_stats(self, key, st, res, secs):
@@ -1804,9 +1852,12 @@ class Worker:
                 if any(e.startswith('MAIN:') for e in expect):    # the main thread's own stack in the ANR dump
                     m_ = re.search(r'"main"[^\n]*\n(?:[^\n]+\n){0,400}', text)   # the whole main block: Java frames sit deep under ART frames
                     main = m_.group(0) if m_ else ''
+                def _alts(x):                         # 29 Oct: an R8-obfuscated method ('pkg.Cls.d') in the field frame:
+                    m_o = re.match(r'^([A-Za-z_$][\w$]*(?:\.[\w$]+)+)\.([\w$]{1,2})$', x or '')   # debug lab builds keep the
+                    return [x, m_o.group(1) + '.'] if m_o and m_o.group(1).count('.') >= 2 else [x]   # real name: same class
                 def _has(e):                          # 'MAIN:' = in the main thread's own stack; 'a|b' = any of them
                     hay = main if e.startswith('MAIN:') else text
-                    return any(x and x in hay for x in (e[5:] if e.startswith('MAIN:') else e).split('|'))
+                    return any(y and y in hay for x in (e[5:] if e.startswith('MAIN:') else e).split('|') for y in _alts(x))
                 miss = [e for e in expect if not _has(e)]
                 fs = getattr(self, '_field_short', None)
                 if miss and fs and cframes and len(cframes) <= 2 and not any(f['lib'] == 'libMYJNILIB26.so' for f in cframes):
@@ -2013,6 +2064,15 @@ class Worker:
         import importlib
         importlib.reload(config)                      # nightshift.yaml / lab_repros.json edits apply to the next job
         self.cfg = config.load()
+        # 28 Oct: helper modules imported lazily elsewhere were never reloaded, so their edits needed a worker restart
+        import sys as _sys
+        for _n in ('kotlinctx', 'kotlinmap', 'symbolize', 'fieldfacts', 'timeline', 'replaycard'):
+            _m = _sys.modules.get(f'{__package__}.{_n}')
+            if _m is not None:
+                try:
+                    importlib.reload(_m)
+                except Exception as _e:
+                    print(f'[worker] reload {_n} failed: {_e}', flush=True)
         action = (snap.to_dict() or {}).get('action')
         self.heartbeat()
         try:
@@ -2024,8 +2084,12 @@ class Worker:
         self._pin_phone()                             # every adb command of this job (and its scripts) goes to the lab phone
         # 2026-10-21: an Audio Check ran beside a Reproduce; the Reproduce install killed the export. Phone jobs share one lock.
         # ship-it jobs take seconds and touch no phone or build: their own slot, so they never wait behind a sync
+        # 28 Oct: PR reviews and card reads work in their own git worktrees (no phone, no lab folder): their own lane,
+        # so a PR review never makes a crash Start wait (and the other way round)
         self.busy = _stable_lock('_ns_lab_lock' if action in ('reproduce', 'draft-fix', 'audio-check')
-                                 else '_ns_ship_lock' if action in SHIP_ACTIONS else '_ns_other_lock')
+                                 else '_ns_ship_lock' if action in SHIP_ACTIONS
+                                 else '_ns_review_lock' if action in ('pr-review', 'card-read')
+                                 else '_ns_other_lock')
         if action in ('reproduce', 'draft-fix'):        # lane runs left by a cancelled job would block the prebuild
             subprocess.run(['pkill', '-f', 'stress_results/lanes/'], capture_output=True)
             subprocess.run('adb shell \'pkill -f "# nsload"; pkill -f "# nsio"; rm -f /sdcard/Download/ns_io_*.tmp\'',
@@ -2093,6 +2157,15 @@ class Worker:
             return serve                                    # board-wide gathering / scheduled work: the board host only
         if job.get('action') in SHIP_ACTIONS:
             return serve                                    # "ship it": the lab Mac has the verified fixes, reviews and write tokens
+        iss = str(job.get('issue') or '')
+        if job.get('action') == 'pr-review' and '|' in iss:
+            # 2 Nov: 'Check again' (<id>|still) and 'Redraw' (<id>|<scenario>) work on a review that was made on ONE
+            # computer (its saved review, checkout and caches). Khairy's Mac took '3189|still' (reviewed on the host) and
+            # failed "no saved review". The computer that holds the review runs it; the host also serves others.
+            pid = iss.split('|', 1)[0]
+            from . import prreview as _pr
+            have = pid == 'all' or os.path.exists(os.path.join(_pr.OUT, f'{pid}.json'))
+            return have and (who == me or serve)
         return who == me                                    # everything else: the requester's own computer, nobody else's
 
     def handle(self, snap):
@@ -2115,16 +2188,24 @@ class Worker:
                 d = snap.to_dict() or {}
                 if d.get('status') != 'queued':
                     return False
+                if d.get('action') and d.get('action') != job.get('action'):
+                    return False                      # 1 Nov: a stale snapshot (a Start already continued as Reproduce) re-ran the Start every 5 min
                 lab = self.db.collection('config').document(_lab_lock_id(self.cfg))
                 lk = (lab.get(transaction=tx).to_dict() or {})
                 if job.get('action') in ('reproduce', 'draft-fix') and lk.get('holder') and lk.get('holder') != me:
                     return False                      # another worker is using the phone; leave the job queued
-                tx.update(ref, {'status': 'running', 'claimedAt': _now(), 'startedAt': _now(), 'worker': me, 'workerOwner': _owner(self.cfg), 'log': []})
+                upd = {'status': 'running', 'claimedAt': _now(), 'worker': me, 'workerOwner': _owner(self.cfg)}
+                if not d.get('continued'):            # a Start that continues as Reproduce keeps its log and start time
+                    upd.update({'startedAt': _now(), 'log': []})
+                else:
+                    upd['stage'] = 'Start 3/3 · on the lab phone'
+                tx.update(ref, upd)
                 if job.get('action') in ('reproduce', 'draft-fix'):
                     tx.set(lab, {'holder': me, 'job': ref.id, 'since': _now()})
                 return True
             if not claim(self.db.transaction()):
                 return
+            self._continue_as = None                  # set only by do_start of THIS job
             if job.get('action') in ('reproduce', 'draft-fix'):    # we hold the phone: any other lab job of this worker
                 try:                                               # still 'running'/'cancel' lost its thread; close it
                     for st in ('running', 'cancel'):
@@ -2137,7 +2218,7 @@ class Worker:
                     print(f'[worker] could not close stale lab jobs: {e}', flush=True)
             self._watch_cancel(ref)
             self._pin_phone()                         # every adb call of this job goes to the physical lab phone
-            if job.get('action') in ('bb-comments', 'crash-pr', 'jira-create'):   # "ship it" buttons (shipit.py): only on a click
+            if job.get('action') in ('bb-comments', 'crash-pr', 'jira-create', 'bb-review'):   # "ship it" buttons (shipit.py): only on a click
                 issue = str(job.get('issue') or '').strip()
                 who = str(job.get('requestedBy') or '').lower()
                 who = who if re.fullmatch(r'[a-z0-9._+-]{1,64}@[a-z0-9.-]{1,100}', who) else ''
@@ -2154,7 +2235,13 @@ class Worker:
                                    'description': str(job.get('description') or '')[:30000]}
                         _js.dump(payload, open(pf, 'w'))
                     popt = f' --payload "{pf}"' if payload else ''
-                    if job['action'] == 'bb-comments':
+                    if job['action'] == 'bb-review':          # the developer's Approve / Request changes on the PR page
+                        key, _, dec = issue.partition('|')
+                        if not re.fullmatch(r'([A-Za-z0-9_.-]{1,80}-)?\d{1,7}', key) or dec not in ('approve', 'changes'):
+                            raise RuntimeError(f'bad PR decision {issue!r}')
+                        self.log(ref, f'Ship it: {"approving" if dec == "approve" else "requesting changes on"} PR {key} in Bitbucket')
+                        cmd = f'{env}{PY} tools/nightshift/shipit.py pr-decide --pr {key} --decision {dec}' + popt
+                    elif job['action'] == 'bb-comments':
                         if not re.fullmatch(r'([A-Za-z0-9_.-]{1,80}-)?\d{1,7}', issue):
                             raise RuntimeError(f'bad PR key {issue!r}')
                         self.log(ref, f'Ship it: posting the Night Shift review of PR {issue} to Bitbucket')
@@ -2339,6 +2426,13 @@ class Worker:
                         self.log(ref, f'queued the daily golden Audio Check of {gb} (the lab drift check)')
                     except Exception as e:
                         self.log(ref, f'golden Audio Check not queued: {str(e)[:200]}')
+                    try:                                  # 30 Oct: every day, is any verified PR finding fixed somewhere by now?
+                        from firebase_admin import firestore as _fs2
+                        self.db.collection('jobs').add({'action': 'pr-review', 'issue': 'all|still', 'requestedBy': 'daily still-open check',
+                                                        'status': 'queued', 'queuedAt': _fs2.SERVER_TIMESTAMP})
+                        self.log(ref, 'queued the daily still-open check of reviewed PRs')
+                    except Exception as e:
+                        self.log(ref, f'still-open check not queued: {str(e)[:200]}')
                 return
             try:
                 case_ref = self.db.collection('cases').document(job['issue'])
@@ -2492,7 +2586,14 @@ class Worker:
                     self.maybe_deploy(ref)                # board page edited since the last deploy -> publish it now
                 except Exception as e:
                     self.log(ref, f'board deploy skipped: {str(e)[:200]}')
-                ref.update({'status': 'done', 'finishedAt': _now()})
+                cont = getattr(self, '_continue_as', None)
+                self._continue_as = None
+                if cont and not getattr(self, 'cancelled', False):
+                    self.flush_log(ref)
+                    ref.update({'action': cont, 'status': 'queued', 'continued': True, 'startedAs': job['action'],
+                                'stage': 'Start 3/3 · waiting for the lab phone'})
+                else:
+                    ref.update({'status': 'done', 'finishedAt': _now()})
                 self._end_progress('finished')
                 self._release_lab(job)
             except Exception as e:  # the job fails visibly; the worker keeps running

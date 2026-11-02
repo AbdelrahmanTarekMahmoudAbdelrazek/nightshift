@@ -70,6 +70,16 @@ class Device:
         if 'Unknown' in out or 'Error' in out or 'usage' in out.lower():
             self.swipe(x1, y, x2, y, 2500)          # old Android: slow swipe, little fling
 
+    def long_drag(self, x1, y1, x2, y2, hold=1.0, steps=10):
+        """Long press then drag (ItemTouchHelper reorder): finger down, hold still past the long-press timeout, move in
+        small steps, hold, lift. A plain swipe moves at once, so the list sees a scroll and never starts the drag."""
+        moves = '; '.join(f'input motionevent MOVE {int(x1 + (x2 - x1) * i / steps)} {int(y1 + (y2 - y1) * i / steps)}; '
+                          f'sleep 0.05' for i in range(1, steps + 1))
+        out = self.sh(f'input motionevent DOWN {int(x1)} {int(y1)}; sleep {hold}; {moves}; sleep 0.4; '
+                      f'input motionevent UP {int(x2)} {int(y2)}')
+        if 'Unknown' in out or 'Error' in out or 'usage' in out.lower():
+            self.sh(f'input draganddrop {int(x1)} {int(y1)} {int(x2)} {int(y2)} 2500')   # older input tool
+
     def key(self, code):
         self.sh(f'input keyevent {code}')
 
@@ -378,6 +388,8 @@ def _matches(n, sel):
         return n.text.strip().lower() == val.lower()
     if kind == 'textc':
         return val.lower() in n.text.lower() or val.lower() in n.desc.lower()
+    if not _ and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', sel or ''):
+        return n.rid.endswith(':id/' + sel)          # 1 Nov: a bare 'mediaList' (generated scripts) means id:mediaList
     raise ValueError(f'bad selector {sel!r}')
 
 
@@ -433,7 +445,7 @@ def _adb_transport_error(out):
                                 'unauthorized', 'cannot connect', 'closed', 'protocol fault'))
 
 
-SCREEN_MAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'screen_map.json')
+SCREEN_MAP = os.environ.get('ZESTY_SCREEN_MAP') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'screen_map.json')   # Night Shift sets a full-app map for full-app runs
 
 
 class UI:
@@ -488,11 +500,18 @@ class UI:
 
     STATS = {'n': 0, 'secs': 0.0}                     # screen dumps of this run: count and time (speed measurement)
 
-    def dump(self, timeout=15):
+    def dump(self, timeout=15, slow=False):
+        """slow=True: Android's own dump of EVERY window (uiautomator --windows). The fast in-app reader sees only the
+        top activity's view tree, so dialog windows over it (the gallery picker, sheets) are invisible to it."""
         _t0 = time.time()
+        fast = UI.FAST
         try:
+            if slow:
+                UI.FAST = False
             return self._dump(timeout)
         finally:
+            if slow:
+                UI.FAST = fast
             UI.STATS['n'] += 1
             UI.STATS['secs'] += time.time() - _t0
 
@@ -1077,6 +1096,13 @@ class Editor:
         out = self.dev.sh(f"run-as {PKG} sh -c 'mkdir -p files/ns_snap/{tag} && rm -rf files/ns_snap/{tag}/databases "
                           f"&& cp -r databases files/ns_snap/{tag}/ && ls files/ns_snap/{tag}/databases | wc -l'", timeout=60)
         ok = out.strip().splitlines()[-1].strip().isdigit() if out.strip() else False
+        # 28 Oct (6e2486dd): a project can point at media the app made in cache/ (transcoding-*.mp4, reversed clips);
+        # the snapshot must keep them, or the restored project opens with its clip missing ("did not open in 60 s")
+        med = self.dev.sh(f"run-as {PKG} sh -c 'mkdir -p files/ns_snap/{tag}/cache && rm -f files/ns_snap/{tag}/cache/* "
+                          f"&& for f in cache/*.mp4 cache/*.m4a cache/*.webm; do [ -f $f ] && cp $f files/ns_snap/{tag}/cache/; done; "
+                          f"ls files/ns_snap/{tag}/cache | wc -l'", timeout=180).strip()
+        if ok and med.splitlines() and med.splitlines()[-1].strip().isdigit() and int(med.splitlines()[-1]) > 0:
+            self.log(f'    project snapshot "{tag}": kept {med.splitlines()[-1].strip()} media file(s) from the app cache')
         self.log(f'    project snapshot "{tag}" ' + ('saved' if ok else f'FAILED: {out.strip()[:120]}'))
         return ok
 
@@ -1089,7 +1115,9 @@ class Editor:
             return False
         self.mon.allow_death = True
         self.dev.force_stop()
-        self.dev.sh(f"run-as {PKG} sh -c 'rm -rf databases && cp -r files/ns_snap/{tag}/databases ./'", timeout=60)
+        self.dev.sh(f"run-as {PKG} sh -c 'rm -rf databases && cp -r files/ns_snap/{tag}/databases ./ "
+                    f"&& if [ -d files/ns_snap/{tag}/cache ]; then mkdir -p cache && cp files/ns_snap/{tag}/cache/* cache/ 2>/dev/null; fi; true'",
+                    timeout=180)
         self.dev.launch()
         self._wait_app_focus(8)
         self.mon.allow_death = False
@@ -1100,7 +1128,8 @@ class Editor:
         """Tap a bottom-bar tool by its NAME (e.g. 'freeze', 'speed', 'split'): finds the tile whose label text or
         automation tag (desc ve_tab_<name> / ve_btn_..._<name>...) matches, scrolling the bar step by step until it is
         on screen. Works whatever the bar's item count or padding (index-based taps missed 'Freeze' on the realme)."""
-        name = name.lower().replace('_', ' ')
+        name = re.sub(r'^(ve_)?(tab|btn)_', '', name.lower().strip())   # 1 Nov: scripts pass the desc ('ve_tab_overlay')
+        name = name.replace('_', ' ')
         key = name.replace(' ', '_')
         self.step(f'tool: {name}')
         last_sig, direction = None, -1                  # -1: drag left (reveals items on the right) first
@@ -1393,10 +1422,110 @@ class Editor:
         raise UIError('could not reach the editor; open your test draft manually once, '
                       'or run "scenarios.py probe" on the home screen and add its entry to T.HOME_TO_PROJECTS')
 
+    def new_project(self, tag='ns_base', duration_s=20):
+        """A NEW clean project (New Project -> a fresh copy of a phone video): the lab test draft collects overlays from earlier runs."""
+        # 1 Nov: fixture builders opened the shared test draft, which had 5 overlays saved into it by earlier builders,
+        # so every fixture inherited them and no checkpoint matched. A new project starts from nothing.
+        self.dev.fresh_video(tag=tag, duration_s=duration_s)     # newest = first tile of the picker
+        self.step('new project')
+        self.grant_permissions()
+        self.mon.allow_death = True
+        self.dev.force_stop()
+        self.dev.launch()
+        time.sleep(4)
+        self.mon.allow_death = False
+        for _ in range(20):
+            s = self.screen()
+            if s is not None and s.has(('textc:new project',)):
+                break
+            if s is not None and s.has(('id:turn_on',)):
+                self.grant_permissions(); self.dev.tap(*s.find('id:turn_on').center)
+            elif s is not None and s.has(T.HOME_TO_PROJECTS):
+                self.dev.tap(*s.find(T.HOME_TO_PROJECTS).center)
+            elif s is not None and s.has(T.DISMISS):
+                self.dev.tap(*s.find(T.DISMISS).center)
+            time.sleep(2)
+        self.create_draft()
+        self.wait_loader(60)
+        self.settle(2)
+        return True
+
+    def add_overlay_video(self, tag='ns_ovl', duration_s=15):
+        """Add one VIDEO overlay (Overlay tab -> Add -> Videos -> newest -> Done); returns the layer it landed on (from MsgAddVideo)."""
+        self.dev.fresh_video(tag=tag, duration_s=duration_s)
+        self.set_playing(False)
+        for _ in range(4):
+            if self.ui.wait('desc:ve_btn_overlay_add', timeout=2) is not None:
+                break
+            self.main_nav()
+            self.tap_tool('overlay')
+        mark = self.log_mark()
+        if not self.ui.tap('desc:ve_btn_overlay_add', timeout=8):
+            raise UIError('overlay Add (ve_btn_overlay_add) not on screen')
+        s = self.ui.wait(('id:gridrl', 'id:mediaList'), timeout=20)
+        if s is None:
+            raise UIError('overlay picker did not open')
+        if s.has('id:video_tab'):
+            self.ui.tap('id:video_tab', timeout=5)
+            self.idle(1.5)
+        self.ui.tap('id:gridrl', timeout=10)
+        self.idle(1.0)
+        for _ in range(4):
+            s = self.screen()
+            if s is None or not s.has('id:mediaList'):
+                break
+            if s.has('id:done'):
+                self.dev.tap(*s.find('id:done').center)
+            else:
+                self._picker_confirm()
+            self.idle(2.0)
+        line = self.require_log(r'MsgAddVideo: media_layer [1-9]\d* path: \S+', 180, since=mark, why=f'overlay video ({tag}) added')
+        self.wait_loader(90)
+        self.settle(2)
+        return int(str(line).split('media_layer ', 1)[1].split()[0])
+
+    def select_overlay(self, row=None, timeout=2.5):
+        """Tap an overlay bar on the timeline like a user (row = 0 top, None = the first row that has a bar); returns the row index."""
+        # 1 Nov: a bar only answers a tap between its own thumbs (RangeSlider.onTouchEvent), and which of the 5 rows hold
+        # bars depends on the project: sweep each row left to right and confirm with the app's own event
+        # (PlayerActivity.onTimeLineClick -> 've_timeline_' + OVERLAY, throttled to one per second).
+        s = self.screen()
+        rows = sorted(s.find_all('id:range_slider') if s is not None else [], key=lambda n: n.b[1])
+        if not rows:
+            raise UIError('no overlay rows (range_slider) on the timeline')
+        order = list(range(len(rows)))
+        if row is not None:
+            if row >= len(rows):
+                raise UIError(f'overlay row {row} not on the timeline ({len(rows)} rows)')
+            order = [row] + [k for k in order if k != row]   # the asked row first, then the others (rows != layers)
+        for k in order:
+            L, T_, R, B = rows[k].b
+            for x in range(L + 24, R - 10, max(30, (R - L) // 8)):
+                mark = self.log_mark()
+                self.dev.tap(x, (T_ + B) // 2)
+                if self.wait_log(r'(?i)ve_timeline_overlay', timeout, mark):
+                    self.log(f'    overlay row {k} selected (tap at x={x})')
+                    self._last_cp = self.log_mark()
+                    return k
+                time.sleep(1.1)                  # onTimeLineClick ignores taps within 1 s of the last one
+        raise UIError('no overlay bar answered a tap' + (f' on row {row}' if row is not None else ' on any row'))
+
     def create_draft(self):
         """Fresh install, no drafts: New Project tab -> gallery picker -> first video -> confirm -> editor (saved as the
         first draft in My Projects). The newest video on the phone is used."""
         self.step('no draft on this install: creating one (New Project -> first video)')
+        self.grant_permissions()                 # 1 Nov: a fresh install shows the media 'Turn on' sheet over the home screen
+        for _ in range(3):
+            sp = self.screen()
+            if sp is None or not sp.has(('id:turn_on', 'id:permission_allow_button', 'id:permission_allow_all_button')):
+                break
+            n = sp.find(('id:permission_allow_all_button', 'id:permission_allow_button', 'id:turn_on'))
+            self.dev.tap(*n.center)
+            time.sleep(2)
+            sp = self.screen()
+            if sp is not None and sp.has('id:cross_btn') and sp.has('id:turn_on'):
+                self.dev.tap(*sp.find('id:cross_btn').center)   # permissions already granted by pm: close the sheet
+                time.sleep(1)
         if not self.ui.tap(('textc:new project',), timeout=10):
             raise UIError('no drafts and no "New Project" tab on this screen')
         s = self.ui.wait(('id:gridrl', 'id:mediaList'), timeout=20)
@@ -1415,6 +1544,32 @@ class Editor:
         if k:
             items = sorted(items, key=lambda e: (e.center[1] // 40, e.center[0]))   # reading order: rows, then columns
             self.log(f'    picking gallery tile {k} (the test clip)')
+        tb = items[k].b                          # 1 Nov: a just-pushed clip shows as 00:00 until the media scanner reads it,
+        dur = [d for d in s.find_all('id:durationLabel')  # and the picker will not take it: scan it, reopen the picker once
+               if tb[0] <= d.center[0] <= tb[2] and tb[1] <= d.center[1] <= tb[3]]
+        if dur and (dur[0].text or '').strip() == '00:00' and not getattr(self, '_rescanned', False):
+            self._rescanned = True
+            self.log('    the clip on that tile shows 00:00 (not scanned yet): asking the media scanner, then reopening the picker')
+            for f in (self.dev.sh('ls /sdcard/DCIM/NightShift/ 2>/dev/null', timeout=20) or '').split():
+                self.dev.sh(f'content call --uri content://media --method scan_file --arg /storage/emulated/0/DCIM/NightShift/{f}', timeout=60)
+            for _ in range(4):                   # refresh the grid in place (BACK leaves the picker for the launcher)
+                time.sleep(5)
+                self.ui.tap('id:image_tab', timeout=5)
+                time.sleep(2)
+                self.ui.tap('id:video_tab', timeout=5)
+                time.sleep(2)
+                s = self.ui.wait('id:gridrl', timeout=10) or s
+                items = s.find_all('id:gridrl')
+                if k:
+                    items = sorted(items, key=lambda e: (e.center[1] // 40, e.center[0]))
+                if k >= len(items):
+                    break
+                tb = items[k].b
+                dur = [d for d in s.find_all('id:durationLabel')
+                       if tb[0] <= d.center[0] <= tb[2] and tb[1] <= d.center[1] <= tb[3]]
+                if not dur or (dur[0].text or '').strip() != '00:00':
+                    self.log(f'    the clip is scanned now ({dur[0].text if dur else "?"})')
+                    break
         self.dev.tap(*items[k].center)
         self.idle(1)
         self._picker_confirm()
@@ -1467,6 +1622,125 @@ class Editor:
         return self.screen()
 
     # ── slideshow (QuickCutActivity) building blocks: tested on the lab phone, use them instead of raw taps ──
+    def open_quickcut(self, n=2, wait=180):
+        """Cold start -> Quick Cut (home btnQuickCut; same QuickCutActivity as SlideShow but WITHOUT isSlideShow) -> pick n
+        clips -> the TEMPLATE page (ids rvTemplates = template tiles, tvEdit = Edit on the selected tile, audioView)."""
+        self.step(f'open Quick Cut with {n} clip(s)')
+        self.grant_permissions()
+        self.mon.allow_death = True
+        self.dev.force_stop()
+        time.sleep(1.5)
+        self.dev.launch()
+        time.sleep(3)
+        self.mon.allow_death = False
+        if self.lab('open_quickcut', n=max(1, n), timeout=30):
+            self.log(f'    quick cut: {max(1, n)} clip(s) handed to the picker result (lab control)')
+        else:                                          # builds before 28 Oct have no open_quickcut: real taps
+            if not self.ui.tap(('id:btnQuickCut', 'textc:quick cut', 'textc:Quick Cut', 'textc:QuickCut'), timeout=30):
+                raise UIError('no Quick Cut button on the start screen after a cold start')
+            s = self.ui.wait(('id:select_cover', 'id:gridrl'), timeout=30)
+            if s is None:
+                raise UIError('Quick Cut did not open its gallery picker')
+            tiles = s.find_all('id:select_cover') or s.find_all('id:gridrl')
+            if not tiles:
+                raise UIError('the Quick Cut picker shows no media: push some to /sdcard/DCIM first')
+            for t in tiles[:max(1, n)]:
+                self.dev.tap(*t.center)
+                time.sleep(0.5)
+            self._picker_confirm()
+            self.log(f'    quick cut: {min(n, len(tiles))} clip(s) picked, Done tapped')
+        if wait and self.ui.wait(('id:rvTemplates', 'id:advanceEdit'), timeout=wait) is None:
+            raise UIError(f'the Quick Cut template page (id rvTemplates) did not appear within {wait} s')
+        return self.screen()
+
+    # ---- Wizard editor (28 Oct): PlayerActivity in wizard mode, the screen whose analytics events start with we_ ----
+    # Reached ONLY from Quick Cut (not SlideShow): template page -> Edit on the selected template (tvEdit) -> media page
+    # (QuickCutMediaFragment) -> Advanced Edit (advanceEdit; QuickCutActivity.advanceEdit puts WIZARD_EDITOR).
+    # A draft saved there reopens in wizard mode (DraftListFragment passes draft.isWizardEditor).
+    def open_wizard(self, n=2, wait=180):
+        """Cold start -> Quick Cut with n clips -> template Edit -> Advanced Edit: the Wizard editor (we_* events; ids thumbRecyclerView = clip thumbnails, delete, replace, trim, full_editor, continueToEdit, export, seekBar)."""
+        self.open_quickcut(n, wait=wait)
+        self.step('open the Wizard editor (template Edit -> Advanced Edit)')
+        adv = ('id:advanceEdit', 'textc:Advanced Edit', 'textc:Advance', 'textc:advance')
+        either = ('id:advanceEdit', 'id:tvEdit')       # some builds go straight to the media page on template select
+        s = self.ui.wait(either, timeout=20)
+        if s is None:                                  # no template selected yet: select the first template tile
+            tiles = self.ui.dump().items('id:rvTemplates')
+            if not tiles:
+                raise UIError('Quick Cut shows no templates (no internet on the phone?)')
+            self.dev.tap(*tiles[0].center)
+            self.log('    wizard: selected the first template')
+            s = self.ui.wait(either, timeout=60)       # a template not yet downloaded downloads first
+        if s is not None and not s.has(adv) and s.has(('id:tvEdit',)):
+            self.dev.tap(*s.find(('id:tvEdit',)).center)
+            self.log('    wizard: tapped Edit on the selected template')
+            s = self.ui.wait(adv, timeout=20)
+        if s is None:
+            self.log('    wizard: no Advanced Edit button; screen now:\n      ' +
+                     '\n      '.join(self.ui.dump().summary().splitlines()[:60]))
+            raise UIError('no Advanced Edit button (id advanceEdit) on the Quick Cut media page')
+        self.dev.tap(*s.find(adv).center)
+        s = self.ui.wait(('id:thumbRecyclerView',), timeout=60)
+        if s is None:
+            raise UIError('the Wizard editor did not open (no thumbRecyclerView after Advanced Edit)')
+        for _ in range(3):                           # first-run guide overlays sit on top of the strip: close them
+            s = self.ui.dump()
+            if not s.has(('textc:Got it', 'textc:got it', 'textc:OK', 'textc:Skip', 'textc:skip')):
+                break
+            self.ui.tap(('textc:Got it', 'textc:got it', 'textc:OK', 'textc:Skip', 'textc:skip'), timeout=5)
+            time.sleep(0.8)
+        self.log(f'    wizard editor open with {len(self.wizard_thumbs())} clip thumbnail(s)')
+        return s
+
+    def wizard_thumbs(self):
+        """Centers of the Wizard clip thumbnails, left to right (only the ones inside thumbRecyclerView)."""
+        s = self.ui.dump()
+        rv = s.find('id:thumbRecyclerView')
+        th = s.find_all('id:imageView')
+        if rv is not None:
+            th = [t for t in th if rv.b[0] <= t.center[0] <= rv.b[2] and rv.b[1] <= t.center[1] <= rv.b[3]]
+        return [t.center for t in sorted(th, key=lambda n: n.b[0])]
+
+    def wizard_select(self, i):
+        """Tap Wizard thumbnail i (0 = first): selects it and seeks the player to that clip (onItemClicked)."""
+        th = self.wizard_thumbs()
+        if i >= len(th):
+            raise UIError(f'wizard: no thumbnail {i} (have {len(th)})')
+        self.step(f'wizard: select clip {i}')
+        self.dev.tap(*th[i])
+        time.sleep(0.6)
+
+    def wizard_drag(self, i, j, ms=2600):
+        """Long-press thumbnail i and drag it onto position j in the Wizard strip (reorder: onDragCompleted -> sortMedia)."""
+        th = self.wizard_thumbs()
+        if max(i, j) >= len(th):
+            raise UIError(f'wizard: drag {i}->{j} but only {len(th)} thumbnail(s)')
+        self.step(f'wizard: drag clip {i} to position {j}')
+        (x1, y1), (x2, y2) = th[i], th[j]
+        # ItemTouchHelper starts a drag only after a long press: hold still first (a plain swipe is read as a scroll)
+        self.dev.long_drag(x1, y1, x2 + (25 if j > i else -25), y2, hold=max(0.9, ms / 2600))
+        time.sleep(1.0)
+
+    def wizard_delete(self, i=None):
+        """Wizard delete button (we_delete_btn) on clip i (selected first when given); confirms the Delete sheet when it shows."""
+        if i is not None:
+            self.wizard_select(i)
+        self.step('wizard: delete' + (f' clip {i}' if i is not None else ''))
+        self.ui.tap(('id:delete',), timeout=10)
+        # "Delete Media?" is a bottom-sheet DIALOG (its own window): the in-app reader can't see it, so read all windows.
+        # Its Delete is the firstBtn box (the 'Delete' text inside, firstBtnTv, is not clickable itself).
+        end = time.time() + 6
+        while time.time() < end:
+            s = self.ui.dump(slow=True)
+            if s is not None and s.has(('id:design_bottom_sheet', 'textc:Delete Media')):
+                b = s.find(('id:firstBtn',)) or s.find(('id:firstBtnTv',))
+                if b is not None:
+                    self.dev.tap(*b.center)
+                    self.log('    wizard: confirmed Delete Media')
+                break
+            time.sleep(0.4)
+        time.sleep(1.0)
+
     def slideshow_deselect(self):
         """Clear the clip selection in the slideshow strip (with a clip selected, the + button DELETES it instead of adding)."""
         s = self.screen()
@@ -1916,7 +2190,7 @@ class Editor:
         end = time.time() + timeout
         s = None
         while time.time() < end:
-            s = self.ui.dump()
+            s = self.ui.dump(slow=True)               # the picker is its own window: the in-app reader can't see it
             if s is not None and not isinstance(s, Screen):
                 s = Screen(s) if '<?xml' in s else None
             if s is not None:
@@ -1930,8 +2204,15 @@ class Editor:
                         continue                      # laid out off-screen: tapping there does nothing
                     rid = n.rid.split('/')[-1]
                     txt = (n.text or n.desc or '').strip().lower()
-                    if (rid and self._CONFIRM_ID.search(rid)) or txt in self._CONFIRM_TXT or re.match(r'^(done|next|add|import)\b', txt):
-                        cands.append(n)
+                    if re.match(r'^add (music|audio|sound|text|sticker)', txt) or rid in ('audio_name', 'add_music', 'btnAddMusic'):
+                        continue                      # screens under an overlay picker (Quick Cut): not a confirm
+                    if rid and self._CONFIRM_ID.search(rid):
+                        cands.append((0, n))
+                    elif txt in self._CONFIRM_TXT:
+                        cands.append((1, n))
+                    elif re.match(r'^(done|next|add|import)\b', txt):
+                        cands.append((2, n))
+                cands = [n for _, n in sorted(cands, key=lambda x: x[0])]
                 if cands:
                     self.dev.tap(*cands[0].center)
                     self.step(f'picker confirm: {cands[0]!r}')
@@ -2332,6 +2613,67 @@ class Editor:
         self.open_draft()
         self.mon.allow_death = False
 
+    def start_activity(self, component, extras='', expect_crash=True):
+        """Open ANY app screen directly (works for NON-exported screens in the full-app lab build via the lab door; no root needed), with NO or empty extras: `component` = activity class
+        ('.ui.Foo' or 'com.pkg.ui.Foo'), `extras` = raw am extras ('' = NO extras; '--es type \"\"' = empty). Tests
+        launch/restore crashes that no tap path reaches. Raises UIError when the screen is not exported (debug builds:
+        use a lab hook or the restore path ed.kill_bg() + ed.dev.launch() instead)."""
+        comp = component if '/' in component else f'{PKG}/{component}'
+        self.step(f'start {comp.split("/")[-1]} directly' + (f' with {extras}' if extras else ' with NO extras'))
+        self.mon.allow_death = False                # a crash here is the result we look for
+        out = self.dev.sh(f'am start -W -n {comp} {extras}'.strip(), timeout=30)
+        if 'Permission Denial' in out or 'not exported' in out or 'SecurityException' in out:
+            # 29 Oct: not exported -> the lab door inside the full-app lab build (hooklib/fullapp_lab LabLaunch).
+            # Android 10+ blocks a background app from opening screens: bring the app to the front first.
+            import re as _re, shlex as _sx
+            xs, xi = [], []
+            toks = _sx.split(extras or '')
+            k = 0
+            while k < len(toks):
+                if toks[k] in ('--es', '--ei') and k + 2 < len(toks) + 1:
+                    key = toks[k + 1] if k + 1 < len(toks) else ''
+                    val = toks[k + 2] if k + 2 < len(toks) else ''
+                    (xs if toks[k] == '--es' else xi).append(f'{key}={val}')
+                    k += 3
+                else:
+                    k += 1
+            if self.dev.pid() == '':
+                self.dev.launch()
+                time.sleep(4)
+            t0 = self.dev.sh("date +'%m-%d %H:%M:%S.000'").strip()
+            cls = comp.split('/', 1)[1]
+            args = f"--es cls {_sx.quote(cls)}" + (f" --es xs {_sx.quote(';'.join(xs))}" if xs else '') + \
+                   (f" --es xi {_sx.quote(';'.join(xi))}" if xi else '')
+            self.dev.sh(f'am broadcast -f 0x20 -a {PKG}.LAB_LAUNCH -p {PKG} {args}', timeout=30)
+            end = time.time() + 10
+            res = ''
+            while time.time() < end and not res:
+                lg = self.dev.sh(f"logcat -d -s ZestyLab -T '{t0}'", timeout=20)
+                res = next((l for l in lg.splitlines() if 'LAB ok launch' in l or 'LAB fail launch' in l), '')
+                time.sleep(0.4)
+            if not res:
+                raise UIError(f'{comp} is not exported and the lab door did not answer (not a Night Shift full-app lab build?)')
+            if 'LAB fail' in res:
+                raise UIError('lab door: ' + res.split('LAB ', 1)[1][:200])
+            self.log('    lab door: ' + res.split('LAB ', 1)[1][:200])
+            self.idle(2)
+            return res
+        if 'Error' in out and 'Status: ok' not in out:
+            raise UIError(f'am start failed: {out.strip()[:200]}')
+        self.idle(2)
+        return out
+
+    def restore_from_recents(self, wait=2):
+        """The screen on top now is recreated by Android after process death, as when a user comes back from recents:
+        home, the system reclaims the process, then the app task is brought back (its top screen is rebuilt from the saved
+        intent and state)."""
+        self.kill_bg()
+        time.sleep(wait)
+        self.step('back from recents: Android restores the top screen in a new process')
+        self.mon.allow_death = False
+        self.dev.launch()
+        self.idle(3)
+
     def kill_bg(self):
         """Home, then the system reclaims the cached app process; the death is expected (not a crash) until the app is
         opened again (ed.dev.launch() / open_draft)."""
@@ -2359,6 +2701,18 @@ class Editor:
             self.dev.sh(f'settings put system accelerometer_rotation {acc}')
         self.track = None
 
+    def _checkpoint_since(self, back=8):
+        """Device log time `back` s ago, or the previous checkpoint's time when that is later."""
+        import datetime as _dt
+        now = self.log_mark()
+        try:
+            t = _dt.datetime.strptime(now, '%m-%d %H:%M:%S.%f') - _dt.timedelta(seconds=back)
+            back_mark = t.strftime('%m-%d %H:%M:%S.000')
+        except ValueError:
+            return now
+        last = getattr(self, '_last_cp', '')
+        return last if last and last > back_mark else back_mark
+
     def log_mark(self):
         """Device time now; pass it as since= to wait_log/rotate_when BEFORE the action that will produce the line."""
         return self.dev.sh("date +'%m-%d %H:%M:%S.000'").strip()
@@ -2381,8 +2735,13 @@ class Editor:
     def require_log(self, pattern, timeout=20, since=None, why=''):
         """Field precondition/checkpoint: block until a logcat line matches the regex; if it never shows, STOP the run as a
         setup error (UIError), so a run that skipped the field's path never counts as a clean "no crash" run."""
-        since = since or self.log_mark()
+        # 28 Oct: a checkpoint written AFTER its tap (the usual way) missed the engine line the tap had already produced
+        # (it comes within ms), so the default window now starts a few seconds back, but never before the previous
+        # checkpoint's own line (a repeated action must not match the earlier one)
+        since = since or self._checkpoint_since()
         line = self.wait_log(pattern, timeout, since)
+        if line:
+            self._last_cp = self.log_mark()
         if not line:
             # 2026-10-21: a checkpoint gate stopped a run whose main thread was already hung (the ANR came seconds
             # later and landed on the NEXT run). If the lab main-thread watch says main is stuck, let the ANR surface.

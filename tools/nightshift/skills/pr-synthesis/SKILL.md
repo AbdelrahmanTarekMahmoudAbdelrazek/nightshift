@@ -15,6 +15,7 @@ Merge them. You do not judge them (two judges and a line check do that next), so
   for users first). Set finding = the index (0-based) of the merged finding it proves, or null. Keep claim and kind as
   the hunter set them; if two hunters disagree, keep the weaker claim ("suspected" over "verified").
   Keep "pre_existing" on a merged scenario: true if any of the scenarios merged into it had it.
+  Keep "entry" (how a release-build user gets there) and "needs" (the state the outcome needs) from the hunters, joined when merged.
 - Never merge two findings or scenarios with DIFFERENT user outcomes (e.g. "output order changes" and "a failed bake
   freezes the picture" stay separate, even in the same function). Every finding whose outcome users can see or feel
   keeps its own scenario.
@@ -27,6 +28,6 @@ ONLY a ```json block: {"verdict": "approve|changes|blocking", "headline": "", "s
 "fix": "", "evidence": ""}],
 "scenarios": [{"id": "s1", "title": "", "q": "", "claim": "verified|suspected|safe", "kind": "always|timing|", "finding": null,
 "why": [["bad|ok|risk|plain", "label", "text"]], "proof": [{"file": "", "line": 0, "code": "", "text": ""}, {"text": ""}],
-"from": ["lifetime / concurrency"], "pre_existing": false, "repro": {"setup": "", "steps": [""], "expected": "", "actual": ""}}],
+"from": ["lifetime / concurrency"], "pre_existing": false, "entry": "", "needs": "", "repro": {"setup": "", "steps": [""], "expected": "", "actual": ""}}],
 
 "good": []}

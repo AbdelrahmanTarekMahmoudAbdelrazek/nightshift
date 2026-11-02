@@ -64,6 +64,14 @@ def releases(cfg):
         cfg['app']['_live_version'] = want
         return want, [found[c][1] for c in codes], [str(c) for c in codes]
     vers = sorted({v for v, _ in found.values()}, key=_semver, reverse=True)
+    # 30 Oct: a real release always gets HIGHER version codes than the release before it. A version whose newest build
+    # code is lower than an older version's newest one is a dev/side build that reports a future name (e.g. "1.26.0
+    # (800054729)" while 1.25.2 is 800054890 and 1.26.0 only exists as staging on Play): never the live release.
+    top = {v: max(c for c, (vv, _) in found.items() if vv == v) for v in vers}
+    side = [v for i, v in enumerate(vers) if any(top[v] < top[o] for o in vers[i + 1:])]
+    if side:
+        cfg['app']['_side_versions'] = side
+        vers = [v for v in vers if v not in side]
     if not vers:
         return 'auto', [], []
     new = vers[0]
@@ -81,18 +89,21 @@ def releases(cfg):
     overlap_days = 10 ** 6 if always else int(od or 0)
     age = (dt.date.today() - dt.date.fromisoformat(first[new])).days
     prev = vers[1] if len(vers) > 1 and age < overlap_days else None
-    if prev:
-        codes += sorted((c for c, (v, _) in found.items() if v == prev), reverse=True)[:int(cfg['app'].get('release_overlap_builds', 2))]
+    # 29 Oct: app.release_count = how many releases stay in scope (the live one + older ones), e.g. 3 = 1.26.0, 1.25.2,
+    # 1.25.1, so a crash that only happened on the release before last does not lose its field data when a new one ships
+    olds = vers[1:max(2, int(cfg['app'].get('release_count', 2) or 2))] if prev else []
+    for ov in olds:
+        codes += sorted((c for c, (v, _) in found.items() if v == ov), reverse=True)[:int(cfg['app'].get('release_overlap_builds', 2))]
     fresh = [str(c) for c in codes if str(c) not in seen]
     st['builds_seen'] = sorted(seen | {str(c) for c in codes})
-    st.update({'live': new, 'overlap': prev, 'overlap_until': ('always' if always else (dt.date.fromisoformat(first[new]) + dt.timedelta(days=overlap_days)).isoformat()) if prev else '',
+    st.update({'live': new, 'overlap': prev, 'overlaps': olds, 'overlap_until': ('always' if always else (dt.date.fromisoformat(first[new]) + dt.timedelta(days=overlap_days)).isoformat()) if prev else '',
                'updated': _today()})
     try:
         os.makedirs(os.path.dirname(STATE), exist_ok=True)
         json.dump(st, open(STATE, 'w'), indent=1)
     except OSError:
         pass
-    cfg['app'].update({'_live_version': new, '_overlap_version': prev, '_overlap_until': st['overlap_until'],
+    cfg['app'].update({'_live_version': new, '_overlap_version': prev, '_overlap_versions': olds, '_overlap_until': st['overlap_until'],
                        '_new_builds': fresh if seen else []})
     return new, [found[c][1] for c in codes], [str(c) for c in codes]
 

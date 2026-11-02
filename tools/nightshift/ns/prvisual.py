@@ -120,18 +120,28 @@ def code_lines(src, ranges, hot=(), cap=400):
 
 def step_code(src, step):
     """The real source at a replay step's file:line (1-3 lines), or ''."""
-    p = src.path(step.get('file')) if step.get('file') else None
     try:
         n = int(step.get('line') or 0)
     except (TypeError, ValueError):
         n = 0
+    if n < 1:      # 1 Nov: Kotlin/Java steps often give the line only in their note ("FilterResponse.kt:65 runs ...")
+        base = str(step.get('file') or '').split('/')[-1]
+        for fm, ln in re.findall(r'([\w.\-]+\.(?:kt|java|cpp|cc|c|hpp|h|glsl|frag|vert|json|xml)):(\d+)', f"{step.get('m') or ''} {step.get('label') or ''}"):
+            if not base or fm == base:
+                n = int(ln)
+                if not step.get('file'):
+                    step['file'] = fm
+                break
+    p = src.path(step.get('file')) if step.get('file') else None
     if not p or n < 1:
         return ''
     L = src.lines(p)
     if n > len(L):
         return ''
     got = [L[n - 1]]
-    while len(got) < 3 and n + len(got) - 1 < len(L) and not re.search(r'[;{}]\s*(//.*)?$', got[-1]):
+    kt = str(p).endswith(('.kt', '.kts'))                # Kotlin has no ';': go on only while the statement is open
+    while len(got) < 3 and n + len(got) - 1 < len(L) and (re.search(r'[(,=+\-*/.&|]\s*$', got[-1]) if kt
+                                                          else not re.search(r'[;{}]\s*(//.*)?$', got[-1])):
         got.append(L[n + len(got) - 1])
     pad = min(len(x) - len(x.lstrip()) for x in got if x.strip()) if any(x.strip() for x in got) else 0
     return '\n'.join(x[pad:] for x in got)
@@ -659,7 +669,7 @@ def build(view, wt, diff, findings, given=None):
     given: the hunters' merged scenarios. Then they ARE the scenarios (claim, kind, why, proof untouched) and the
     visual answer only supplies each one's replay, matched by id; one it skipped gets its proof chain as a replay."""
     files = parse_diff(diff)
-    src = Src(wt, files)
+    src = Repo(wt, files)          # 1 Nov: also finds files outside the diff (callers, Kotlin/Java) for the replay code lines
     v = dict(view or {})
     hunks = []
     for i, h in enumerate(v.get('hunks') or []):
@@ -692,7 +702,7 @@ def build(view, wt, diff, findings, given=None):
             r = dict(rp.get(str(g.get('id'))) or _fallback_replay(src, g) or {})
             if not r:
                 continue
-            r.update({k: g.get(k) for k in ('id', 'title', 'q', 'finding', 'why', 'kind', 'proof', 'from', 'severity', 'repro', 'pre_existing')})
+            r.update({k: g.get(k) for k in ('id', 'title', 'q', 'finding', 'why', 'kind', 'proof', 'from', 'severity', 'repro', 'pre_existing', 'entry', 'needs', 'reach', 'severity_code', 'field', 'uiGate', 'blockerGate')})
             r['verdict'] = g.get('claim') or g.get('verdict')
             merged.append(r)
         v['scenarios'] = merged
@@ -713,6 +723,11 @@ def build(view, wt, diff, findings, given=None):
                   'from': [str(x) for x in s.get('from') or []][:6], 'severity': s.get('severity') if s.get('severity') in SEV else None})
         if s.get('pre_existing'):
             r['pre_existing'] = True
+        for k_ in ('reach', 'uiGate', 'blockerGate'):  # 29-30 Oct: the code checks' results survive a rebuild
+            if isinstance(s.get(k_), dict):
+                r[k_] = s[k_]
+        if isinstance(s.get('field'), list) and s['field']:
+            r['field'] = s['field']
         rp = _repro(s.get('repro'))
         if rp:
             r['repro'] = rp
@@ -759,3 +774,309 @@ def build(view, wt, diff, findings, given=None):
                 break
             f['hunks'], f['cut'] = [], True
     return v, code
+
+
+GATED = ('debug-only', 'no-ui', 'flag-off')
+
+
+def reach(view, votes, judge_names, wt, diff, findings=None):
+    """29 Oct (PR #3189: three 'major' scenarios, none happened in the app). After the tiers: can a user of the
+    RELEASE build get there, and in what state? No model here, only the judges' answers:
+    - a judge shows the only way in is debug-only / has no UI / is behind an off flag (an evidence line that exists)
+      -> 'latent': severity capped at minor, so it never asks for changes;
+    - no judge gives a release path for a major/blocker -> it cannot stay Verified (Suspected, 'path not shown');
+    - 'needs' (a job still running, an empty cache, a first run) goes into the repro, so a tester sets that state."""
+    src = Repo(wt, parse_diff(diff))
+
+    def ok(e):
+        if not (isinstance(e, str) and ':' in e and e.rsplit(':', 1)[1].isdigit()):
+            return False
+        p = src.path(e.rsplit(':', 1)[0])
+        return bool(p) and 0 < int(e.rsplit(':', 1)[1]) <= len(src.lines(p))
+    for s in view.get('scenarios') or []:
+        if s.get('verdict') not in ('verified', 'suspected'):
+            continue
+        rs = [(votes.get(j) or {}).get(s.get('id')) or {} for j in judge_names]
+        gate = [v for v in rs if v.get('reach') in GATED and any(ok(e) for e in v.get('reach_evidence') or [])]
+        path = next((str(v.get('reach_path')).strip() for v in rs
+                     if v.get('reach') == 'release' and str(v.get('reach_path') or '').strip()), '')
+        needs = [str(v.get('needs')).strip() for v in rs if str(v.get('needs') or '').strip()]
+        proof = s.setdefault('proof', {})
+        if needs and isinstance(s.get('repro'), dict):
+            s['repro']['needs'] = needs[0][:300]
+            if needs[0][:60] not in str(s['repro'].get('setup') or ''):
+                s['repro']['setup'] = (str(s['repro'].get('setup') or '') + ' Needs: ' + needs[0][:300]).strip()
+        if gate:
+            g = gate[0]
+            s['reach'] = {'state': 'latent', 'gate': g.get('reach'), 'evidence': [e for e in g['reach_evidence'] if ok(e)][:3]}
+            if s.get('severity') in ('blocker', 'major'):
+                s['severity_code'] = s['severity']
+                s['severity'] = 'minor'
+            if not str(s.get('title', '')).startswith('Latent'):
+                s['title'] = f"Latent ({g.get('reach')}): " + str(s.get('title', ''))
+            proof['note'] = (str(proof.get('note') or '') + f" Not reachable in the release build ({g.get('reach')}: "
+                             + ', '.join(s['reach']['evidence']) + '); kept as latent, minor.').strip()
+        elif path:
+            s['reach'] = {'state': 'release', 'path': path[:300]}
+        elif s.get('severity') in ('blocker', 'major'):
+            s['reach'] = {'state': 'unproven'}
+            if s['verdict'] == 'verified':
+                s['verdict'] = 'suspected'
+            proof['note'] = (str(proof.get('note') or '') + ' No judge showed how a user reaches this in the release '
+                             'build, so it is not Verified.').strip()
+        k = s.get('finding')
+        if findings and isinstance(k, int) and 0 <= k < len(findings) and s.get('reach'):
+            f = findings[k]
+            if s['reach']['state'] == 'latent' and f.get('severity') in ('blocker', 'major'):
+                f['severity'], f['latent'] = 'minor', True
+            if s['reach']['state'] == 'unproven' and f.get('tier') == 'verified':
+                f['tier'] = 'suspected'
+    return view
+
+
+def _norm(s):
+    return re.sub(r'\s+', ' ', str(s or '')).strip()
+
+
+def sim_votes(view, sims, wt, diff):
+    """29 Oct: the Simulator walks each problem scenario through the code with concrete values. No model here: every
+    step's line must exist and hold the quoted code; the walk becomes the Simulator's vote, so a scenario is Verified
+    only when the numbers also reach the outcome. outcome -> confirmed (the matched steps are the evidence); guard ->
+    refuted at that line; unknown or a walk whose lines do not match -> unsure. base 'same' marks an old bug."""
+    src = Repo(wt, parse_diff(diff))
+    byid = {s.get('id'): s for s in view.get('scenarios') or []}
+    out = {}
+
+    def line_ok(ref, code=None):
+        if not (isinstance(ref, str) and ':' in ref and ref.rsplit(':', 1)[1].isdigit()):
+            return False
+        p = src.path(ref.rsplit(':', 1)[0])
+        n = int(ref.rsplit(':', 1)[1])
+        if not p or not 0 < n <= len(src.lines(p)):
+            return False
+        if code is None:
+            return True
+        have, want = _norm(src.lines(p)[n - 1]), _norm(code)
+        return bool(want) and (have == want or want in have or (len(have) > 8 and have in want))
+    for sm in sims or []:
+        if not isinstance(sm, dict) or sm.get('id') not in byid:
+            continue
+        s = byid[sm['id']]
+        steps = [x for x in sm.get('steps') or [] if isinstance(x, dict)]
+        good = [x for x in steps if line_ok(x.get('line'), x.get('code'))]
+        ratio = len(good) / len(steps) if steps else 0
+        end = sm.get('end') if sm.get('end') in ('outcome', 'guard', 'unknown') else 'unknown'
+        note = str(sm.get('note') or '')[:240]
+        if end == 'outcome' and good and ratio >= 0.6:
+            vote, ev = 'confirmed', [x['line'] for x in good][-4:]
+            note = (note + f" (walked {len(good)}/{len(steps)} lines: {str(sm.get('outcome') or '')[:120]})").strip()
+        elif end == 'guard' and line_ok(sm.get('stopped_at')):
+            vote, ev = 'refuted', [sm['stopped_at']]
+            note = (note + f" (stopped at {sm['stopped_at']})").strip()
+        else:
+            vote, ev = 'unsure', []
+            why = (f"needs: {sm.get('unknown')}" if end == 'unknown' and sm.get('unknown') else
+                   f"only {len(good)}/{len(steps)} walked lines match the code" if steps else 'no walk')
+            note = (note + f" ({why})").strip()
+        out[sm['id']] = {'vote': vote, 'evidence': ev, 'note': note, 'kind': s.get('kind')}
+        s.setdefault('proof', {})['sim'] = {
+            'start': sm.get('start') if isinstance(sm.get('start'), dict) else {},
+            'steps': [{k: x.get(k) for k in ('line', 'code', 'thread', 'state', 'branch')} for x in good][:25],
+            'end': end, 'outcome': str(sm.get('outcome') or '')[:700], 'stopped_at': sm.get('stopped_at') or '',
+            'unknown': str(sm.get('unknown') or '')[:400], 'base': sm.get('base') or '', 'matched': f"{len(good)}/{len(steps)}"}
+        start = ', '.join(f"{k}={v}" for k, v in list((s['proof']['sim']['start'] or {}).items())[:6])
+        s['proof']['note'] = (str(s['proof'].get('note') or '') + f" Simulator ({start}): " +
+                              {'confirmed': 'reached the outcome', 'refuted': 'stopped by ' + str(sm.get('stopped_at')),
+                               'unsure': 'could not finish'}[vote] + '.').strip()
+        if vote == 'confirmed' and sm.get('base') == 'same':
+            s['pre_existing'] = True
+    return out
+
+
+_FN_RX = re.compile(r'(?:^|[\s*&])((?:[A-Za-z_]\w*::)*~?[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const)?\s*(?:noexcept)?\s*(?:->\s*[\w:<>]+\s*)?\{?\s*$')
+_KT_RX = re.compile(r'\bfun\s+(?:<[^>]+>\s*)?(?:[\w.]+\.)?([A-Za-z_]\w*)\s*\(')
+_NOT_FN = {'if', 'for', 'while', 'switch', 'catch', 'return', 'sizeof', 'else'}
+
+
+def enclosing_function(src, path, line):
+    """Name of the function a cited line sits in (C++ 'Class::name' or Kotlin 'name'), by scanning up; '' if unknown."""
+    p = src.path(path)
+    if not p:
+        return ''
+    L = src.lines(p)
+    for k in range(min(line, len(L)) - 1, max(-1, line - 400), -1):
+        s = L[k]
+        m = _KT_RX.search(s)
+        if m:
+            return m.group(1)
+        if not s.startswith((' ', '\t')) or s.startswith(('[[', 'template')):
+            m = _FN_RX.search(s.strip()) if '(' in s else None
+            if m and m.group(1).split('::')[-1] not in _NOT_FN:
+                return m.group(1)
+    return ''
+
+
+def _short(fn):
+    fn = re.sub(r'\(.*$', '', str(fn or '')).strip()
+    return fn.split('::')[-1].split('.')[-1]
+
+
+def field_match(view, wt, diff, field):
+    """30 Oct, smarter 1 Nov: see field_match_src."""
+    return field_match_src(view, Repo(wt, parse_diff(diff)), field)
+
+
+# 1 Nov: the user action a scenario is about, as the engine logs it (Crashlytics keeps the last native log lines of
+# every crash: 'MsgChangeVisualMediaLayer: media_id 0 old_layer 2 new_layer 1' right before 2bc43cd6~e6a57918).
+_ACT_WORDS = [(r'\bsplit', ('splitmedia', 'splitvideo', 'splitoverlay')),
+              (r'\bdrag|\brow\b|another (timeline )?row|\blayer move|moves? .*to another layer', ('changevisualmedialayer', 'changemedialayer', 'moveitemtolayer')),
+              (r'\bduplicat', ('duplicatemedia', 'duplicateoverlay')),
+              (r'\bundo|\brestore', ('restoremedia', 'undo')),
+              (r'\bdelet|\bremoves? the (clip|overlay)', ('deletemedia', 'detachmedia')),
+              (r'\bsort|\breorder', ('sortmedia',)),
+              (r'\btrim', ('trimmedia', 'trimvideo')),
+              (r'\bspeed', ('changespeed', 'setspeed')),
+              (r'\bleave|\bexit|\bback\b|destroy', ('destroyvideoenginecontext', 'ondestroy'))]
+_LOGACT = re.compile(r'\bMsg([A-Z][A-Za-z]+)|VideoEngine::([a-z_A-Z]+)|Player\.([a-zA-Z]+)')
+
+
+def _anorm(x):
+    return re.sub(r'[^a-z]', '', str(x or '').lower())
+
+
+def scenario_actions(s):
+    """Normalised names of the user actions a scenario is about (from its title/question and its proof steps)."""
+    txt = ' '.join([str(s.get('title') or ''), str(s.get('q') or '')]).lower()
+    acts = set()
+    for rx, names in _ACT_WORDS:
+        if re.search(rx, txt):
+            acts |= set(names)
+    for st in (s.get('proof') or {}).get('steps') or []:
+        for m in re.finditer(r'([A-Za-z_][A-Za-z0-9_]*(?:\.|::)?[A-Za-z_][A-Za-z0-9_]*)\s*\(', str(st[1] if len(st) > 1 else '')):
+            n = _anorm(m.group(1).split('.')[-1].split('::')[-1])
+            if any(n.startswith(a[:6]) for _, names in _ACT_WORDS for a in names):
+                acts.add(n)
+    return acts
+
+
+def log_actions(lines):
+    """[(normalised action, the log line)] from a crash's last log lines, newest last."""
+    out = []
+    for l in lines or []:
+        l = l.get('message') if isinstance(l, dict) else str(l)
+        for m in _LOGACT.finditer(l or ''):
+            a = _anorm(next(g for g in m.groups() if g))
+            if any(a.startswith(x[:8]) or x.startswith(a) for _, names in _ACT_WORDS for x in names):   # user actions only
+                out.append((a, (l or '')[:160]))
+    return out
+
+
+def field_match_src(view, src, field):
+    """A scenario is 'seen in the field' when the top frame of a crash users ALREADY had is a function its walk goes
+    through. 1 Nov, two strengths instead of one:
+      path      the crash's last log lines (before it crashed) show THIS scenario's user action (split, row move,
+                duplicate, undo, delete...): users very likely took this path;
+      function  only the crashing function is shared: the crash backs the scenario but does not tell which path.
+    Frames below the top that are also in the walk raise the score. field = [{card, title, events, frames, actions}]."""
+    n = 0
+    for s in view.get('scenarios') or []:
+        s.pop('field', None)
+        if s.get('verdict') not in ('verified', 'suspected', 'unsafe', 'unproven'):
+            continue
+        refs = []
+        for st in (s.get('proof') or {}).get('steps') or []:
+            r = st[0] if st and isinstance(st[0], str) else ''
+            if ':' in r and r.rsplit(':', 1)[1].isdigit():
+                refs.append(r)
+        refs += [x.get('line') for x in ((s.get('proof') or {}).get('sim') or {}).get('steps') or [] if x.get('line')]
+        fns = []
+        for r in refs:
+            try:
+                f = enclosing_function(src, r.rsplit(':', 1)[0], int(r.rsplit(':', 1)[1]))
+            except Exception:
+                f = None
+            if f and _short(f) not in fns:
+                fns.append(_short(f))
+        if not fns:
+            continue
+        acts = scenario_actions(s)
+        hits = []
+        for c in field or []:
+            top = [_short(x) for x in (c.get('frames') or [])[:3] if x]
+            if not top or top[0] not in fns:
+                continue
+            chain = sum(1 for x in top if x in fns)
+            la = log_actions(c.get('logs'))[-12:]
+            # only the LAST user action before the crash counts (an older delete does not make an 'undo' path)
+            seen = [(a, l) for a, l in la[-1:] if a in acts or any(a.startswith(x[:8]) or x.startswith(a[:8]) for x in acts)]
+            other = [a for a, _ in la if a not in {x for x, _ in seen}]
+            h = {'card': c.get('card'), 'title': str(c.get('title') or '')[:120], 'events': c.get('events'), 'frame': top[0],
+                 'chain': chain, 'strength': 'path' if seen else 'function'}
+            if seen:
+                h['log'] = seen[-1][1]
+            elif la:
+                h['lastAction'] = la[-1][1]          # what the users did instead, right before the crash
+            hits.append(h)
+        if hits:
+            hits.sort(key=lambda h: (h['strength'] != 'path', -h['chain'], -(h.get('events') or 0)))
+            s['field'] = hits[:3]
+            s['fieldStrength'] = hits[0]['strength']
+            n += 1
+    return n
+
+
+def gate_checks(view, votes, judge_names, wt, diff, findings=None):
+    """30 Oct. Two code rules after the judges:
+    UI GATE: a judge showed (evidence line that exists) that the screen does not let the user do the action in the
+      state the scenario needs (disabled control, blocking dialog, input locked while a job runs) and no judge showed it
+      open -> not Verified, severity at most minor.
+    BLOCKER GATE: a blocker stays a blocker only with ALL of: Verified (every judge), the Simulator reached the outcome
+      with every walked line matching, reachable in the release build, new with this PR (not pre-existing, base walk not
+      'same'), the screen allows it (some judge: ui_gate open), and likely (a judge says often, or the field already
+      had it). Anything missing -> major, and the page says what was missing."""
+    src = Repo(wt, parse_diff(diff))
+
+    def ok(e):
+        if not (isinstance(e, str) and ':' in e and e.rsplit(':', 1)[1].isdigit()):
+            return False
+        p = src.path(e.rsplit(':', 1)[0])
+        return bool(p) and 0 < int(e.rsplit(':', 1)[1]) <= len(src.lines(p))
+    for s in view.get('scenarios') or []:
+        if s.get('verdict') not in ('verified', 'suspected'):
+            continue
+        vs = [(votes.get(j) or {}).get(s.get('id')) or {} for j in judge_names]
+        blocked = [v for v in vs if v.get('ui_gate') == 'blocked' and any(ok(e) for e in v.get('ui_gate_evidence') or [])]
+        opened = [v for v in vs if v.get('ui_gate') == 'open']
+        proof = s.setdefault('proof', {})
+        if blocked and not opened:
+            ev = [e for e in blocked[0]['ui_gate_evidence'] if ok(e)][:2]
+            s['uiGate'] = {'state': 'blocked', 'evidence': ev}
+            s['verdict'] = 'suspected'
+            if s.get('severity') in ('blocker', 'major'):
+                s['severity'] = 'minor'
+            proof['note'] = (str(proof.get('note') or '') + f" The screen does not allow this while the needed state holds ({', '.join(ev)}).").strip()
+            continue
+        if opened:
+            s['uiGate'] = {'state': 'open'}
+        if s.get('severity') != 'blocker':
+            continue
+        sim = proof.get('sim') or {}
+        m = str(sim.get('matched') or '0/1').split('/')
+        lik = [v.get('likelihood') for v in vs if v.get('likelihood')]
+        need = {
+            'verified by every judge': s.get('verdict') == 'verified',
+            'the Simulator reached the crash on every walked line': sim.get('end') == 'outcome' and len(m) == 2 and m[0] == m[1] and m[0] != '0',
+            'reachable in the release build': (s.get('reach') or {}).get('state') == 'release',
+            'new with this PR': not s.get('pre_existing') and sim.get('base') != 'same',
+            'the screen allows the action': bool(opened),
+            'likely (often, or already seen in the field)': bool(s.get('field')) or ('often' in lik and 'rare' not in lik),
+        }
+        miss = [k for k, v in need.items() if not v]
+        s['blockerGate'] = {'kept': not miss, 'missing': miss}
+        if miss:
+            s['severity'] = 'major'
+            proof['note'] = (str(proof.get('note') or '') + ' Not a blocker: missing ' + '; '.join(miss) + '.').strip()
+            k = s.get('finding')
+            if findings and isinstance(k, int) and 0 <= k < len(findings) and findings[k].get('severity') == 'blocker':
+                findings[k]['severity'] = 'major'
+    return view
