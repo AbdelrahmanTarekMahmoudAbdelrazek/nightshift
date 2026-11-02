@@ -294,6 +294,26 @@ def _ns_version():
     return v
 
 
+def jni_precheck(root=None):
+    """2 Nov: before a lab build, the native method table (JNI.cpp allMethods, registered all-or-nothing) against the
+    Kotlin `external fun` declarations in the lab folder's modules. A method the table registers that no Kotlin file
+    declares makes the app abort while loading the library, so no run can prove anything. Code only, ~1 s.
+    -> (fatal problems, other mismatches)"""
+    root = root or config.LAB
+    from . import kotlinctx as _kc
+    jf = os.path.join(root, 'app/src/main/cpp/JNI/JNI.cpp')
+    if not os.path.exists(jf):
+        return [], []
+    table = _kc._table(open(jf, errors='replace').read())
+    mods = [os.path.join(root, d) for d in ('java-common', 'android-video-editor-module', 'gallerypicker')
+            if os.path.isdir(os.path.join(root, d))]
+    if not table or not mods:
+        return [], []
+    probs = _kc._mismatches(table, _kc.kotlin_externals(mods))
+    fatal = [x for x in probs if 'no Kotlin `external fun' in x]
+    return fatal, [x for x in probs if x not in fatal]
+
+
 class BrokenLabBuild(RuntimeError):
     pass
 
@@ -1462,7 +1482,33 @@ class Worker:
         if busy:
             raise RuntimeError('another stress run is using the phone; try again when it finishes')
         install = (self.cfg.get('lab') or {}).get('repro_install') or self.cfg['lab']['anrsan_install']
-        applied = []
+        applied, retry = [], False
+        if not (getattr(self, '_play_mode', False) or getattr(self, '_full_mode', False)):
+            try:
+                fatal, other = jni_precheck()
+            except Exception as e:
+                fatal, other = [], []
+                self.log(ref, f'JNI check skipped: {str(e)[:120]}')
+            if other:
+                self.log(ref, f'JNI check: {len(other)} signature difference(s) (not blocking): {other[0][:200]}')
+            if fatal:
+                mods = []
+                for sm in ('android-video-editor-module', 'java-common'):
+                    d = os.path.join(config.LAB, sm)
+                    if os.path.isdir(d):
+                        mods.append(f"{sm} @ {subprocess.run(['git', '-C', d, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()}")
+                msg = (f'the lab build would not start: the C++ registers {len(fatal)} method(s) the Kotlin modules do not '
+                       f'declare ({"; ".join(x.split("`")[1] for x in fatal[:3])}). Kotlin used: {", ".join(mods)}. '
+                       f'Nothing was built or run.')
+                self.log(ref, 'JNI check: ' + msg)
+                if getattr(self, '_recipe', None) and not getattr(self, '_recipe_fallback', False):
+                    self._recipe_fall(ref, 'its Kotlin and C++ do not match')   # should not happen: the usual way
+                    return self._install(ref, hooks)
+                else:
+                    self._broken = msg
+                    raise BrokenLabBuild(msg)
+            else:
+                self.log(ref, 'JNI check: every native method has its Kotlin declaration (the app can start)')
         if getattr(self, '_play_mode', False) or getattr(self, '_full_mode', False):
             if hooks:
                 self.log(ref, f'full app: {len(hooks)} engine debug hook(s) of video_gles3jni skipped')
@@ -1484,8 +1530,23 @@ class Worker:
                     self.log(ref, f'hook library: {h} does not apply to this lab code; built without it')
                 elif getattr(self, '_hooks_strict', False):
                     raise RuntimeError(f'patch does not apply to the lab code: {h}')
-            if self.install_app(ref):
-                raise RuntimeError(f'build/install failed ({self._build_cause()}): the phone still has the old app, so this run would prove nothing')
+            rc_i = self.install_app(ref)
+            if not rc_i and not (getattr(self, '_play_mode', False) or getattr(self, '_full_mode', False)):
+                bad = self._smoke(ref)                 # 2 Nov: does the new app even start and load the engine?
+                if bad:
+                    if getattr(self, '_recipe', None) and not getattr(self, '_recipe_fallback', False):
+                        retry = True
+                        self._last_tail = ['BUILD FAILED (smoke test) ' + bad]
+                    else:
+                        self._broken = (f'the lab app crashes on its own, before any repro step: {bad}. '
+                                        f'Nothing was reproduced or ruled out by this job.')
+                        raise BrokenLabBuild(self._broken)
+            if rc_i:
+                if getattr(self, '_recipe', None) and not getattr(self, '_recipe_fallback', False) \
+                        and 'BUILD FAILED' in ' '.join(getattr(self, '_last_tail', []) or []):
+                    retry = True                       # handled after the hooks are reverted (below)
+                else:
+                    raise RuntimeError(f'build/install failed ({self._build_cause()}): the phone still has the old app, so this run would prove nothing')
         finally:
             for p in reversed(applied):            # the working tree goes back exactly as it was; never committed
                 r_ = subprocess.run(['git', '--no-optional-locks', 'apply', '-R', p], cwd=config.LAB, capture_output=True, timeout=60)
@@ -1493,6 +1554,59 @@ class Worker:
                     subprocess.run(['git', '--no-optional-locks', 'apply', '-R', '--ignore-whitespace', p], cwd=config.LAB,
                                    capture_output=True, timeout=60)
                 self.log(ref, f'debug hook reverted: {os.path.relpath(p, config.REPO)}')
+        if retry:
+            self._recipe_fall(ref, f'the build did not compile ({self._build_cause()})')
+            return self._install(ref, hooks)
+
+    def _smoke(self, ref):
+        """2 Nov: after installing a lab build, start the app and load the engine library once (the debug build's
+        LabControl 'jni' command loads Player, which registers every native method), ~10-20 s, no tokens. A build whose
+        C++ and Kotlin do not match aborts right there. -> '' when fine, else the crash line."""
+        pkg = config.app_package(getattr(self, 'cfg', None))
+        sh = lambda c, t=30: subprocess.run(c, shell=True, capture_output=True, text=True, timeout=t).stdout
+        try:
+            sh('adb logcat -c')
+            sh(f'adb shell am force-stop {pkg}')
+            sh(f'adb shell monkey -p {pkg} -c android.intent.category.LAUNCHER 1', 60)
+            time.sleep(5)
+            sh(f'adb shell am broadcast -a com.myzesty.LAB -p {pkg} --es cmd jni --es calls "sleep(1)"')
+            got, t_end = '', time.time() + 20
+            while time.time() < t_end:
+                time.sleep(2)
+                lg = sh('adb logcat -d -t 3000')
+                crash = [l for l in lg.splitlines() if re.search(r'JNI DETECTED ERROR|UnsatisfiedLinkError|NoSuchMethodError|'
+                                                                 r'FATAL EXCEPTION|Fatal signal \d+', l)
+                         and (pkg in l or 'JNI DETECTED' in l or 'java_vm_ext' in l)]
+                if not crash and f'Process: {pkg}' in lg:          # a Java crash: 'FATAL EXCEPTION' then 'Process: <pkg>'
+                    ls_ = lg.splitlines()
+                    i_ = next(i for i, l in enumerate(ls_) if f'Process: {pkg}' in l)
+                    crash = [l for l in ls_[i_ + 1:i_ + 4] if 'Exception' in l or 'Error' in l][:1]
+                if crash:
+                    detail = next((l for l in crash if 'JNI DETECTED' in l or 'Exception' in l or 'Error' in l), crash[0])
+                    got = re.sub(r'^\S+\s+\S+\s+\d+\s+\d+\s+\w\s+', '', detail).strip()[:300]
+                    break
+                if 'LAB ok jni' in lg or 'LAB fail jni' in lg:
+                    break
+            sh(f'adb shell am force-stop {pkg}')
+            if got:
+                self.log(ref, f'smoke test: FAILED: the new lab app crashes as soon as it starts: {got}')
+                return got
+            self.log(ref, 'smoke test: the new lab app starts and loads the engine library')
+        except Exception as e:
+            self.log(ref, f'smoke test skipped: {str(e)[:120]}')
+        return ''
+
+    def _recipe_fall(self, ref, why):
+        """2 Nov: the release recipe (whole engine at the shipped commit + shipped Kotlin pins) cannot be used here:
+        once per job, fall back to the usual lab folder (base branch + the crash files at the field commit)."""
+        self._recipe_fallback = True
+        self.log(ref, f'release recipe: {why}; building the usual way (base branch + the crash files at the field commit) instead')
+        from . import labtree
+        lw, ls = labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l))
+        self.log(ref, f'lab folder: {lw} = {self.cfg["lab"].get("base_branch")} @ {ls[:10]}')
+        c_ = getattr(self, '_recipe_case', None)
+        if c_ is not None and (self.cfg.get('lab') or {}).get('build_as_shipped', True):
+            self._swaps = list(getattr(self, '_swaps', []) or []) + list(self._shipped_swap(ref, c_))
 
     def _step_stats(self, key, st, res, secs):
         """Keep each ladder step's track record (runs, hits, seconds) in lab_repros.json for smart ordering."""
@@ -2607,10 +2721,31 @@ class Worker:
                     from . import labtree
                     importlib.reload(labtree)
                     base = job.get('base') if re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', str(job.get('base') or '')) else None
-                    lw, ls = labtree.activate(self.cfg, base, log=lambda l: self.log(ref, l))
+                    rc_ = None
+                    if not base and str((self.cfg.get('lab') or {}).get('release_recipe', True)).lower() not in ('false', 'no', '0'):
+                        # 2 Nov: build the code the users ran: the whole engine at the shipped commit and every Kotlin
+                        # module at the commit the shipped app pinned (ns/recipe.py). A job that names a base keeps it.
+                        try:
+                            from . import recipe as _rcp
+                            importlib.reload(_rcp)
+                            rc_ = _rcp.for_case(case, self.cfg, log=lambda l: self.log(ref, l))
+                        except Exception as e_:
+                            self.log(ref, f'release recipe: not used ({str(e_)[:150]})')
+                            rc_ = None
+                    if rc_:
+                        self.log(ref, f"release recipe for build {rc_['vc']} ({rc_['version']}): engine {rc_['engine'][:10]}; "
+                                      f"Kotlin: {rc_['why']}"
+                                      + (' (' + ', '.join(f'{k} {v[:8]}' for k, v in sorted(rc_['pins'].items())
+                                                          if k in ('android-video-editor-module', 'java-common', 'gallerypicker')) + ')'
+                                         if rc_['pins'] else ''))
+                        lw, ls = labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l), sha=rc_['engine'],
+                                                  pins=rc_['pins'], name=rc_['vc'])
+                        self._recipe, self._recipe_case = rc_, case
+                    else:
+                        lw, ls = labtree.activate(self.cfg, base, log=lambda l: self.log(ref, l))
                     if ls:
-                        self.log(ref, f'lab folder: {lw} = {base or self.cfg["lab"].get("base_branch")} @ {ls[:10]} '
-                                      f'(your working copy and Android Studio are not touched)')
+                        self.log(ref, f'lab folder: {lw} = {("build " + rc_["vc"]) if rc_ else (base or self.cfg["lab"].get("base_branch"))} '
+                                      f'@ {ls[:10]} (your working copy and Android Studio are not touched)')
                 self._blind = bool(job.get('blind'))
                 self._blind_fix = False
                 self._lab_steps = 0

@@ -310,7 +310,11 @@ def kotlin_externals(paths, cls_file='Player.kt'):
 
 def _table(src):
     m = re.search(r'JNINativeMethod\s+allMethods\[\]\s*=\s*\{(.*?)\n\};', src or '', re.S)
-    return re.findall(r'\{\s*"(\w+)"\s*,\s*"([^"]+)"', m.group(1)) if m else None
+    if not m:
+        return None
+    body = re.sub(r'/\*.*?\*/', ' ', m.group(1), flags=re.S)       # 2 Nov: commented-out entries are not registered
+    body = re.sub(r'//[^\n]*', ' ', body)                           # (they showed as false 'missing in Kotlin')
+    return re.findall(r'\{\s*"(\w+)"\s*,\s*"([^"]+)"', body)
 
 
 def _mismatches(table, kt):

@@ -71,10 +71,17 @@ def _module_commit(src, sm, log=print):
     return sha
 
 
-def ensure(cfg, branch=None, log=print):
-    """Create/refresh the lab folder for `branch` (default lab.base_branch) at its latest commit. -> (path, sha)."""
+def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None):
+    """Create/refresh the lab folder for `branch` (default lab.base_branch) at its latest commit. -> (path, sha).
+    2 Nov, the release recipe (ns/recipe.py): sha = the engine commit the users' build was made from (whole tree) and
+    pins = {module: commit} the shipped app used; the folder is ~/.nightshift_lab/rel_<name>."""
+    pins = pins or {}
     branch = branch or (cfg.get('lab') or {}).get('base_branch') or 'HEAD'
-    if branch == 'HEAD':
+    if sha:
+        if subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], cwd=config.REPO, capture_output=True).returncode:
+            _sh(['git', 'fetch', '-q', '--no-tags', 'origin', sha], check=False)
+        branch = f'rel_{name or sha[:10]}'
+    elif branch == 'HEAD':
         sha = _sh(['git', 'rev-parse', 'HEAD']).strip()
     else:
         safe = re.sub(r'[^A-Za-z0-9._-]', '_', branch)
@@ -84,6 +91,12 @@ def ensure(cfg, branch=None, log=print):
     wt = os.path.join(ROOT, re.sub(r'[^A-Za-z0-9._-]', '_', branch))
     if not os.path.isdir(os.path.join(wt, 'app')):
         os.makedirs(ROOT, exist_ok=True)
+        if branch.startswith('rel_'):                  # release-recipe folders: keep the 3 newest (each one is a full build)
+            olds = sorted((os.path.join(ROOT, x) for x in os.listdir(ROOT) if x.startswith('rel_')), key=os.path.getmtime)
+            for o in olds[:max(0, len(olds) - 2)]:
+                _sh(['git', 'worktree', 'remove', '--force', o], check=False)
+                shutil.rmtree(o, ignore_errors=True)
+                log(f'lab folder removed (older release recipe): {o}')
         _sh(['git', 'worktree', 'prune'], check=False)
         _sh(['git', '-c', 'core.autocrlf=false', 'worktree', 'add', '--detach', '--force', wt, sha])
         log(f'lab folder created: {wt} ({branch} @ {sha[:10]}); first build there is a full build')
@@ -104,7 +117,16 @@ def ensure(cfg, branch=None, log=print):
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     os.symlink(src, d)
             continue
-        want = _module_commit(src, sm, log)
+        want = None
+        pin = pins.get(os.path.basename(sm))
+        if pin:                                       # release recipe: the module commit the shipped app used
+            if subprocess.run(['git', '-C', src, 'cat-file', '-e', pin + '^{commit}'], capture_output=True).returncode:
+                subprocess.run(['git', '-C', src, 'fetch', '-q', '--no-tags', 'origin', pin], capture_output=True, timeout=600)
+            if subprocess.run(['git', '-C', src, 'cat-file', '-e', pin + '^{commit}'], capture_output=True).returncode == 0:
+                want = pin
+            else:
+                log(f'lab build: {sm} commit {pin[:8]} of the release is not reachable; using the newest sprint')
+        want = want or _module_commit(src, sm, log)
         if done.get(sm) == want and os.path.isdir(d) and os.listdir(d):
             continue
         if os.path.islink(d):
@@ -150,12 +172,12 @@ def gradle_props(wt):
     return out
 
 
-def activate(cfg, branch=None, log=print):
+def activate(cfg, branch=None, log=print, sha=None, pins=None, name=None):
     """Point config.LAB at the lab folder for this job. -> (path, sha) or (REPO, '') when off."""
     if not enabled(cfg):
         config.LAB = config.REPO
         return config.REPO, ''
-    wt, sha = ensure(cfg, branch, log)
+    wt, sha = ensure(cfg, branch, log, sha=sha, pins=pins, name=name)
     config.LAB = wt
     return wt, sha
 
