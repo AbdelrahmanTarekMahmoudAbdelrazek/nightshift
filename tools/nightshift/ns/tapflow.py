@@ -227,6 +227,26 @@ def run(worker, ref, case, merged, rp=None):
         fb = '\n\n'.join(f'### {nm} ({"HYBRID" if hy else "FULL"}): {r1.get("result")}; {r1.get("why") or ""}\n'
                          + author._feedback(got[0] if got else '') for nm, r1, got, hy, _d in tried)
         history.append(f'## attempt {n}\n```python\n{code[:7000]}\n```\nWhat the lab phone did:\n{fb[:14000]}')
+        # 3 Nov: a project that is gone from the phone is set aside and (if it was THIS crash's) built again, instead of
+        # every next script opening it and stopping in 8 s
+        gone = author.drop_gone(' '.join(str(r1.get('why') or '') for _nm, r1, *_ in tried), lambda t: worker.log(ref, 'tap repro: ' + t))
+        if gone:
+            if k8 in gone:
+                try:
+                    cps = author.make_checkpoints(worker, ref, ctx, k8, _deny(worker))
+                    what = author.build_fixture(worker, ref, case, ctx, cps, k8, api, smap, expect, _deny(worker))
+                    worker.log(ref, f'tap repro: lab fixture "{k8}" rebuilt: {what[:160]}' if what else
+                                    f'tap repro: lab fixture "{k8}" could not be rebuilt; scripts build the project themselves')
+                except Exception as e_:
+                    worker.log(ref, f'tap repro: fixture rebuild error: {str(e_)[:160]}')
+            live = author.live_fixtures()
+            facts = [f for f in facts if not f.startswith('LAB FIXTURES THAT EXIST NOW')] + [
+                'LAB FIXTURES THAT EXIST NOW (ed.open_fixture accepts ONLY these keys): '
+                + ('; '.join(f'"{k}" = {w}' for k, w in live.items()) if live else 'none')
+                + (f'. "{k8}" is the project THIS crash needs: start from it.' if k8 in live else
+                   '. None for this crash: start from ed.open_draft() and build what the field had with the harness '
+                   'building blocks (HYBRID may use ed.jni(...) for that setup).')]
+            history.append(f'## lab fixtures {", ".join(gone)} were GONE from the phone (set aside now): never open them again')
         try:                                          # 3 Nov: a harness step that keeps failing is repaired + tested
             from . import harnessfix as _hf
             if _hf.maybe_repair(worker, ref, k8):

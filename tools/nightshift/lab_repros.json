@@ -277,26 +277,14 @@
   ],
   "ladder": [
    {
-    "level": 3,
-    "name": "ns_2fe03193_l3_2_b: Firebase vivo V2150 seeks + Play Vivo T1: video-only cached file, Edit, drag, scrub seeks under critical memory pressure, Reverse.",
-    "scenario": "ns_2fe03193_l3_2_b_r1103110143",
+    "level": 2,
+    "name": "tf_2fe03193_1_a: FULL: Crashlytics [libmedia.so] AudioMCDecoder::reset_state: Edit tab, canvas drags, Reverse on a clip whose cached reversed copy has no audio.",
+    "scenario": "tf_2fe03193_1_a_r1103172655",
     "repeat": 2,
     "natural": true,
     "author": true,
-    "stat_runs": 5,
-    "stat_hits": 1,
-    "stat_secs": 101
-   },
-   {
-    "level": 5,
-    "name": "ns_2fe03193_l5_1_a: Firebase vivo V2150: cached-branch Reverse after Edit+drags swaps in cache/<clip> seen as audio-less (hook).",
-    "scenario": "ns_2fe03193_l5_1_a_r1103140620",
-    "repeat": 2,
-    "natural": false,
-    "author": true,
-    "stat_runs": 1,
-    "stat_hits": 1,
-    "hook_patch": "tools/nightshift/out/hooks/2fe03193_l5_1.diff"
+    "stat_runs": 2,
+    "stat_hits": 1
    }
   ]
  }

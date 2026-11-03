@@ -668,13 +668,29 @@ class Worker:
         self._last_errors = []
         for line in p.stdout:
             tail.append(line.rstrip())
-            if ': error:' in line and len(self._last_errors) < 200:
+            if (': error:' in line or 'e: file:' in line or line.lstrip().startswith('e: ') or 'AAPT: error' in line
+                    or 'Manifest merger failed' in line) and len(self._last_errors) < 200:
                 self._last_errors.append(line.rstrip())
             if key.search(line) or len(tail) % 20 == 0:   # step lines and verdicts right away, the rest sampled
                 self.log(ref, tail[-1][:300])
         p.wait(timeout=timeout)
         self._proc = None
         self._last_tail = tail[-200:]
+        if 'gradlew' in cmd and p.returncode:      # 3 Nov: keep the WHOLE failed build log (the job log keeps 1 line in 20;
+            try:                                 # a packaging failure could not be told from it, nor by the self-repair)
+                bd = os.path.join(config.REPO, 'tools/nightshift/out/builds')
+                os.makedirs(bd, exist_ok=True)
+                fp = os.path.join(bd, f'{re.sub(r"[^A-Za-z0-9]", "", str(ref))[:12]}_{dt.datetime.now():%H%M%S}.log')
+                open(fp, 'w').write('\n'.join(tail[-20000:]) + '\n')
+                self._last_build_log = fp
+                self._last_errors = list(getattr(self, '_last_errors', []) or []) + [
+                    l for l in tail if 'What went wrong' in l or 'Execution failed' in l or l.startswith('> ')][-20:]
+                for k_, l_ in enumerate(tail):        # gradle's own explanation: the lines after 'What went wrong'
+                    if 'What went wrong' in l_:
+                        self._last_errors += [x for x in tail[k_ + 1:k_ + 12] if x.strip()]
+                self.log(ref, f'build log kept: {os.path.relpath(fp, config.REPO)}')
+            except Exception:
+                pass
         if getattr(self, 'cancelled', False):
             raise RuntimeError('cancelled from the board')
         if p.returncode:
@@ -1578,6 +1594,12 @@ class Worker:
                         self._broken = (f'the lab app crashes on its own, before any repro step: {bad}. '
                                         f'Nothing was reproduced or ruled out by this job.')
                         raise BrokenLabBuild(self._broken)
+            if not rc_i and getattr(self, '_buildfix_pending', None):
+                try:
+                    from . import buildfix
+                    buildfix.built_ok(self, ref)
+                except Exception:
+                    pass
             if rc_i:
                 if getattr(self, '_recipe', None) and not getattr(self, '_recipe_fallback', False) \
                         and 'BUILD FAILED' in ' '.join(getattr(self, '_last_tail', []) or []):
@@ -1592,7 +1614,38 @@ class Worker:
                                    capture_output=True, timeout=60)
                 self.log(ref, f'debug hook reverted: {os.path.relpath(p, config.REPO)}')
         if retry:
-            self._recipe_fall(ref, f'the build did not compile ({self._build_cause()})')
+            cause = self._build_cause()
+            rc_ = getattr(self, '_recipe', None) or {}
+            if not getattr(self, '_recipe_ui_tried', True) and re.search(r'/app/src/main/(java|res)/', cause):
+                # 3 Nov: the release engine + Kotlin compiled, only the lab app's OWN screens did not (they were older
+                # than the release java-common). Once: those screens from the newest commit of the release's CPP branch.
+                self._recipe_ui_tried = True
+                from . import labtree
+                ui = ''
+                for r in (f"origin/CPP-{rc_.get('version')}", f"CPP-{rc_.get('version')}"):
+                    ui = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', r + '^{commit}'], cwd=config.REPO,
+                                        capture_output=True, text=True).stdout.strip()
+                    if ui:
+                        break
+                if ui:
+                    self.log(ref, f'release recipe: only the lab app\'s own screens failed to compile ({cause}); '
+                                  f'trying once more with those screens from CPP-{rc_.get("version")} {ui[:10]}')
+                    labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l), sha=rc_['engine'], pins=rc_['pins'],
+                                     name=rc_['vc'], ui=ui,
+                                     app=(rc_['app_repo'], rc_['app_commit']) if rc_.get('app_repo') else None)
+                    return self._install(ref, hooks)
+            if rc_ and 'BUILD FAILED (smoke test)' not in cause:
+                # 3 Nov: Night Shift repairs its own lab build (ns/buildfix.py) before giving up on the release Kotlin
+                try:
+                    from . import buildfix
+                    if buildfix.try_fix(self, ref, config.LAB, list(getattr(self, '_last_errors', []) or [])
+                                        + list(getattr(self, '_last_tail', []) or []),
+                                        f"engine at the shipped commit {str(rc_.get('engine'))[:10]}, Kotlin modules at the "
+                                        f"release pins ({', '.join(f'{k} {v[:8]}' for k, v in sorted((rc_.get('pins') or {}).items()))})"):
+                        return self._install(ref, hooks)
+                except Exception as e_:
+                    self.log(ref, f'build self-repair skipped: {str(e_)[:160]}')
+            self._recipe_fall(ref, f'the build did not compile ({cause})')
             return self._install(ref, hooks)
 
     def _smoke(self, ref):
@@ -1638,6 +1691,20 @@ class Worker:
         once per job, fall back to the usual lab folder (base branch + the crash files at the field commit)."""
         self._recipe_fallback = True
         self.log(ref, f'release recipe: {why}; building the usual way (base branch + the crash files at the field commit) instead')
+        rc_ = getattr(self, '_recipe', None) or {}
+        pins = ', '.join(f'{k} {v[:8]}' for k, v in sorted((rc_.get('pins') or {}).items()))
+        self.log(ref, f'WARNING: this job\'s Kotlin is the NEWEST SPRINT, not the release ({pins}). What happens before the '
+                      f'engine (import, transcoding, picker, tool screens) may differ from what the users had')
+        try:
+            from . import author as _au
+            _au.JOB_NOTES[:] = [f'THIS JOB\'S BUILD: the engine C++ on the crash stack is the field commit, but the Kotlin '
+                                f'(editor, java-common, picker) is the NEWEST SPRINT, not the release ({pins}). Import, '
+                                f'transcoding and screen behaviour can differ from the field (3 Nov: sprint217 passes most '
+                                f'videos through without transcoding; the release transcoded them). If a field step will not '
+                                f'happen in the lab, create its RESULT directly (plant the file, HYBRID ed.jni, a hook) instead '
+                                f'of waiting for the app to do it.']
+        except Exception:
+            pass
         from . import labtree
         lw, ls = labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l))
         self.log(ref, f'lab folder: {lw} = {self.cfg["lab"].get("base_branch")} @ {ls[:10]}')
@@ -2813,6 +2880,11 @@ class Worker:
                     importlib.reload(labtree)
                     base = job.get('base') if re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', str(job.get('base') or '')) else None
                     rc_ = None
+                    try:
+                        from . import author as _au
+                        _au.JOB_NOTES[:] = []
+                    except Exception:
+                        pass
                     if not base and str((self.cfg.get('lab') or {}).get('release_recipe', True)).lower() not in ('false', 'no', '0'):
                         # 2 Nov: build the code the users ran: the whole engine at the shipped commit and every Kotlin
                         # module at the commit the shipped app pinned (ns/recipe.py). A job that names a base keeps it.
@@ -2833,6 +2905,8 @@ class Worker:
                                                   pins=rc_['pins'], name=rc_['vc'],
                                                   app=(rc_['app_repo'], rc_['app_commit']) if rc_.get('app_repo') else None)
                         self._recipe, self._recipe_case = rc_, case
+                        self._recipe_ui_tried = False
+                        self._buildfix_n, self._buildfix_pending = 0, None
                     else:
                         lw, ls = labtree.activate(self.cfg, base, log=lambda l: self.log(ref, l))
                     if ls:

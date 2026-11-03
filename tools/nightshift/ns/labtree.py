@@ -153,7 +153,26 @@ def _app_libs(wt, app, log=print):
         log(f'lab build: shared Android library sources from the shipped app {commit[:10]}: {", ".join(done)}')
 
 
-def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None):
+UI_PATHS = ('app/src/main/java', 'app/src/main/res', 'app/src/main/AndroidManifest.xml')
+
+
+def _lab_ui(wt, ui, log=print):
+    """3 Nov: the lab app's OWN screens (video_gles3jni app/src/main java/res/manifest; never cpp/) from commit `ui`.
+    The engine commit of build 800054890 (342ff8625e, 15 Oct) still had the old music picker
+    (MusicCategoryAdapter uses item_category_img), which the release java-common (d66f8e22) no longer has: video_gles3jni
+    only synced its screens to the new java-common on 21 Oct. These screens are the lab harness, not the users' code;
+    the engine (cpp/) stays at the field commit. pristine() puts everything back on the next build."""
+    for rel in UI_PATHS:
+        p = os.path.join(wt, rel)
+        if os.path.isdir(p):
+            shutil.rmtree(p, ignore_errors=True)
+        elif os.path.exists(p):
+            os.remove(p)
+        _sh(['git', '-C', wt, '-c', 'core.autocrlf=false', 'checkout', '-q', ui, '--', rel], check=False)
+    log(f'lab build: the lab app\'s own screens (app/src/main java/res/manifest) from {ui[:10]}; engine C++ unchanged')
+
+
+def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None, ui=None):
     """Create/refresh the lab folder for `branch` (default lab.base_branch) at its latest commit. -> (path, sha).
     2 Nov, the release recipe (ns/recipe.py): sha = the engine commit the users' build was made from (whole tree) and
     pins = {module: commit} the shipped app used; the folder is ~/.nightshift_lab/rel_<name>."""
@@ -185,6 +204,8 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None
     else:
         _sh(['git', '-C', wt, '-c', 'core.autocrlf=false', 'checkout', '-q', '--detach', '-f', sha], check=False)
     pristine(wt, sha)
+    if ui:
+        _lab_ui(wt, ui, log)
     if app:
         try:
             _app_libs(wt, app, log)
@@ -248,6 +269,12 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None
         if os.path.isdir(dd):
             shutil.rmtree(dd)
         shutil.copytree(dbg, dd)
+    if os.path.basename(wt).startswith('rel_'):         # 3 Nov: build repairs Night Shift made for this folder
+        try:
+            from . import buildfix
+            buildfix.reapply(wt, log)
+        except Exception as e:
+            log(f'lab build: kept build repairs not applied ({str(e)[:120]})')
     return wt, sha
 
 
@@ -264,12 +291,12 @@ def gradle_props(wt):
     return out
 
 
-def activate(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None):
+def activate(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None, ui=None):
     """Point config.LAB at the lab folder for this job. -> (path, sha) or (REPO, '') when off."""
     if not enabled(cfg):
         config.LAB = config.REPO
         return config.REPO, ''
-    wt, sha = ensure(cfg, branch, log, sha=sha, pins=pins, name=name, app=app)
+    wt, sha = ensure(cfg, branch, log, sha=sha, pins=pins, name=name, app=app, ui=ui)
     config.LAB = wt
     return wt, sha
 

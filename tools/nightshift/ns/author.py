@@ -679,6 +679,9 @@ def _all_facts():
         return []
 
 
+JOB_NOTES = []   # 3 Nov: facts about THIS job's build (set by the worker), shown first; cleared at each job start
+
+
 def lab_facts():
     """Facts for the kind of build this job runs (26 Oct): '[full app] ...' facts (Play install, PairIP, photo editor)
     only for full-app runs, the rest only for the video_gles3jni debug build. A full-app fact steered a debug-build run
@@ -694,8 +697,7 @@ def lab_facts():
     if live is not None:
         out = [f for f in out if not re.search(r'open_fixture\("([^"]+)"\)', f)
                or re.search(r'open_fixture\("([^"]+)"\)', f).group(1) in live]
-    return out
-
+    return list(JOB_NOTES) + list(out)
 
 def live_fixtures(serial=None):
     """1 Nov: {key: what} of the lab fixtures that exist now (not '_old_' copies), for this device when given."""
@@ -710,6 +712,32 @@ def live_fixtures(serial=None):
         d = v.get(serial) if serial else next(iter(v.values()), None)
         if isinstance(d, dict) and d.get('id'):
             out[k] = str(d.get('what') or '')[:200]
+    return out
+
+
+def drop_gone(text, log=print):
+    """3 Nov: a lab fixture whose draft is GONE from the phone ('fixture project is gone: no draft with id=X') is set
+    aside at once, whichever crash it belongs to, so no later script is told it exists. Before, the tap scripts of
+    2fe03193 kept opening 6e2486dd's project 24f6f788 (gone since 28 Oct): 9 scripts in a row stopped in 8 s.
+    -> the keys that were set aside."""
+    ids = set(re.findall(r'no draft with id=([0-9a-f-]{8,})', text or ''))
+    if not ids:
+        return []
+    try:
+        allfx = json.load(open(FIXTURES))
+    except Exception:
+        return []
+    out = []
+    for k in list(allfx):
+        v = allfx[k]
+        if '_old_' in k or k.startswith('_') or not isinstance(v, dict):
+            continue
+        if any(isinstance(d, dict) and str(d.get('id')) in ids for d in v.values()):
+            allfx[f'{k}_old_gone_{dt.datetime.now():%Y%m%d%H%M}'] = allfx.pop(k)
+            out.append(k)
+    if out:
+        json.dump(allfx, open(FIXTURES, 'w'), indent=1)
+        log(f'lab fixture(s) gone from the phone, set aside: {", ".join(out)} (scripts are no longer told they exist)')
     return out
 
 
@@ -1250,6 +1278,9 @@ def run(worker, ref, case, merged, tried=None):
             if cps:
                 diag = diagnose(worker, ref, ctx, cps, k8, name, tried_names, deny) or diag
                 whys = ' '.join(str((r_ or {}).get('why', '')) for _n, r_, _g in tried_names)
+                gone_keys = drop_gone(whys, lambda t: worker.log(ref, 'repro author: ' + t))
+                if gone_keys and k8 not in gone_keys:
+                    history.append(f'## these lab fixtures are GONE, never open them: {", ".join(gone_keys)}')
                 fx_ids = [str(v.get('id', ''))[:8] for v in _fixtures(k8).values() if isinstance(v, dict)]
                 if fixture and fx_rebuilds < 2 and ('fixture project is gone' in whys or any(
                         i and f'project {i} did not open' in whys for i in fx_ids)):

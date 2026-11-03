@@ -256,7 +256,64 @@ def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
         if not chk.returncode:
             open(patch + '.flags', 'w').write(' '.join(flags))
             return patch, ans, ''
+    stacked = _stack_on_earlier(case, patch, files)
+    if stacked:
+        return stacked, ans, ''
     return None, ans, f'the diff does not apply: {chk.stderr.strip()[:300]}'
+
+
+def _stack_on_earlier(case, patch, files):
+    """3 Nov: a REVISION ('the review asked for changes') is often written against the files with the earlier
+    candidate still in them (the model read them while that candidate was applied for a build), so it does not apply to
+    the clean tree: 2fe03193 lost 2 of 3 reviewed revisions this way ('patch failed: VideoEngine.cpp:3335'). Try it on top
+    of each earlier candidate of this case; if it fits, the two together become ONE patch against the clean tree."""
+    import difflib
+    pdir = os.path.dirname(patch)
+    olds = sorted((x for x in glob.glob(os.path.join(pdir, f"{case['id']}*.patch")) if x != patch),
+                  key=os.path.getmtime, reverse=True)[:6]
+    for base in olds:
+        bfl = open(base + '.flags').read().split() if os.path.exists(base + '.flags') else []
+        if _git(['apply', '--check', *bfl, base]).returncode:
+            continue
+        bfiles = re.findall(r'^\+\+\+ b/(\S+)', open(base, errors='replace').read(), re.M)
+        allf = sorted(set(files) | set(bfiles))
+        orig = {f: (open(os.path.join(config.LAB, f), newline='', errors='surrogateescape').read()
+                    if os.path.exists(os.path.join(config.LAB, f)) else None) for f in allf}
+        _git(['apply', *bfl, base])
+        try:
+            fl = None
+            for flags in ([], ['--recount'], ['--recount', '--ignore-whitespace']):
+                if not _git(['apply', '--check', *flags, patch]).returncode:
+                    fl = flags
+                    break
+            if fl is None:
+                continue
+            _git(['apply', *fl, patch])
+            new = {f: (open(os.path.join(config.LAB, f), newline='', errors='surrogateescape').read()
+                       if os.path.exists(os.path.join(config.LAB, f)) else None) for f in allf}
+            _git(['apply', '-R', *fl, patch])
+        finally:
+            _git(['apply', '-R', *bfl, base])
+        if any((open(os.path.join(config.LAB, f), newline='', errors='surrogateescape').read()
+                if os.path.exists(os.path.join(config.LAB, f)) else None) != orig[f] for f in allf):
+            continue                                 # the tree did not come back clean: never use a guess
+        out = []
+        for f in allf:
+            a, b = orig[f], new[f]
+            if a == b:
+                continue
+            out.append(f'diff --git a/{f} b/{f}\n')
+            out += difflib.unified_diff((a or '').splitlines(True), (b or '').splitlines(True),
+                                        '/dev/null' if a is None else f'a/{f}', '/dev/null' if b is None else f'b/{f}', n=3)
+        txt = ''.join(x if x.endswith('\n') else x + '\n' for x in out)
+        if not txt.strip():
+            continue
+        comb = patch[:-len('.patch')] + '.stacked.patch'
+        open(comb, 'w', newline='').write(txt)
+        if not _git(['apply', '--check', comb]).returncode:
+            open(comb + '.flags', 'w').write('')
+            return comb
+    return None
 
 
 def _insert_hook(path, hunks):
