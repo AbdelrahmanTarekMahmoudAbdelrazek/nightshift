@@ -46,7 +46,8 @@ def files_for(cid):
     k8 = groups.k8(cid)                              # a split card has its own files ('g' + fingerprint), never its sibling's
     pats = [f'out/author/{k8}.*', f'out/author/{k8}_*', f'out/hooks/{k8}_*', f'out/fix/{cid}.*', f'out/patches/{cid}.*',
             f'out/*_{cid}_case_file.*', f'out/{cid}.*', f'out/labbuild_backup/{cid}', f'../stress/auto/{k8}.py',
-            f'../stress/auto/{k8}_*.py', f'out/replay/{cid}.json', f'out/replay/{k8}.*', f'out/replay/{k8}_*']
+            f'../stress/auto/{k8}_*.py', f'out/replay/{cid}.json', f'out/replay/{k8}.*', f'out/replay/{k8}_*',
+            f'../stress/auto/fx_{k8}.py']                # 2 Nov: the fixture builder script was left visible
     hits = []
     for p in pats:
         hits += glob.glob(os.path.join(HERE, p))
@@ -109,12 +110,21 @@ def hide(cid):
     man['registry_extra'] = {k: reg.pop(k) for k in [k for k in reg if not re.fullmatch(r'[0-9a-f]{32}(~[0-9a-f]{8})?', k) and k in hay]}
     json.dump(reg, open(rp, 'w'), indent=1)
     # lab facts learned on this crash (blind runs hide old facts anyway; this removes them for good until restore)
+    from ns import groups as _g
+    keys = {cid[:8], _g.k8(cid)}                      # 2 Nov: a split card's facts and fixtures use its k8 ('g' + fingerprint)
     fp = os.path.join(OUT, 'author', 'lab_facts.json')
     if os.path.exists(fp):
         facts = json.load(open(fp))
-        keep = [f for f in facts if cid[:8] not in json.dumps(f)]
-        man['facts'] = [f for f in facts if cid[:8] in json.dumps(f)]
+        keep = [f for f in facts if not any(k in json.dumps(f) for k in keys)]
+        man['facts'] = [f for f in facts if any(k in json.dumps(f) for k in keys)]
         json.dump(keep, open(fp, 'w'), indent=1)
+    # 2 Nov: the lab fixture (a project built for this crash, with a description of the field setup) was left in
+    # fixtures.json, so a 'blind' run could open it and read how the crash was set up
+    xp = os.path.join(OUT, 'author', 'fixtures.json')
+    if os.path.exists(xp):
+        fx = json.load(open(xp))
+        man['fixtures'] = {k: fx.pop(k) for k in [k for k in fx if k in keys or any(k.startswith(x + '_') for x in keys)]}
+        json.dump(fx, open(xp, 'w'), indent=1)
     json.dump(man, open(os.path.join(vault, 'manifest.json'), 'w'), indent=1, default=str)
     say(f'HIDE {cid}: case fields dropped {len(drop)}, merged rows {len(man["merged"])}, files moved {len(man["files"])} '
         f'({", ".join(os.path.basename(f) for f in man["files"] if "knowledge" in f) or "no knowledge file"}), '
@@ -161,6 +171,14 @@ def restore(cid):
         reg = json.load(open(rp))
         reg.update(man['registry_extra'])
         json.dump(reg, open(rp, 'w'), indent=1)
+    if man.get('fixtures'):
+        xp = os.path.join(OUT, 'author', 'fixtures.json')
+        fx = json.load(open(xp)) if os.path.exists(xp) else {}
+        for k, v in man['fixtures'].items():
+            if k in fx:                                   # the blind run built its own: keep it beside the original
+                fx[f'{k}_blindrun_{int(time.time())}'] = fx[k]
+            fx[k] = v
+        json.dump(fx, open(xp, 'w'), indent=1)
     if man.get('facts'):
         fp = os.path.join(OUT, 'author', 'lab_facts.json')
         facts = json.load(open(fp)) if os.path.exists(fp) else []

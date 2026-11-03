@@ -288,6 +288,48 @@ class Device:
         out = [(m.group(1), int(m.group(2)) / 1000) for m in re.finditer(r'_data=(\S+?), duration=(\d+)', rows) if 'ns_fresh_' not in m.group(1)]
         return sorted(out, key=lambda x: -x[1])
 
+    def plant_app_file(self, src, dest_rel, video_only=False, min_bytes=10000):
+        """Put a file INSIDE the app (e.g. dest_rel='cache/clip.mp4') exactly, checked: src = a path on the phone
+        (/sdcard/..., /storage/...) or on the lab Mac. video_only=True strips the audio track first (ffmpeg on the Mac).
+        Returns the size in bytes; raises if the file in the app is missing or smaller than min_bytes. Use this instead
+        of hand-written adb/run-as commands (2 Nov: recipes left 0-byte files and shell syntax errors)."""
+        import subprocess as _sp, tempfile as _tf, shutil
+        name = os.path.basename(dest_rel)
+        local = None
+        if os.path.exists(src):
+            local = src
+        if video_only:
+            if local is None:                         # pull the phone file to the Mac to strip its audio
+                fd, local = _tf.mkstemp(suffix=os.path.splitext(src)[1] or '.mp4'); os.close(fd)
+                self.adb('pull', src, local, timeout=180)
+            ff = shutil.which('ffmpeg') or next((c for c in ('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg') if os.path.exists(c)), None)
+            if not ff:
+                raise RuntimeError('plant_app_file(video_only=True): ffmpeg is not installed on the lab Mac (brew install ffmpeg)')
+            fd, vo = _tf.mkstemp(suffix='.mp4'); os.close(fd)
+            r = _sp.run([ff, '-y', '-loglevel', 'error', '-i', local, '-an', '-c:v', 'copy', vo], capture_output=True, text=True, timeout=300)
+            if r.returncode or os.path.getsize(vo) < min_bytes:
+                r = _sp.run([ff, '-y', '-loglevel', 'error', '-i', local, '-an', '-c:v', 'libx264', '-preset', 'veryfast', vo],
+                            capture_output=True, text=True, timeout=600)
+            if r.returncode:
+                raise RuntimeError(f'plant_app_file: ffmpeg failed: {r.stderr[-200:]}')
+            local = vo
+        tmp = f'/data/local/tmp/ns_plant_{int(time.time())}_{name}'
+        if local is not None:
+            self.adb('push', local, tmp, timeout=300)
+        else:
+            self.sh(f'cp {shlex.quote(src)} {tmp}')
+        self.sh(f'chmod 644 {tmp}')
+        d = os.path.dirname(dest_rel) or '.'
+        self.sh(f"run-as {PKG} sh -c 'mkdir -p {shlex.quote(d)} && cat {tmp} > {shlex.quote(dest_rel)}'", timeout=180)
+        self.sh(f'rm -f {tmp}')
+        size = self.sh(f"run-as {PKG} sh -c 'wc -c < {shlex.quote(dest_rel)}'").strip().split()[-1:] or ['0']
+        n = int(size[0]) if size[0].isdigit() else 0
+        if n < min_bytes:
+            raise RuntimeError(f'plant_app_file: {dest_rel} is {n} bytes in the app (expected >= {min_bytes})')
+        if hasattr(self, 'log'):
+            self.log(f'    planted {dest_rel} in the app ({n} bytes{", video only" if video_only else ""})')
+        return n
+
     def clear_app_files(self, sub='outputs'):
         """Hide one folder under the app's files/ (default 'outputs' = old transcodes) for this run: cached work is redone for real. Reversible: restore_env puts the files back before the next run, so drafts keep their clips."""
         return self.sh(f"run-as {PKG} sh -c 'mkdir -p files/.ns_bak/{sub}; mv files/{sub}/* files/.ns_bak/{sub}/ 2>/dev/null; ls files/{sub} 2>/dev/null | wc -l'")
@@ -1093,13 +1135,27 @@ class Editor:
     def snapshot_app_db(self, tag):
         """Copy the app's project database (My Projects) to files/ns_snap/<tag> inside the app (debug build: run-as)."""
         tag = re.sub(r'[^\w.-]', '_', tag)
+        self.mon.allow_death = True                   # 2 Nov: stop the app first, so the Realm file is copied closed and whole
+        self.dev.force_stop()
+        time.sleep(1)
+        self.mon.allow_death = False
         out = self.dev.sh(f"run-as {PKG} sh -c 'mkdir -p files/ns_snap/{tag} && rm -rf files/ns_snap/{tag}/databases "
                           f"&& cp -r databases files/ns_snap/{tag}/ && ls files/ns_snap/{tag}/databases | wc -l'", timeout=60)
         ok = out.strip().splitlines()[-1].strip().isdigit() if out.strip() else False
+        # 2 Nov: the projects themselves live in REALM (App.kt: RealmConfiguration name "com.myzesty" -> files/com.myzesty),
+        # not in databases/: without this the 'restored' project kept every edit a run saved into it (2fe03193: a run's
+        # Reverse left the fixture saved as reversed onto a cache file; every later run opened that).
+        rl = self.dev.sh(f"run-as {PKG} sh -c 'rm -rf files/ns_snap/{tag}/realm && mkdir -p files/ns_snap/{tag}/realm "
+                         f"&& for f in files/com.myzesty*; do [ -e \"$f\" ] && cp -r \"$f\" files/ns_snap/{tag}/realm/; done; "
+                         f"ls files/ns_snap/{tag}/realm | wc -l'", timeout=120).strip()
+        if rl.splitlines() and rl.splitlines()[-1].strip().isdigit() and int(rl.splitlines()[-1]) > 0:
+            self.log(f'    project snapshot "{tag}": projects database (Realm) kept')
+        else:
+            self.log(f'    project snapshot "{tag}": WARNING no Realm projects file found ({rl[-120:]})')
         # 28 Oct (6e2486dd): a project can point at media the app made in cache/ (transcoding-*.mp4, reversed clips);
         # the snapshot must keep them, or the restored project opens with its clip missing ("did not open in 60 s")
         med = self.dev.sh(f"run-as {PKG} sh -c 'mkdir -p files/ns_snap/{tag}/cache && rm -f files/ns_snap/{tag}/cache/* "
-                          f"&& for f in cache/*.mp4 cache/*.m4a cache/*.webm; do [ -f $f ] && cp $f files/ns_snap/{tag}/cache/; done; "
+                          f"&& for f in cache/*.mp4 cache/*.m4a cache/*.webm cache/*.mov; do [ -f $f ] && cp $f files/ns_snap/{tag}/cache/; done; "
                           f"ls files/ns_snap/{tag}/cache | wc -l'", timeout=180).strip()
         if ok and med.splitlines() and med.splitlines()[-1].strip().isdigit() and int(med.splitlines()[-1]) > 0:
             self.log(f'    project snapshot "{tag}": kept {med.splitlines()[-1].strip()} media file(s) from the app cache')
@@ -1115,6 +1171,13 @@ class Editor:
             return False
         self.mon.allow_death = True
         self.dev.force_stop()
+        # 2 Nov (2fe03193 verify): a recipe planted cache/<clip name>.mp4 (video only); the app then loads that file as the
+        # project's clip, so every later run opened a different project than the fixture. Media in cache/ that the
+        # snapshot does not have are removed: the restored project sees exactly the files it had.
+        self.dev.sh(f"run-as {PKG} sh -c 'for f in cache/*.mp4 cache/*.m4a cache/*.webm cache/*.mov; do [ -f \"$f\" ] || continue; "
+                    f"b=$(basename \"$f\"); [ -f files/ns_snap/{tag}/cache/$b ] || rm -f \"$f\"; done; true'", timeout=60)
+        self.dev.sh(f"run-as {PKG} sh -c 'if [ -d files/ns_snap/{tag}/realm ] && [ -n \"$(ls files/ns_snap/{tag}/realm)\" ]; then "
+                    f"rm -rf files/com.myzesty*; cp -r files/ns_snap/{tag}/realm/. files/; fi; true'", timeout=120)
         self.dev.sh(f"run-as {PKG} sh -c 'rm -rf databases && cp -r files/ns_snap/{tag}/databases ./ "
                     f"&& if [ -d files/ns_snap/{tag}/cache ]; then mkdir -p cache && cp files/ns_snap/{tag}/cache/* cache/ 2>/dev/null; fi; true'",
                     timeout=180)
@@ -1574,7 +1637,7 @@ class Editor:
         self.idle(1)
         self._picker_confirm()
         end = time.time() + 150                  # transcode of a long clip
-        fe_taps = 0
+        fe_taps, fe_at = 0, 0.0
         while time.time() < end:
             sc = self.screen()
             if sc is not None and self.in_editor(sc) and not sc.has(T.LOADER):
@@ -1584,6 +1647,14 @@ class Editor:
                 self.dev.tap(*sc.find(T.DISMISS).center)
                 time.sleep(2)
                 continue
+            if fe_taps and time.time() - fe_at > 10 and sc is not None and not sc.has(T.LOADER) \
+                    and sc.has(('id:wizard_control_area', 'id:wizard_header_container')) and not sc.has('id:full_editor'):
+                # 2 Nov (seen on the phone): after the tap the wizard's control area is EMPTY (its fragment popped) and
+                # the full editor's menu never shows: stuck between the two. Same app bug, other face: reopen.
+                self.log('    Full Editor left the screen half-switched (empty wizard controls, no editor menu: app bug on this build): '
+                         'reopening the saved project from My Projects')
+                self.mon.notes.append('app bug: wizard "Full Editor" leaves an empty control area; the project was reopened from My Projects')
+                return self._reopen_newest_draft()
             if sc is not None and sc.has('id:full_editor'):     # new projects open in the wizard editor first
                 if fe_taps >= 2 and not sc.has(T.LOADER):
                     # 2 Nov: on sprint217 builds 'Full Editor' does nothing (app bug, also by hand; suspect MZ-16223
@@ -1595,6 +1666,7 @@ class Editor:
                 self.log('    wizard editor: switching to Full Editor')
                 self.dev.tap(*sc.find('id:full_editor').center)
                 fe_taps += 1
+                fe_at = time.time()
                 time.sleep(3)
                 continue
             time.sleep(2)
@@ -1628,7 +1700,7 @@ class Editor:
                 return
             if sc is not None and sc.has(T.DISMISS):
                 self.dev.tap(*sc.find(T.DISMISS).center)
-            elif sc is not None and sc.has('id:full_editor'):
+            elif sc is not None and (sc.has('id:full_editor') or sc.has('id:wizard_control_area')) and time.time() > end - timeout + 20:
                 raise UIError('Full Editor does nothing (app bug on this build) and the saved project opens in the wizard too')
             time.sleep(2)
         raise UIError('the reopened project did not reach the full editor')
@@ -2235,6 +2307,12 @@ class Editor:
             s = self.ui.dump(slow=True)               # the picker is its own window: the in-app reader can't see it
             if s is not None and not isinstance(s, Screen):
                 s = Screen(s) if '<?xml' in s else None
+            if s is not None and not s.has('id:mediaList') and not s.has('id:gridrl') \
+                    and s.has(('id:root_player_view', 'id:player_area', 'id:wizard_control_area')):
+                # 2 Nov (sprint217): picking the first video in New Project opens the editor/wizard at once; there is
+                # no confirm step any more. The picker is gone and the editor is up: nothing to press.
+                self.step('picker confirm: not needed (the picker closed itself and the editor opened)')
+                return
             if s is not None:
                 W, H = self._screen_size()
                 cands = []

@@ -211,6 +211,7 @@ def run(worker, ref, case, merged, rp=None):
                 attempts.append(res)
                 step = {'level': res['level'], 'name': res['name'], 'scenario': nm, 'repeat': 2, 'natural': res['natural'],
                         'author': True, 'stat_runs': int(res.get('runs') or 1), 'stat_hits': int(res.get('hits') or 1)}
+                step['scenario'] = author.freeze_registered(path, nm, k8)
                 author.register(case['id'], step, expect)
                 worker.log(ref, f'tap repro: REPRODUCED with {"a HYBRID setup + real-tap trigger" if hybrid else "real taps only"} '
                                 f'in {(dt.datetime.now() - t0).total_seconds() / 60:.1f} min ({nm}); registered for this crash')
@@ -226,6 +227,13 @@ def run(worker, ref, case, merged, rp=None):
         fb = '\n\n'.join(f'### {nm} ({"HYBRID" if hy else "FULL"}): {r1.get("result")}; {r1.get("why") or ""}\n'
                          + author._feedback(got[0] if got else '') for nm, r1, got, hy, _d in tried)
         history.append(f'## attempt {n}\n```python\n{code[:7000]}\n```\nWhat the lab phone did:\n{fb[:14000]}')
+        try:                                          # 3 Nov: a harness step that keeps failing is repaired + tested
+            from . import harnessfix as _hf
+            if _hf.maybe_repair(worker, ref, k8):
+                history.append('## the lab harness was repaired just now (a harness function that kept failing was fixed '
+                               'and tested on the phone): call the harness helpers again as they are meant to be used')
+        except Exception as e_:
+            worker.log(ref, f'harness self-fix skipped: {str(e_)[:160]}')
     author._finish(worker, ref, case, attempts, None)
     worker.log(ref, f'tap repro: no real-tap repro in {(dt.datetime.now() - t0).total_seconds() / 60:.0f} min')
     return None

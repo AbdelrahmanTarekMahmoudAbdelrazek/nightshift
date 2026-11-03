@@ -77,7 +77,83 @@ def _module_commit(src, sm, log=print):
     return sha
 
 
-def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None):
+
+def _compat(d, sm, log=print):
+    """Release Kotlin in the lab app: React Native stand-ins, missing namespace (ns/labcompat.py). Lab copy only."""
+    try:
+        from . import labcompat
+        for c in labcompat.apply(d, sm, log):
+            log(f'lab build: {c}')
+    except Exception as e:
+        log(f'lab build: {sm}: compatibility step failed ({str(e)[:120]})')
+
+SHARED_LIBS_SKIP = {'app'}
+# 3 Nov (2nd build check): taking EVERY shared library's sources from the app broke colorpicker (ColorPickerView.java:74
+# cannot find symbol: the app's copy needs things the lab's own colorpicker build.gradle does not give it). Only the
+# libraries the release Kotlin is known to need from the app are synced; the rest keep the engine commit's copy.
+APP_LIBS = {'videotrimmerlib'}
+
+
+def _app_libs(wt, app, log=print):
+    """3 Nov: the small Android libraries both repos carry (videotrimmerlib, colorpicker, crop, ...) are taken from the
+    SHIPPED app (myzesty_mobile android/<lib> at the app commit), not from video_gles3jni at the engine commit: the release
+    Kotlin was built against the app's copies (gallerypicker needs videotrimmerlib's toMediaUri, which video_gles3jni only
+    got on 21 Oct). Lab folder only; files are rewritten only when they differ (Gradle keeps its cache)."""
+    import filecmp
+    import tarfile
+    import tempfile
+    repo, commit = app
+    names = subprocess.run(['git', '-C', repo, 'ls-tree', '-d', '--name-only', commit, 'android/'], capture_output=True,
+                           text=True).stdout.split()
+    appdirs = {os.path.basename(n).lower(): os.path.basename(n) for n in names}
+    done = []
+    for d in sorted(os.listdir(wt)):
+        if d.lower() not in APP_LIBS and os.path.isdir(os.path.join(wt, d, 'src')) and d not in SHARED_LIBS_SKIP:
+            # undo files an earlier (all-libraries) sync left behind: tracked ones are reset by pristine(), extra ones here
+            subprocess.run(['git', '-C', wt, 'clean', '-fdq', '--', f'{d}/src'], capture_output=True)
+            continue
+        if d in SHARED_LIBS_SKIP or d.lower() not in appdirs or not os.path.isdir(os.path.join(wt, d)) \
+                or not any(os.path.exists(os.path.join(wt, d, g)) for g in ('build.gradle', 'build.gradle.kts')) \
+                or os.path.exists(os.path.join(wt, d, '.git')):
+            continue
+        src = f'android/{appdirs[d.lower()]}'
+        tmp = tempfile.mkdtemp(prefix='nslib_')
+        try:
+            arc = subprocess.run(['git', '-C', repo, 'archive', '--format=tar', commit, src], capture_output=True, timeout=300)
+            if arc.returncode:
+                continue
+            import io
+            tarfile.open(fileobj=io.BytesIO(arc.stdout)).extractall(tmp)
+            # only the SOURCES (src/): the lab keeps its own build.gradle files, which its Gradle plugin understands
+            # (3 Nov: the app's older colorpicker build.gradle has no namespace -> 'problem configuring :colorpicker')
+            new_root, old_root = os.path.join(tmp, src, 'src'), os.path.join(wt, d, 'src')
+            if not os.path.isdir(new_root):
+                continue
+            changed = 0
+            for root, _ds, files in os.walk(new_root):
+                for f in files:
+                    a = os.path.join(root, f)
+                    b = os.path.join(old_root, os.path.relpath(a, new_root))
+                    if not os.path.exists(b) or not filecmp.cmp(a, b, shallow=False):
+                        os.makedirs(os.path.dirname(b), exist_ok=True)
+                        shutil.copy2(a, b)
+                        changed += 1
+            for root, _ds, files in os.walk(old_root):
+                if os.sep + 'build' + os.sep in root + os.sep:
+                    continue
+                for f in files:
+                    b = os.path.join(root, f)
+                    if not os.path.exists(os.path.join(new_root, os.path.relpath(b, old_root))):
+                        os.remove(b)
+                        changed += 1
+            done.append(f'{d}{" (" + str(changed) + " files)" if changed else ""}')
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    if done:
+        log(f'lab build: shared Android library sources from the shipped app {commit[:10]}: {", ".join(done)}')
+
+
+def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None):
     """Create/refresh the lab folder for `branch` (default lab.base_branch) at its latest commit. -> (path, sha).
     2 Nov, the release recipe (ns/recipe.py): sha = the engine commit the users' build was made from (whole tree) and
     pins = {module: commit} the shipped app used; the folder is ~/.nightshift_lab/rel_<name>."""
@@ -109,6 +185,11 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None):
     else:
         _sh(['git', '-C', wt, '-c', 'core.autocrlf=false', 'checkout', '-q', '--detach', '-f', sha], check=False)
     pristine(wt, sha)
+    if app:
+        try:
+            _app_libs(wt, app, log)
+        except Exception as e:
+            log(f'lab build: shared libraries from the shipped app skipped ({str(e)[:120]})')
     mark = os.path.join(wt, '.nightshift_submodules.json')
     done = json.load(open(mark)) if os.path.exists(mark) else {}
     for _pin, sm in gitlinks(sha):
@@ -133,7 +214,10 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None):
             else:
                 log(f'lab build: {sm} commit {pin[:8]} of the release is not reachable; using the newest sprint')
         want = want or _module_commit(src, sm, log)
+        pinned_here = bool(pin) and want == pin
         if done.get(sm) == want and os.path.isdir(d) and os.listdir(d):
+            if pinned_here:
+                _compat(d, sm, log)
             continue
         if os.path.islink(d):
             os.unlink(d)
@@ -147,6 +231,8 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None):
         _sh(['git', '-C', src, '-c', 'core.autocrlf=false', 'worktree', 'add', '--detach', '--force', d, want])
         done[sm] = want
         json.dump(done, open(mark, 'w'), indent=1)
+        if pinned_here:
+            _compat(d, sm, log)
     ex = os.path.join(config.REPO, 'extra')
     for name in sorted(os.listdir(ex)) if os.path.isdir(ex) else []:   # untracked third-party libraries (libpng, ...)
         src, d = os.path.join(ex, name), os.path.join(wt, 'extra', name)
@@ -178,12 +264,12 @@ def gradle_props(wt):
     return out
 
 
-def activate(cfg, branch=None, log=print, sha=None, pins=None, name=None):
+def activate(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None):
     """Point config.LAB at the lab folder for this job. -> (path, sha) or (REPO, '') when off."""
     if not enabled(cfg):
         config.LAB = config.REPO
         return config.REPO, ''
-    wt, sha = ensure(cfg, branch, log, sha=sha, pins=pins, name=name)
+    wt, sha = ensure(cfg, branch, log, sha=sha, pins=pins, name=name, app=app)
     config.LAB = wt
     return wt, sha
 

@@ -100,7 +100,12 @@ def main():
     st_src, st_out = os.path.join(REPO, 'tools', 'stress'), os.path.join(out, 'tools', 'stress')
     for f in os.listdir(st_src):
         if STRESS_KEEP.match(f):
-            put(os.path.join(st_src, f), os.path.join(st_out, f))
+            src_ = os.path.join(st_src, f)
+            rv = os.path.join(HERE, 'out', 'harness', 'zesty.reviewed.py')
+            if f == 'zesty.py' and os.path.exists(rv):   # 3 Nov: unreviewed harness self-fixes stay on the lab Mac
+                print('kit: zesty.py = the last REVIEWED version (pending harness self-fixes: python3 tools/nightshift/ns/harnessfix.py list)')
+                src_ = rv
+            put(src_, os.path.join(st_out, f))
     if os.path.isdir(os.path.join(st_src, 'auto')):
         copytree(os.path.join(st_src, 'auto'), os.path.join(st_out, 'auto'))
     dbg = os.path.join(REPO, 'app', 'src', 'debug')    # the lab's remote control inside debug builds (LabControl)

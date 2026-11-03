@@ -754,9 +754,20 @@ def chaos_short(ed, r):
 # Night Shift's repro author writes one file per crash; each file is plain Python that uses the helpers above and
 # registers its scenarios with @scenario('nightshift', 'auto'). A file that fails to load is skipped, never fatal.
 import glob as _glob
-for _f in sorted(_glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'auto', '*.py'))):
+# 2 Nov: each file runs in ITS OWN namespace (a copy of this module's globals). In one shared namespace a helper of
+# ge6a5791_tap.py (loaded later, same name) replaced 2fe03193's own helper, so 2fe03193's recipes opened ge6a5791's
+# project. Scenarios still register in the shared SCENARIOS; names defined further down this file are added at the end.
+_AUTO_NS = []
+for _f in sorted(_glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'auto', '*.py')),
+                 key=lambda p: (not os.path.basename(p).startswith(('_', 'fx_')), p)):
     try:
-        exec(compile(open(_f, encoding='utf-8').read(), _f, 'exec'), globals())
+        if os.path.basename(_f).startswith(('_', 'fx_')):   # shared libraries (_live_agent.py) and fixture builders
+            exec(compile(open(_f, encoding='utf-8').read(), _f, 'exec'), globals())   # (used by other files): shared
+            continue
+        _ns = dict(globals())
+        _ns['__file__'] = _f
+        _AUTO_NS.append(_ns)
+        exec(compile(open(_f, encoding='utf-8').read(), _f, 'exec'), _ns)
     except Exception as _e:
         print(f'[scenarios] skipped {os.path.basename(_f)}: {type(_e).__name__}: {_e}', file=sys.stderr)
 
@@ -1609,6 +1620,10 @@ def main():
             refresh_reports(out_dir, rows, meta, anrsan is not False and not args.no_findings, quiet=False)
             print(f'\nREPORT: {os.path.join(out_dir, "REPORT.md")}')
 
+
+for _ns in _AUTO_NS:                                   # module names defined after the auto files were loaded
+    for _k, _v in list(globals().items()):
+        _ns.setdefault(_k, _v)
 
 if __name__ == '__main__':
     main()

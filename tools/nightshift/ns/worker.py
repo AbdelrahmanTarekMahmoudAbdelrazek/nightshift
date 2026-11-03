@@ -1042,6 +1042,8 @@ class Worker:
             try:
                 self._replay = replay.run(self, ref, case, merged)
             except Exception as e:
+                if getattr(self, 'cancelled', False) or 'cancelled from the board' in str(e):
+                    raise                                 # 3 Nov: a Cancel stops the job, not just this step
                 self.log(ref, f'engine replay failed: {str(e)[:200]}; the UI repro author goes on as usual')
         self._early_patch = None
         if self._replay and self._turbo().get('fix_on_replay'):
@@ -1080,6 +1082,8 @@ class Worker:
             except Exception as e:
                 if 'cancelled from the board' in str(e):
                     raise
+                if getattr(self, 'cancelled', False) or 'cancelled from the board' in str(e):
+                    raise                                 # 3 Nov: a Cancel stops the job, not just this step
                 self.log(ref, f'tap repro failed: {str(e)[:200]}; the live agent takes over')
                 hit = None
             if hit:
@@ -2116,6 +2120,11 @@ class Worker:
                 runs += 1
                 if r.get('status') == 'ERROR' or r.get('verdict') in ('UI STUCK', 'ERROR'):
                     errors.append((r.get('detail') or r.get('verdict') or 'automation error')[:160])
+                    try:                              # 3 Nov: harness failures are counted for its self-repair
+                        from . import harnessfix as _hf
+                        _hf.note(r.get('detail') or '', r.get('dir') or '')
+                    except Exception:
+                        pass
                 if not r['failed']:
                     continue
                 fails += 1
@@ -2821,7 +2830,8 @@ class Worker:
                                                           if k in ('android-video-editor-module', 'java-common', 'gallerypicker')) + ')'
                                          if rc_['pins'] else ''))
                         lw, ls = labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l), sha=rc_['engine'],
-                                                  pins=rc_['pins'], name=rc_['vc'])
+                                                  pins=rc_['pins'], name=rc_['vc'],
+                                                  app=(rc_['app_repo'], rc_['app_commit']) if rc_.get('app_repo') else None)
                         self._recipe, self._recipe_case = rc_, case
                     else:
                         lw, ls = labtree.activate(self.cfg, base, log=lambda l: self.log(ref, l))

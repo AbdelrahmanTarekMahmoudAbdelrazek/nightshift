@@ -567,12 +567,18 @@ def verify(worker, ref, case, patch):
                     break
                 _t.sleep(3)
         for chunk in range(6):
-            if total['runs'] >= need:
+            # 3 Nov: a run that broke on SETUP (automation error, no crash) is replaced by another run, up to twice the
+            # planned number in total: 2fe03193's 3rd run broke on a polluted test project and the fix was dropped
+            good = total['runs'] - total['errors']
+            if good >= need or total['runs'] >= 2 * need:
                 break
+            if chunk and total['errors']:
+                worker.log(ref, f"verify: {total['errors']} run(s) broke on setup before the crash moment (no crash); "
+                                f"running {need - good} more to replace them")
             before = set(glob.glob(os.path.join(rdir, '*')))
             st = dict(step)
             # first 2 runs on their own: a fix that still crashes is rejected ~12 min sooner; a clean fix gets every run
-            want = min(2, need - total['runs']) if chunk == 0 else need - total['runs']
+            want = min(2, need - good) if chunk == 0 else min(need - good, 2 * need - total['runs'])
             if st.get('cmd'):
                 st['cmd'] = re.sub(r'--tries \d+', f"--tries {want}", st['cmd'])
                 st.setdefault('name', 'repro script')
@@ -621,7 +627,23 @@ def verify(worker, ref, case, patch):
         worker.log(ref, f'verify: {rescued} run(s) ended in an automation error after the fix\'s guard ran with no crash; counted as clean')
         total['errors'] = max(0, total['errors'] - rescued)
     if total['runs'] - total['errors'] < need:
-        return False, f"inconclusive: the automation reached the trigger in only {total['runs'] - total['errors']}/{need} runs", total
+        # 3 Nov (2fe03193 round 1): 2 runs reached the crash moment and stayed alive, the 3rd broke on SETUP (a lab
+        # problem, before the crash moment, no crash) -> it was called 'inconclusive' and the fix was dropped.
+        # A run that never reached the crash moment proves nothing either way; what counts is how many runs DID reach
+        # it, and whether that is enough given how often the unfixed build crashed there (reproRate). Enough = the
+        # chance that an unfixed build survives all of them is <= 10% (90% confidence), and at least 2 runs.
+        clean = total['runs'] - total['errors']
+        m_ = re.match(r'\s*(\d+)\s*/\s*(\d+)', str(case.get('reproRate') or ''))
+        p_hit = ((int(m_.group(1)) + 1) / (int(m_.group(2)) + 2)) if m_ else 0.5   # Laplace: 1/1 -> 0.67, 2/2 -> 0.75
+        chance = (1 - p_hit) ** clean if clean else 1.0
+        if clean >= 2 and chance <= 0.10 and not total['fails']:
+            worker.log(ref, f"verify: {clean}/{total['runs']} runs reached the crash moment and stayed alive; the other "
+                            f"{total['errors']} broke on setup before it (no crash). The unfixed build crashed in "
+                            f"{case.get('reproRate')} runs, so {clean} clean runs leave a {chance:.0%} chance of luck: counted as verified")
+            need = clean
+        else:
+            return False, (f"inconclusive: only {clean}/{total['runs']} runs reached the crash moment (the rest broke on setup)"
+                           + (f"; {clean} clean run(s) still leave a {chance:.0%} chance of luck" if clean else '')), total
     hits = _guard_hits(patch, new_dirs)               # the fix's own guard log fired: the crash moment came and was handled
     if hits:
         n_runs, sample = hits
@@ -686,7 +708,18 @@ def _guard_runs_without_crash(patch, dirs):
                 pats.append(re.compile('.*'.join(parts)))
     n = 0
     for d in dirs:
+        # 3 Nov: only runs that ENDED IN AN ERROR can be rescued. Before, PASS runs with the guard line were counted too
+        # and subtracted from the errors (uT9pSFBL said '6/6 clean' for 3 phone PASS + 3 emulator setup errors).
+        st = {}
+        try:
+            import csv
+            for row in csv.DictReader(open(os.path.join(d, 'summary.csv'), errors='replace')):
+                st[os.path.basename((row.get('dir') or '').rstrip('/'))] = (row.get('status') or '').upper()
+        except Exception:
+            pass
         for sub in sorted(glob.glob(os.path.join(d, '*'))):
+            if not os.path.isdir(sub) or st.get(os.path.basename(sub), 'ERROR') != 'ERROR':
+                continue
             g = crash = False
             for lf in glob.glob(os.path.join(sub, 'logcat.txt*')):
                 op = gzip.open if lf.endswith('.gz') else open

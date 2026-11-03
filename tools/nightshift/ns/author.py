@@ -312,11 +312,11 @@ def start_level(ctx):
     # has it, so levels 2-4 spent an hour on runs that could not crash. Such a condition is forced, not waited for:
     # start at the hook level (a hook that sets exactly that value; the run counts as hook-assisted).
     a = ctx.get('analysis') or {}
-    txt = ' '.join(str(a.get(k) or '') for k in ('root_cause', 'cause', 'summary', 'trigger', 'mechanism', 'why')).lower()
-    if not txt.strip():
-        txt = json.dumps(a, default=str)[:20000].lower()
+    txt = json.dumps(a, default=str)[:60000].lower()          # every part: summary, hypotheses, evidence, fix direction
+    # 2 Nov: the board's analysis said "`active` are left unset by the no-audio early return" (not "uninitialised")
     m = re.search(r'uninitiali[sz]ed|no (?:starting|initial) value|not initiali[sz]ed|missing from the init(?:ialiser|ializer)? list|'
-                  r'indeterminate value|garbage value|leftover (?:memory|value)|undefined value|whatever (?:was|is) in memory', txt)
+                  r'indeterminate value|garbage value|leftover (?:memory|value)|undefined value|whatever (?:was|is) in memory|'
+                  r'left unset|never (?:set|initiali[sz]ed)|(?:member|flag|field)s? (?:is |are )?(?:left )?unset', txt)
     if m:
         return (5, f'the root cause depends on an uninitialised value ("{m.group(0)}"): leftover memory decides it, '
                    f'which a lab phone cannot be made to have naturally; a hook forces it (hook-assisted)')
@@ -835,6 +835,12 @@ def diagnose(worker, ref, ctx, cps, k8, name, tried_names, deny=None, crashed=Fa
         pass
     if not crashed and _add_fact(d.get('lab_fact')):
         worker.log(ref, f'repro author: learned about the lab (kept for every crash): {str(d["lab_fact"])[:200]}')
+    if not crashed:
+        try:                                      # 3 Nov: a harness step that keeps failing is repaired, tested, kept
+            from . import harnessfix as _hf          # for review (ns/harnessfix.py)
+            _hf.maybe_repair(worker, ref, k8)
+        except Exception as e_:
+            worker.log(ref, f'harness self-fix skipped: {str(e_)[:160]}')
     return d
 
 
@@ -1237,6 +1243,7 @@ def run(worker, ref, case, merged, tried=None):
                         'author': True, 'stat_runs': int(res.get('runs') or 1), 'stat_hits': int(res.get('hits') or 1)}
                 if hook_file:
                     step['hook_patch'] = res['hook_patch']
+                step['scenario'] = freeze_registered(path, win, k8)
                 register(key, step, expect)
                 worker.log(ref, f'repro author: registered {win} for this crash; the next Reproduce starts from it')
                 return _finish(worker, ref, case, attempts, res)
@@ -1331,3 +1338,21 @@ def hook_catalog():
             elif not ln.startswith('+//'):
                 cur = None
     return '\n'.join('\n'.join(x) for x in out)
+
+
+def freeze_registered(path, scenario, k8):
+    """3 Nov: a registered repro must keep its exact code. Later runs rotate auto/<k8>.py away (2fe03193: 'no scenarios
+    match' for ns_2fe03193_l3_2_b) or re-use the same scenario names in auto/<k8>_tap.py. The file is frozen as
+    auto/<k8>_reg<time>.py with every scenario renamed <name>_r<time> (each auto file has its own namespace, so its
+    helpers stay its own). -> the frozen scenario name (or the original one if freezing failed)."""
+    try:
+        ts = dt.datetime.now().strftime('%m%d%H%M%S')
+        src = open(path, encoding='utf-8').read()
+        if f'def {scenario}(' not in src:
+            return scenario
+        frozen = re.sub(r'(?m)^def ((?:ns|tf)_\w+)\(', lambda m: f'def {m.group(1)}_r{ts}(', src)
+        open(os.path.join(AUTO, f'{k8}_reg{ts}.py'), 'w', encoding='utf-8').write(
+            f'# Night Shift: frozen copy of the registered repro {scenario} ({ts}); later runs cannot change it\n' + frozen)
+        return f'{scenario}_r{ts}'
+    except Exception:
+        return scenario
