@@ -125,10 +125,10 @@ def _events(iid):
     A card id ('<issue>~<fp8>', or a plain id of a split issue) returns that card's events only."""
     from . import groups
     card, iid = iid, groups.issue_of(iid)
-    p = os.path.join(os.path.dirname(OUT), 'raw', iid, 'events.json')
-    if not os.path.exists(p):
+    raws = _raw_list(iid)
+    if not raws:
         return []
-    evs = [cl.summarise_event(e) for e in json.load(open(p))]
+    evs = [cl.summarise_event(e) for e in raws]
     for e in evs:
         try:
             symbolize.symbolize_frames(e['frames'], e.get('version_code'), NATIVE, (e.get('version') or '').split(' ')[0])
@@ -137,11 +137,27 @@ def _events(iid):
     return groups.card_events(card, evs, NATIVE)[0]
 
 
+def _raw_list(iid):
+    """Raw events of an issue: the scoped pull (events.json) + the paged one (events_all.json, written when a card's
+    events were not among the newest), each event once. 9 Nov: the plain id of a split ANR lives in the paged file."""
+    out, seen = [], set()
+    for fn in ('events.json', 'events_all.json'):
+        p = os.path.join(os.path.dirname(OUT), 'raw', iid, fn)
+        try:
+            evs = json.load(open(p)) if os.path.exists(p) else []
+        except Exception:
+            evs = []
+        for e in evs:
+            k = e.get('name') or e.get('eventId') or json.dumps(e.get('eventTime'))
+            if k not in seen:
+                seen.add(k); out.append(e)
+    return out
+
+
 def _raw_event(iid, summ):
     """The raw Crashlytics event (all threads) behind a summarised one."""
     from . import groups
-    p = os.path.join(os.path.dirname(OUT), 'raw', groups.issue_of(iid), 'events.json')
-    for e in json.load(open(p)) if os.path.exists(p) else []:
+    for e in _raw_list(groups.issue_of(iid)):
         if (e.get('eventTime') or e.get('receivedTime')) == summ.get('time'):
             return e
     return None
@@ -227,6 +243,17 @@ def evidence(db, cfg, m, log):
             c = threads.wait_chain(threads.from_play(pl['stack']))
             if c:
                 chains.append({'source': 'google play sample', **c})
+        if fb and fb.get('id'):                      # 9 Nov: this card = one BLOCKER (ns/anrchain.py); say so
+            bl = [e.get('anr') for e in _events(fb['id']) if e.get('anr')]
+            if bl:
+                b0 = bl[0]
+                ev['anr_blocker'] = {
+                    'card': b0.get('title'), 'family': b0.get('familyTitle'), 'family_fix': b0.get('familyFix'),
+                    'samples': [{k: b.get(k) for k in ('victim', 'thread', 'mode', 'title', 'during', 'inferred', 'chain')} for b in bl[:6]],
+                    'note': ('Night Shift groups ANRs by where the BLOCKER thread is stuck, not by the main thread. The main-thread '
+                             'call (victim) is only how the hang surfaced. Explain why the blocker is stuck there (the root cause and '
+                             'fix live there), and name the family-level fix separately. inferred=true means the thread main waits '
+                             'on was parked and the busiest engine thread was taken as the blocker: check that link in the code.')}
         if chains:
             ends = Counter(c['end'] for c in chains)
             ev['wait_chains'] = {'per_sample': chains[:6], 'agreement': {k: f'{v}/{len(chains)} samples' for k, v in ends.most_common()},
@@ -367,6 +394,9 @@ def family_key(m):
     """Same crashing function in our engine = same problem, even when Crashlytics and Play split it into several
     clusters (different build, offset, inlined caller, or a title naming only libc/libc++). Key: kind + the first
     engine function of the title, else of the top frames (Firebase, then Play)."""
+    a = m.get('anr') or {}
+    if a.get('key'):                                 # 9 Nov: an ANR is the same problem only with the same BLOCKER; the
+        return ('ANR', a['key'])                     # main thread's frame (Message::GetResult) is shared by different bugs
     cands = [m.get('title')] + list((m.get('fb') or {}).get('top') or [])[:8] + list((m.get('play') or {}).get('top') or [])[:8]
     for t in cands:
         fn = _engine_fn(t)
@@ -670,8 +700,21 @@ def link_families(db, log=print, rows=None):
 
 def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
     from firebase_admin import firestore
-    rows, fams, followers = link_families(db, log=log)
+    # 17 Nov: the board-wide count ("5 report clusters are part of a bigger problem") read as if THIS crash had been
+    # linked to another one. With `only`, say what happened to this crash; the board-wide count is not printed.
+    rows, fams, followers = link_families(db, log=(lambda t: None) if only else log)
     byid = {r['id']: r for r in rows}
+    if only:
+        mine = [p + x for x in only for p in ('', 'm-', 'm-play-')]
+        for i in mine:
+            if i in followers:
+                prim = next(ids[0] for ids in fams.values() if i in ids)
+                log(f"analysis: {i[:30]} is one more report of {prim[:30]} (same {'blocker' if (byid[i].get('anr') or {}).get('key') else 'crashing engine function'}); read together with it")
+            elif any(i in ids and len(ids) > 1 for ids in fams.values()):
+                n = len(next(ids for ids in fams.values() if i in ids)) - 1
+                log(f"analysis: {i[:30]} is the main report of its problem; {n} other report cluster(s) of it are read together with it")
+        if not any(i in followers or any(i in ids and len(ids) > 1 for ids in fams.values()) for i in mine):
+            log('analysis: this crash is its own problem (not linked to any other report)')
     rows = [r for r in rows if r['id'] not in followers]
     if only:                                         # one crash only (Analyse button / tests): no other problem is touched
         ids = {p + x for x in only for p in ('', 'm-', 'm-play-')}      # this crash's own records, not linked ones
@@ -726,7 +769,7 @@ def run_all(db, cfg, log=print, limit=None, force=False, stop=None, only=None):
                 log(f'  [{i}/{len(todo)}] {m.get("title", "")[:70]}: could not save ({str(e)[:150]})')
                 return 'failed'
             if rec and (m.get('fb') or {}).get('id'):                 # the Cases tab shows the same analysis
-                keep = {k: rec.get(k) for k in ('frames', 'code', 'breadcrumbs', 'verdict', 'confidence', 'reasons', 'title', 'subtitle',
+                keep = {k: rec.get(k) for k in ('frames', 'code', 'breadcrumbs', 'verdict', 'confidence', 'reasons', 'title', 'subtitle', 'anr',
                                                  'signal', 'field_fingerprint', 'stack_groups', 'scenarios', 'repro_plan', 'android', 'models')}
                 # 29 Oct: a re-pull that found no field stack must never wipe the stack the case already has
                 for _k in ('frames', 'code', 'breadcrumbs', 'stack_groups'):

@@ -21,6 +21,21 @@ the lab dump must contain every frame listed under "A run counts ONLY if".
 debug.zesty.hook.<name>, switched on by the scenario and off in a finally). Use only what the level allows, so the
 board can say honestly whether the crash happens naturally.
 
+## Lab setup for editor flows (9 Nov, learned the hard way)
+- Do NOT build the project from "first video in the gallery": on the lab phones that clip differs per phone and can be
+  a cached transcode whose length fails the 10-99 s gate. Push a known-length clip with `ed.dev.fresh_video(duration_s=30)`
+  (a NEW path, so no cache hit) and use that one.
+- Do NOT rely on the wizard's "Full Editor" button: on these builds it leaves an empty control area. Open the draft
+  from My Projects to get the full editor.
+- An ANR whose blocker is stuck INSIDE a system call (MediaCodec never answering, binder) is not made by taps or timing
+  on a healthy phone: at level 5 write a hook that makes exactly that call never return (e.g. the decoder's
+  dequeueInputBuffer path blocks while debug.zesty.hook.<name> is set), then do the field user's steps.
+  Write such a hook as a WRAPPER of the system call at the top of the file (after the #includes): a static
+  `ns_hook_<call>(...)` that stalls while the property is set and otherwise calls the real function, then
+  `#define <call> ns_hook_<call>`. Never put the stall inside the calling function's body: a fix moves or wraps that
+  call (a codec thread, a helper), the hook then has no place in the fixed file and the fix cannot be tested.
+  A wrapper stalls wherever the call runs, so it tests the fix the way the field device behaved.
+
 ## Rules
 - Use only `ed` (Editor), `ed.dev` (Device), `ed.ui`, `T` tags, helpers from scenarios.py, `time`, and `r` (random.Random).
 - Never catch AppFailure: the runner records the crash/ANR and its dumps.
@@ -30,3 +45,10 @@ board can say honestly whether the crash happens naturally.
 
 ## Screens Behind Flows The Lab Cannot Replay (29 Oct)
 when the field user reached the crashing screen through a first-run / onboarding / login / paywall / notification / share-intent flow, do not tap through that flow. Grep the app for the code that starts that screen (startActivity / Intent(... , <Screen>::class.java) / putExtra) and open it directly with ed.start_activity('<full.Activity.Class>', extras='--es key "value" --ei count 3', expect_crash=False) using the SAME extras that code passes (raw am extras: --es string, --ei int, --ez boolean), then do the field's taps from there. It works for non-exported screens in the full-app lab build (lab door, no root). If one run fails to reach a screen by taps because of such a flow, switch to the direct launch in the next recipe; never repeat the same tap path.
+
+## Never force a screen open (12 Nov, ff832bfc UCropActivity)
+A hook may delay, hold or force a step inside code the app really runs. It must never change WHICH screen or class
+Android opens (Instrumentation.newActivity, mInstrumentation, setClassName/setComponent to another screen). If the
+crashing screen is not exported and no app code starts it, no user can reach it: say so ("no user path") instead of
+forcing it. Such crashes usually come from Google's automated testing of the Play release, which opens every
+registered screen cold.

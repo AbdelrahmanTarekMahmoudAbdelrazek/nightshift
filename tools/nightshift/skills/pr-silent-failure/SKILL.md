@@ -30,3 +30,23 @@ ONLY a ```json block:
 "evidence": "short code quote"}]}
 Severity: blocker = will crash/ANR/corrupt data/leak in normal use; major = likely bug or real cost; minor = small risk;
 suggestion = better way, optional. An empty findings list is a fine answer.
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. Check every claim about what the app does in THOSE copies (file:line);
+if they already handle it, or the trigger no longer exists there, do not report it. Merge order ("merged alone it
+breaks", "the sprint / an older Player.kt lacks these natives") is never a finding.
+
+MUST-CHECK LISTS (13 Nov, #3226: both bugs below were missed by one run and found by another)
+A. Work on another thread (a worker, a decoder, a walk, a callback): list everything end(), begin(), cancel, close,
+   delete and reset set while that work runs (sizes to 0, buffers cleared, ids changed, objects freed). For each,
+   check whether the work USES it after its slow step (decode, inference, I/O, wait). A "still current?" check made
+   only BEFORE the slow step does not protect what comes after it. Also check an exception in that work: an uncaught
+   one on a std::thread aborts the app.
+B. Any new per-clip state (tracks, masks, caches, effects, ids): follow it through delete -> Undo (detach / restore),
+   split, duplicate and replace, on the native side AND in the Kotlin code (who calls restore, what is re-sent after
+   it). State shared by two clips (copied ids) must not be wiped by one of them.
+
+SEVERITY BY REACH (13 Nov): major/blocker only when a NORMAL user action reaches the problem (a tap, undo, split,
+delete, export, reopening a draft, a slow phone). When it needs a rare failure first (a model file that will not
+open, a GPU and a CPU failure together, a refused job after another bug) or a race window of a few milliseconds, rate
+it minor and say what has to go wrong first. Never lower a crash a user can reach by normal use.

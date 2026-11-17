@@ -36,3 +36,8 @@ Work that runs once per INCOMING ITEM (each mask, frame, message, packet, progre
 thread is per-frame cost, even when the code or a comment says "once per bake/setup". Find what calls the expensive
 function and how often (Grep its callers): if a stream can call it many times per second, estimate the work per call
 (allocations, full-image passes such as distance transforms, uploads) and report it as a finding (unmeasured).
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. Check every claim about what the app does in THOSE copies (file:line);
+if they already handle it, or the trigger no longer exists there, do not report it. Merge order ("merged alone it
+breaks", "the sprint / an older Player.kt lacks these natives") is never a finding.

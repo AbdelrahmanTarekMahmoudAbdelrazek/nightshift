@@ -119,6 +119,19 @@ def checkout(pr, log):
         raise RuntimeError(f"worktree for PR {pr['id']} failed: {r.stderr.strip()[:200]}")
     base_ref = pr.get('base') or f"refs/nightshift/base/{pr['id']}"
     mb = _git(['merge-base', base_ref, pr['head']], cwd=gd).stdout.strip()
+    if mb and mb == pr['head']:
+        # 16 Nov (#3226): the PR is already MERGED into its target, so the merge-base is the head itself and the PR's
+        # own changes looked like "already on the base". Use the target as it was just before the merge commit.
+        merges = _git(['rev-list', '--merges', '--ancestry-path', '--reverse', f"{pr['head']}..{base_ref}"], cwd=gd).stdout.split()
+        for m in merges:
+            parents = _git(['rev-list', '--parents', '-n', '1', m], cwd=gd).stdout.split()[1:]
+            if len(parents) >= 2 and parents[1] == pr['head'] or (len(parents) >= 2 and _git(
+                    ['merge-base', '--is-ancestor', pr['head'], parents[1]], cwd=gd).returncode == 0):
+                mb = _git(['merge-base', parents[0], pr['head']], cwd=gd).stdout.strip() or parents[0]
+                pr['_merged_in'] = m
+                log(f"PR #{pr['id']}: already merged into {pr.get('dest', 'its target')} ({m[:10]}): reviewed against "
+                    f"the target before that merge ({mb[:10]})")
+                break
     if mb:                                           # PR changes = uncommitted changes on top of the merge-base, so the
         _git(['reset', '-q', mb], cwd=wt)            # plugins' `git diff` shows exactly this PR (files stay at PR head)
         new = _git(['ls-files', '--others', '--exclude-standard'], cwd=wt).stdout.split()
@@ -482,6 +495,195 @@ ALL_USERS = re.compile(r'never use|without (using|the feature)|every (user|clip|
                        r'plain clip|not using|feature (is )?off|unrelated|regress', re.I)
 
 
+MERGE_ONLY_A = re.compile(r'merg\w*\s+(it\s+)?(alone|first|before|order|together)|merge\s+order', re.I)
+MERGE_ONLY_B = re.compile(r'sprint\d+|older\s+Player\.kt|current\s+Player\.kt|Player\.kt\s+(on|of)\s+the\s+sprint', re.I)
+MERGE_ONLY_C = re.compile(r'RegisterNatives|JNI_OnLoad|declar\w+|natives?\b|external\s+fun', re.I)
+
+
+class _MergeOnly:
+    """A finding that is only about shipping order: "merge alone/first", or the sprint's / an older Player.kt
+    lacking the PR's natives (RegisterNatives / JNI_OnLoad / declarations). A real startup crash is never matched."""
+    @staticmethod
+    def search(t):
+        return bool(MERGE_ONLY_A.search(t) or (MERGE_ONLY_B.search(t) and MERGE_ONLY_C.search(t)))
+
+
+MERGE_ONLY = _MergeOnly()
+
+
+# ---- 13 Nov: confirmed bugs are never lost between reviews (#3226 lost 2 real majors on a forced re-review) ----
+def _known_path(pr):
+    return os.path.join(OUT, f"{pr['id']}.known.json")
+
+
+def _code_at(pr, head, path, line, n=3):
+    """The lines around path:line at commit head (stripped), or None when the file is not there."""
+    r = _git(['show', f"{head}:{path}"], cwd=pr.get('_gitdir') or config.REPO)
+    if r.returncode:
+        return None
+    L = r.stdout.split('\n')
+    if not (0 < int(line or 0) <= len(L)):
+        return None
+    return '\n'.join(x.strip() for x in L[max(0, int(line) - 1 - n):int(line) + n])
+
+
+def _words(t):
+    return {w for w in re.findall(r'[a-z_]{4,}', str(t or '').lower())} - {'when', 'that', 'with', 'this', 'still', 'what',
+                                                                           'from', 'they', 'into', 'gets', 'only'}
+
+
+def _same_bug(a, b):
+    """Same file within 15 lines and 2 shared title words, or (anchored in different files: the same bug seen from the
+    native call and from the Kotlin side) 4 shared title words. #3226: 'Delete during a running walk ... Undo' at
+    RemoveBgMaskTrackBuilder.cpp and 'Undo after deleting a clip mid-walk' at VideoEngine.cpp were listed twice."""
+    common = len(_words(a.get('title')) & _words(b.get('title')))
+    fa, fb = str(a.get('file') or '').split('/')[-1], str(b.get('file') or '').split('/')[-1]
+    if fa and fa == fb and abs(int(a.get('line') or 0) - int(b.get('line') or 0)) <= 15:
+        return common >= 2
+    return common >= 4
+
+
+def _relocate(pr, head, k):
+    """New commits move code: find the remembered code block anywhere in the file at `head`. -> new line or None"""
+    code = k.get('code') or ''
+    lines = code.split('\n')
+    if not lines:
+        return None
+    r = _git(['show', f"{head}:{k.get('path') or k.get('file')}"], cwd=pr.get('_gitdir') or config.REPO)
+    if r.returncode:
+        return None
+    L = [x.strip() for x in r.stdout.split('\n')]
+    n = len(lines)
+    hits = [i for i in range(len(L) - n + 1) if L[i:i + n] == lines]
+    if len(hits) != 1:
+        return None
+    before = int(k.get('line') or 0) - max(0, int(k.get('line') or 0) - 1 - 3)   # where the cited line sits in the block
+    return hits[0] + before
+
+
+def _fn_of(pr, head, path, line):
+    """(function name, whitespace-normalised body) of the function holding path:line at head, or ('', '')."""
+    from . import stillopen as _so
+    src = _so.GitSrc(pr.get('_gitdir') or config.REPO, head)
+    fn = ''
+    if str(path).endswith(('.cpp', '.cc', '.c', '.h', '.hpp')):
+        # C++: the nearest definition line above at column 0 (a signature may span lines; prvisual's scan needs ')')
+        L = src.lines(src.path(path)) if src.path(path) else []
+        for i in range(min(int(line or 0), len(L)) - 1, max(-1, int(line or 0) - 800), -1):
+            t = L[i]
+            if t and not t[0].isspace() and '(' in t and not t.rstrip().endswith(';') \
+                    and not t.startswith(('#', '//', '/*', '*', '}', 'static_assert')):
+                m = re.search(r'((?:[A-Za-z_]\w*::)*~?[A-Za-z_]\w*)\s*\(', t)
+                if m and m.group(1).split('::')[-1] not in ('if', 'for', 'while', 'switch', 'return', 'sizeof'):
+                    fn = m.group(1)
+                    break
+    if not fn:
+        try:
+            fn = prvisual.enclosing_function(src, path, int(line or 0))
+        except Exception:
+            fn = ''
+    body = _so.function_body(src, path, fn) if fn else ''
+    return fn, _so._norm(body)
+
+
+def _known_state(pr, k):
+    """'same' when the whole function holding a known bug is unchanged at the PR head (then it is carried by code),
+    'changed' when that function changed (the reviewers re-check it), 'gone' when it no longer exists."""
+    from . import stillopen as _so
+    if not k.get('fn'):
+        h0 = k.get('head') or pr['head']
+        k['fn'], k['fnbody'] = _fn_of(pr, h0, k.get('path') or k.get('file'), k.get('line'))
+        if k['fn']:
+            k['fnline'] = _so.function_line(_so.GitSrc(pr.get('_gitdir') or config.REPO, h0), k.get('path') or k.get('file'), k['fn'])
+    if not k.get('fn') or not k.get('fnbody'):
+        return 'changed'
+    src = _so.GitSrc(pr.get('_gitdir') or config.REPO, pr['head'])
+    now = _so._norm(_so.function_body(src, k.get('path') or k.get('file'), k['fn']))
+    if not now:
+        return 'gone'
+    if now == k['fnbody']:
+        ln = _so.function_line(src, k.get('path') or k.get('file'), k['fn'])
+        if ln and k.get('fnline'):                     # where it is now (the remembered line stays as confirmed)
+            k['_now_line'] = ln + (int(k.get('line') or 0) - int(k['fnline']))
+        return 'same'
+    return 'changed'
+
+
+def known_prompt(pr, log=print):
+    """Text for the hunters: the confirmed bugs whose function CHANGED since (fixed or not: they must look)."""
+    try:
+        known = json.load(open(_known_path(pr)))
+    except (OSError, ValueError):
+        return ''
+    rows = []
+    for k in known.get('bugs') or []:
+        if _known_state(pr, k) == 'changed':
+            rows.append(f"- {k.get('title')} ({str(k.get('file')).split('/')[-1]}, in {k.get('fn') or '?'}): {str(k.get('problem'))[:600]}")
+    if not rows:
+        return ''
+    log(f"PR #{pr['id']}: {len(rows)} confirmed bug(s) in code that changed since: given to the hunters to re-check")
+    return ("## Bugs confirmed in an earlier review of this PR whose code has changed since (code, not a model)\n"
+            "For EACH one, read the current code. If the bug is still there (even moved or reworded), report it again as a "
+            "finding with the current file:line. If the new code fixes it, do not report it.\n" + '\n'.join(rows) + '\n\n')
+
+
+def carry_known(pr, findings, log=print):
+    """Every bug confirmed on this PR before (by a review or by a person, out/pr/<id>.known.json) is checked against the
+    current head: if the code at its line is unchanged since it was confirmed, it is put back as Verified (carried);
+    if that code changed, it is left out and logged (maybe fixed). -> number carried"""
+    try:
+        known = json.load(open(_known_path(pr)))
+    except (OSError, ValueError):
+        return 0
+    n = 0
+    for k in known.get('bugs') or []:
+        if any(_same_bug(k, f) and not f.get('dropped') for f in findings):
+            continue
+        state = _known_state(pr, k)                       # the WHOLE function, not 7 lines (a fix just above them
+        if state != 'same':                              # left those lines identical: the selection crash, #3226)
+            log(f"PR #{pr['id']}: known bug not carried by code, its function {k.get('fn') or '?'} "
+                f"{'is gone' if state == 'gone' else 'changed (the hunters re-checked it)'}: {str(k.get('title'))[:80]}")
+            continue
+        f = {x: k.get(x) for x in ('severity', 'title', 'problem', 'fix', 'file', 'line', 'category')}
+        f['line'] = k.get('_now_line') or f.get('line')
+        f.update(tier='verified', confidence=90, carried=True, category=k.get('category') or 'Confirmed before')
+        f['problem'] = str(f.get('problem') or '') + ' (Confirmed in an earlier review of this PR; the code is unchanged.)'
+        findings.append(f)
+        n += 1
+        log(f"PR #{pr['id']}: carried a confirmed bug (code unchanged): {str(k.get('title'))[:90]}")
+    return n
+
+
+def save_known(pr, findings, log=print):
+    """Add this review's Verified majors/blockers to out/pr/<id>.known.json (with the code at their line)."""
+    p = _known_path(pr)
+    try:
+        known = json.load(open(p))
+    except (OSError, ValueError):
+        known = {'bugs': []}
+    added = 0
+    for f in findings:
+        if f.get('dropped') or f.get('carried') or f.get('tier') != 'verified' or f.get('severity') not in ('blocker', 'major'):
+            continue
+        if any(_same_bug(k, f) for k in known['bugs']):
+            continue
+        path = str(f.get('file') or '')
+        code = _code_at(pr, pr['head'], path, f.get('line'))
+        if code is None:
+            continue
+        fn, body = _fn_of(pr, pr['head'], path, f.get('line'))
+        from . import stillopen as _so
+        fnline = _so.function_line(_so.GitSrc(pr.get('_gitdir') or config.REPO, pr['head']), path, fn) if fn else 0
+        known['bugs'].append({'fn': fn, 'fnbody': body, 'fnline': fnline,
+                              'title': f.get('title'), 'problem': str(f.get('problem') or '')[:2000], 'fix': str(f.get('fix') or '')[:1500],
+                              'severity': f.get('severity'), 'file': path, 'path': path, 'line': f.get('line'),
+                              'category': f.get('category'), 'head': pr['head'], 'code': code, 'source': 'review'})
+        added += 1
+    if added:
+        json.dump(known, open(p, 'w'), indent=1)
+        log(f"PR #{pr['id']}: {added} confirmed bug(s) remembered for the next reviews")
+
+
 def _needs_check(view, findings, log=print, pr=None):
     """29 Oct: a SUSPECTED scenario about users who never use the feature (an off-path regression) must not sit
     unranked and outside the findings: it keeps a severity, is labelled 'needs a check' with what to test, and is
@@ -501,7 +703,9 @@ def _needs_check(view, findings, log=print, pr=None):
         if s.get('id') not in have:
             pf = (s.get('proof') or {}).get('steps') or []
             ref = next((x[0] for x in pf if x and isinstance(x[0], str) and ':' in x[0]), '')
-            findings.append({'severity': s['severity'], 'confidence': 60, 'title': 'Needs a check: ' + str(s.get('title', ''))[:160],
+            # 13 Nov: a question the judges could not settle is not a defect: never a major/blocker (2 of 8 on #3226
+            # were already handled by the Kotlin PR). Shown as a minor "Question", it cannot drive the verdict.
+            findings.append({'severity': 'minor', 'confidence': 40, 'title': 'Question: ' + str(s.get('title', ''))[:160],
                              'problem': s['needsCheck'], 'fix': 'Gate the change on the feature, or test the case above.',
                              'file': ref.rsplit(':', 1)[0], 'line': int(ref.rsplit(':', 1)[1]) if ref.rsplit(':', 1)[-1].isdigit() else 0,
                              'tier': 'suspected', 'needs_check': True, 'scenario': s.get('id'),
@@ -605,10 +809,43 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                         log(f"PR #{pr['id']}: linked {repo} PR #{num} not usable ({str(e)[:140]}); the sprint copy is used")
             except Exception as e:
                 log(f"PR #{pr['id']}: linked PRs skipped ({str(e)[:120]})")
+            ships = []                               # 13 Nov: Kotlin PRs found BY CODE (no description link needed)
+            try:                                     # #3226: reviewed against sprint217, it called #555's handled
+                from . import integration as _iga    # cases bugs (overlay cut-out) and #555's removed toggle reachable
+                importlib.reload(_iga)
+                _jf = 'app/src/main/cpp/JNI/JNI.cpp'
+                _h = _git(['show', f"{pr['head']}:{_jf}"], cwd=pr.get('_gitdir')).stdout
+                _b = _git(['show', f"{mb}:{_jf}"], cwd=pr.get('_gitdir')).stdout
+                _nm, _ky, _rp = _iga.prepare(pr, _h, _b, diff, cfg, log)
+                _ll, _best = _iga.linked_work(pr, _nm + _ky, _rp, log)
+                pr['_linkedKotlin'] = _best
+                have = {L['repo'] for L in linked}
+                for repo, b in _best.items():
+                    m = re.match(r'PR #(\d+)', b.get('label') or '')
+                    if repo in have or b.get('kind') != 'pr' or not m or b.get('used', 0) < max(2, b.get('of', 0) // 3):
+                        continue
+                    try:
+                        lp = bitbucket.get_pr(int(m.group(1)), repo=repo, main=prof['main_repo'])
+                        linked.append(kotlinctx.checkout_linked(repo, lp, log))
+                        ships.append(f"{repo} PR #{m.group(1)} by {lp.get('author', '?')} ({lp.get('source')})")
+                        log(f"PR #{pr['id']}: reviewed against {repo} PR #{m.group(1)} ({lp.get('source')}), found by code "
+                            f"({b['used']}/{b['of']} of this PR's native names)")
+                    except Exception as e:
+                        log(f"PR #{pr['id']}: {repo} PR #{m.group(1)} not usable ({str(e)[:120]}); the sprint copy is used")
+            except Exception as e:
+                log(f"PR #{pr['id']}: Kotlin PR linking skipped ({str(e)[:120]})")
             ktext, kdirs, klabel, kres = kotlinctx.context(cfg, diff, None, log, linked=linked)
+            if ships or [L for L in linked if L.get('linked')]:
+                names = ships or [L['branch'] for L in linked if L.get('linked')]
+                ktext = ('## Ships with (code, not a model)\nThis PR goes together with: ' + '; '.join(names) + '. The Kotlin '
+                         'copies below ARE those PRs, not the sprint: judge every Kotlin-side question against them. Merge '
+                         'order, "the other repo must merge too", "an older Player.kt lacks these natives" and "merged alone '
+                         'it breaks" are NOT findings of this PR: never report them.\n\n') + ktext
+                pr['_shipsWith'] = names
+            unwired = []                             # 4 Nov: native functions this PR adds that nothing calls yet
             try:                                     # JNI table vs Kotlin declarations, head against base (no AI)
                 jf = 'app/src/main/cpp/JNI/JNI.cpp'
-                if jf in files and kdirs:
+                if kdirs and (jf in files or linked):   # 4 Nov: also when only a linked Kotlin PR may declare an orphan
                     jt, jp, jres = kotlinctx.jni_check(_git(['show', f"{pr['head']}:{jf}"], cwd=pr.get('_gitdir')).stdout,
                                                        _git(['show', f"{mb}:{jf}"], cwd=pr.get('_gitdir')).stdout, kdirs, klabel)
                     ktext = jt + ktext
@@ -617,17 +854,58 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                     try:                             # 26 Oct: what the OTHER repos must do, found without the description
                         from . import integration
                         importlib.reload(integration)
+                        integration.prepare(pr, _git(['show', f"{pr['head']}:{jf}"], cwd=pr.get('_gitdir')).stdout,
+                                            _git(['show', f"{mb}:{jf}"], cwd=pr.get('_gitdir')).stdout, diff, cfg, log)
                         il = integration.track(None, pr, _git(['show', f"{pr['head']}:{jf}"], cwd=pr.get('_gitdir')).stdout,
                                                _git(['show', f"{mb}:{jf}"], cwd=pr.get('_gitdir')).stdout, cfg, log)
                         if il:
-                            ktext = ('## Waiting for integration (code, not a model): the Kotlin/Java side of this PR\'s native '
+                            unwired = [x for x in il if 'caller: missing' in x]
+                            if False: ktext = ('## Waiting for integration (code, not a model): the Kotlin/Java side of this PR\'s native '
                                      'contract changes, looked up in every repo (sprint, open PRs, recent branches)\n'
                                      + '\n'.join('- ' + x for x in il) + '\nA change whose other side is missing or wrong '
-                                     'breaks the app if this PR merges alone: report it as a blocker.\n\n') + ktext
+                                     'breaks the app if this PR merges alone: report it as a blocker.\n'
+                                     + ('Nothing calls the new native function(s) yet: users reach this code as soon as the Kotlin '
+                                        'side is wired. Rate every defect by what it does THEN; "no caller today" never lowers '
+                                        'its severity.\n' if unwired else '') + '\n') + ktext
                     except Exception as e:
                         log(f"PR #{pr['id']}: integration check skipped ({str(e)[:120]})")
             except Exception as e:
                 log(f"PR #{pr['id']}: JNI table check skipped ({str(e)[:120]})")
+            kname = ''
+            try:                                     # 4 Nov: new keys read from a parameter map = an integration, not a bug
+                from . import integration as _igk
+                importlib.reload(_igk)
+                kl, kname = _igk.track_keys(None, pr, diff, cfg, log)
+                if False and kl:
+                    ktext = ('## Waiting for integration: map keys (code, not a model)\n' + '\n'.join('- ' + x for x in kl)
+                             + '\n\n') + ktext
+                try:                                 # 12 Nov: the Kotlin PR/branch that goes with this one (no description needed)
+                    _nm = [c['name'] for c in _igk.contract_changes(
+                        _git(['show', f"{pr['head']}:app/src/main/cpp/JNI/JNI.cpp"], cwd=pr.get('_gitdir')).stdout,
+                        _git(['show', f"{mb}:app/src/main/cpp/JNI/JNI.cpp"], cwd=pr.get('_gitdir')).stdout)]
+                    _prof = config.profile(cfg)
+                    _rp = _igk._jni_repos(cfg, [r for r in _prof['repos'] if r != (pr.get('repo') or _prof['main_repo'])])
+                    ll, lbest = ([], pr.get('_linkedKotlin')) if pr.get('_linkedKotlin') is not None else \
+                        _igk.linked_work(pr, _nm + _igk.map_keys(diff), _rp, log)
+                    if False and ll:
+                        ktext = ('## Linked Kotlin work (code, not a model): the refs that use this PR\'s new native names/keys\n'
+                                 + '\n'.join('- ' + x for x in ll) + '\n\n') + ktext
+                        pr['_linkedKotlin'] = lbest
+                except Exception as e:
+                    log(f"PR #{pr['id']}: linked Kotlin work skipped ({str(e)[:120]})")
+            except Exception as e:
+                log(f"PR #{pr['id']}: map-key integration check skipped ({str(e)[:120]})")
+            try:                                     # 4 Nov: items for native changes this head no longer makes
+                il_ = locals().get('il')
+                if 'app/src/main/cpp/JNI/JNI.cpp' not in files or il_ is not None:   # never on a failed lookup
+                    pat = r'native function (\w+)|(\w+): \d+ -> \d+|(\w+) removed natively'
+                    keep = {n for t in re.findall(pat, ' '.join(il_ or [])) for n in t if n} | ({kname} if kname else set())
+                    import importlib as _il
+                    from . import integration as _ig
+                    _il.reload(_ig)                  # the worker keeps modules loaded between jobs
+                    _ig.withdraw(None, pr, keep=keep, log=log)
+            except Exception as e:
+                log(f"PR #{pr['id']}: integration clean-up skipped ({str(e)[:120]})")
             if kdirs:
                 cfg = dict(cfg, _add_dirs=kdirs)     # every model call below may Read/Grep the Kotlin copies too
                 prvisual.EXTRA_ROOTS[:] = kdirs       # and Kotlin file:line refs pass the code-path check and judge evidence
@@ -652,6 +930,11 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                    "A problem on the same lock, future, queue or thread path that the diff changes is IN SCOPE even if it "
                    "existed before, when it can still cause a crash, a hang or a corrupt state. Report it as a scenario with "
                    "\"pre_existing\": true. Problems elsewhere that existed before stay out of scope.\n\n")
+    if inc is None:                                  # 13 Nov: confirmed bugs whose code changed: the hunters re-check them
+        try:
+            common += known_prompt(pr, log)
+        except Exception as e:
+            log(f"PR #{pr['id']}: known-bug re-check list skipped ({str(e)[:120]})")
     seats = _seats(diff)
     res, hunted = {}, []
     hmodel = (cfg.get('llm') or {}).get('model_hunt') or 'sonnet'
@@ -697,7 +980,32 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
         _vend = re.compile(r'(^|/)(third_party|third-party|vendor|vendored|external|generated)/|CMakeLists\.txt$', re.I)
         _left = [f for f in files if _code_ext.search(f) and not _vend.search(f) and f.split('/')[-1] not in _cited
                  and not f.split('/')[-1].endswith('.h')]
-        if _left and inc is None:
+        _bigpr = len(files) > 40 or len(diff) > 120000
+        if _left and inc is None and _bigpr:
+            # 13 Nov (#3226, 96 files): one light sweeper over 14 files missed a crash in ObjectFxSelection.cpp. On a big
+            # PR every file no seat cited gets a FULL bugs seat (Opus, bugs+lifetime+threads), 3 files per seat.
+            _groups = [_left[i:i + 3] for i in range(0, min(len(_left), 24), 3)]
+            log(f"PR #{pr['id']}: coverage (big PR): {len(_left)} changed file(s) no seat cited -> {len(_groups)} full seat(s): "
+                + ', '.join(x.split('/')[-1] for x in _left[:24]))
+
+            def _deep(gi):
+                g = _groups[gi]
+                return _call('', common + f"\n\n# Your seat: Deep coverage {gi + 1}/{len(_groups)}\nNo other seat looked at "
+                             "these changed files. Read EACH one fully (Read tool) with its diff, and the code that calls it, "
+                             "and find every real defect, especially threads (work still running when the state it uses is "
+                             "reset), lifetimes, error paths, and per-clip state through delete/undo/split/duplicate.\nFiles:\n"
+                             + '\n'.join('- ' + f for f in g) + '\n\n' + llm.skill_text('pr-review-general') + '\n\n'
+                             + llm.skill_text('pr-lifetime') + '\n\n' + llm.skill_text('pr-silent-failure') + HUNT_FORMAT,
+                             cfg, f"{tag}.seat-deep{gi + 1}", wt, tools='Read,Grep,Glob', timeout=1500, meter=st, model=bmodel)
+            with ThreadPoolExecutor(min(4, len(_groups))) as _ex:
+                _outs = list(_ex.map(_deep, range(len(_groups))))
+            _a = {'findings': [], 'scenarios': [], 'summary': ''}
+            for _o in _outs:
+                _j = _json(_o)
+                _a['findings'] += _j.get('findings') or []
+                _a['scenarios'] += _j.get('scenarios') or []
+            _sw = ''.join(_outs)
+        elif _left and inc is None:
             log(f"PR #{pr['id']}: coverage: {len(_left)} changed file(s) no seat cited -> sweeper seat: " + ', '.join(x.split('/')[-1] for x in _left[:12]))
             _sw = _call('', common + "\n\n# Your seat: Sweeper (coverage)\nThe other seats did not cite these changed files. "
                         "Read EACH one now (Read tool) and its diff, and report only real defects in them (bugs, bad input "
@@ -706,6 +1014,7 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
                         + llm.skill_text('pr-review-general') + HUNT_FORMAT,
                         cfg, f"{tag}.seat-sweep", wt, tools='Read,Grep,Glob', timeout=1200, meter=st, model=hmodel)
             _a = _json(_sw)
+        if _left and inc is None:
             _fs = [x for x in (_a.get('findings') or []) if isinstance(x, dict) and (x.get('confidence') or 0) >= 60]
             _cat = 'Coverage: files no other seat looked at'
             for x in _fs:
@@ -897,6 +1206,34 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
             view, code = view2, code2 or code
         except Exception as e:
             log(f"PR #{pr['id']}: replays failed ({str(e)[:160]}); scenarios keep their proof chain as the replay")
+        try:                                         # 4 Nov: every Verified/Suspected problem gets the code of its fix
+            miss = [x for x in view.get('scenarios') or [] if x.get('verdict') in ('verified', 'suspected') and not x.get('fixCode')]
+            if miss:
+                ask = [{'id': x['id'], 'title': x.get('title'), 'tier': x.get('verdict'), 'why': x.get('why'),
+                        'finding_fix': (findings[x['finding']].get('fix') if isinstance(x.get('finding'), int)
+                                        and 0 <= x['finding'] < len(findings) else ''),
+                        'proof': [q[0] if isinstance(q, (list, tuple)) else q
+                                  for q in ((x.get('proof') or {}).get('steps') or [])][:12]} for x in miss]
+                fx = _json(_call('', meta + "## Your job\nFor each problem scenario below, write the SMALLEST real code change "
+                                 "that fixes it, as it would go in this PR. Open the code first (Read/Grep) and use the exact "
+                                 "names and lines. If the right fix is in the Kotlin app, use the Kotlin path from the Kotlin "
+                                 "side. Diff lines: '- ' removed, '+ ' added, '  ' context; 3-15 lines. Leave a scenario out "
+                                 "only if its fix is a product decision (say so in skipped).\nAnswer ONE json block: "
+                                 '{"fixes": [{"id": "s2", "fixCode": {"file": "", "line": 0, "diff": "", "note": "one sentence"}}], '
+                                 '"skipped": [{"id": "", "why": ""}]}\n\n## Scenarios\n```json\n'
+                                 + json.dumps(ask, indent=1, default=str)[:20000] + '\n```\n',
+                                 cfg, tag + '.fixcode', wt, tools='Read,Grep,Glob', timeout=900, meter=st)) or {}
+                got = 0
+                byid = {x['id']: x for x in miss}
+                for it in fx.get('fixes') or []:
+                    c_ = prvisual._fix_code((it or {}).get('fixCode'))
+                    if c_ and (it or {}).get('id') in byid:
+                        byid[it['id']]['fixCode'] = c_
+                        got += 1
+                log(f"PR #{pr['id']}: suggested-fix code added to {got}/{len(miss)} scenario(s) that had none"
+                    + (f"; left out: {', '.join(str(k.get('id')) for k in fx.get('skipped') or [])}" if fx.get('skipped') else ''))
+        except Exception as e:
+            log(f"PR #{pr['id']}: fix-code pass skipped ({str(e)[:160]})")
         st.end(f"{len(keep)} replay(s) drawn")
     else:                                             # nothing could be built: nothing is checked, so nothing can block
         for f in findings:
@@ -923,8 +1260,26 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     elif not desc:
         log(f"PR #{pr['id']}: no description: code-only review")
 
+    if inc is None:                                  # 13 Nov: confirmed bugs are re-checked, never silently lost
+        try:
+            carry_known(pr, findings, log)
+        except Exception as e:
+            log(f"PR #{pr['id']}: known-bug carry skipped ({str(e)[:120]})")
+    # 13 Nov (#3226): "merged alone with sprint217 it crashes" is merge information, not a defect of this PR, when
+    # the Kotlin PRs it ships with exist: a note on the page, never a finding.
+    if pr.get('_shipsWith'):
+        for f in findings:
+            t = ' '.join(str(f.get(k) or '') for k in ('title', 'problem'))
+            if MERGE_ONLY.search(t):
+                f['dropped'] = True
+                f['dropReason'] = 'merge dependency (ships with ' + '; '.join(pr['_shipsWith'])[:200] + '), not a defect'
+                log(f"PR #{pr['id']}: dropped as a merge note, not a finding: {str(f.get('title'))[:100]}")
     # Verdict is code, not a model: only a Verified finding or scenario can block.
     live_f = [f for f in findings if not f.get('dropped')]
+    try:
+        save_known(pr, live_f, log)
+    except Exception as e:
+        log(f"PR #{pr['id']}: known-bug save skipped ({str(e)[:120]})")
     tiers_now = [x.get('verdict') for x in (view or {}).get('scenarios') or []] + [f.get('tier') for f in live_f]
     # Only a Verified major/blocker counts: a true but minor point ("unused member") never forces "changes".
     heavy = [f for i, f in enumerate(live_f) if f.get('tier') == 'verified' and f.get('severity') in ('blocker', 'major')]
@@ -940,8 +1295,20 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
         verdict = 'confirm'
     else:
         verdict = 'approve'
+    latent = ''
+    if verdict in ('approve', 'confirm') and locals().get('unwired'):
+        # 4 Nov (PR #3222): verified bugs in a feature nobody can reach YET were rated minor and the PR was approved;
+        # they reach users the day the Kotlin side calls it. Not reachable until the integration is not "fine".
+        real = [f for f in live_f if f.get('tier') == 'verified' and f.get('severity') != 'suggestion' and not f.get('pre_existing')]
+        if real:
+            verdict = 'changes'
+            fns = ', '.join(sorted(set(re.findall(r'native function (\w+)', ' '.join(unwired))))) or 'the new native function'
+            latent = (f"{len(real)} verified bug(s) users will hit as soon as the Kotlin side calls {fns[:120]}: "
+                      'fix them before the integration lands')
+            log(f"PR #{pr['id']}: verdict changes, not approve: {latent}")
     st.start('Chair', 'Opus')                        # summary + line comments from the final tiers; cannot change them
-    chair = _json(_call('pr-chair', meta + f"## Classification\n{json.dumps(cls)}\n\n## Verdict (set by code)\n{verdict}\n\n"
+    chair = _json(_call('pr-chair', meta + f"## Classification\n{json.dumps(cls)}\n\n## Verdict (set by code)\n{verdict}\n"
+                        + (f"Why not approve: {latent}\n" if latent else '') + "\n"
                         + "## Checked results\n```json\n" + json.dumps({
                             'scenarios': [{'id': x['id'], 'title': x.get('title'), 'tier': x.get('verdict'), 'kind': x.get('kind', ''),
                                            'finding': x.get('finding'), 'why': x.get('why')} for x in (view or {}).get('scenarios') or []],
@@ -968,12 +1335,12 @@ def review_one(cfg, pr, crashes, log, notes=None, early=None, prev=None):
     stages = ((prev or {}).get('stages') or []) + st.rows if inc is not None else st.rows
     sev = [f.get('severity') for f in live_f]
     mins = round((dt.datetime.now() - t0).total_seconds() / 60, 1)
-    rec = {'id': str(pr['id']), 'repo': pr.get('repo', ''), 'num': str(pr.get('num', pr['id'])),
+    rec = {'id': str(pr['id']), 'repo': pr.get('repo', ''), 'num': str(pr.get('num', pr['id'])), 'linkedKotlin': pr.get('_linkedKotlin'), 'shipsWith': pr.get('_shipsWith') or [],
            'title': pr.get('title', ''), 'author': pr.get('author', ''), 'url': pr.get('url', ''),
            'source': pr.get('source', ''), 'dest': pr.get('dest', ''), 'head': pr['head'], 'mergeBase': mb,
            'files': files[:200], 'nFiles': len(files), 'type': cls.get('type', 'unknown'), 'typeConfidence': cls.get('confidence'),
            'typeReason': cls.get('reason', ''), 'jira': cls.get('jira', ''), 'linkedIssue': cls.get('linked_issue', ''),
-           'risk': cls.get('risk', ''), 'areas': cls.get('areas') or [], 'verdict': verdict,
+           'risk': cls.get('risk', ''), 'areas': cls.get('areas') or [], 'verdict': verdict, 'verdictWhy': latent,
            'headline': chair.get('headline') or syn.get('headline', ''), 'summary': chair.get('summary') or syn.get('summary', ''),
            'fixComplete': ('partial' if any(x.get('verdict') == 'verified' and x.get('pre_existing') and x.get('severity') in ('blocker', 'major')
                                             for x in (view or {}).get('scenarios') or [])

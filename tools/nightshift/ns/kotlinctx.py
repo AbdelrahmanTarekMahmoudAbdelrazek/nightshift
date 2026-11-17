@@ -317,6 +317,18 @@ def _table(src):
     return re.findall(r'\{\s*"(\w+)"\s*,\s*"([^"]+)"', body)
 
 
+def _table_any(src):
+    """4 Nov (PR #3220): EVERY JNINativeMethod table, not only allMethods: optional natives (optionalMethods,
+    registered separately so a missing Kotlin declaration only degrades) were missed, so setRemoveBgApplied showed as a
+    Kotlin declaration 'with no native method' and its integration item was never made."""
+    out = []
+    for m in re.finditer(r'JNINativeMethod\s+\w+\[\]\s*=\s*\{(.*?)\n\s*\};', src or '', re.S):
+        body = re.sub(r'/\*.*?\*/', ' ', m.group(1), flags=re.S)
+        body = re.sub(r'//[^\n]*', ' ', body)
+        out += re.findall(r'\{\s*"(\w+)"\s*,\s*"([^"]+)"', body)
+    return out
+
+
 def _mismatches(table, kt):
     problems = []
     for name, sig in table:
@@ -362,4 +374,41 @@ def jni_check(head_src, base_src, paths, labels=''):
                "Kotlin that ships with this native branch; do not blame this PR for them): "
                + ', '.join(x.split('`')[1].split('(')[0] for x in old_p[:12]) if old_p else '')
             + '\n\n')
+    orph = _orphans(_table_any(head_src), _table_any(base_src), kt)
+    if orph:
+        res += f"; {len(orph)} Kotlin declaration(s) in the linked PR with no native method: " + ', '.join(o[0] for o in orph[:4])
+        text += ("## Kotlin declarations with NO native method (code, not a model)\nThe linked Kotlin PR declares these "
+                 "`external fun`s, but this native PR (head) registers no such method. Calling one throws "
+                 "UnsatisfiedLinkError (a crash). Report it: either the Kotlin PR removes the declaration, or this PR adds the "
+                 "native side.\n" + '\n'.join(f"- `{n}` at {where}" for n, where in orph) + '\n\n')
+        added = added + [f"`{n}` is declared in Kotlin at {where} (linked PR) but no native method is registered: "
+                         'remove the declaration or add the native side' for n, where in orph]
     return text, added, res
+
+
+def _orphans(th, tb, kt):
+    """4 Nov (PR #3222 + java-common #643): `external fun`s that a LINKED Kotlin PR adds but neither the native head
+    nor its base registers. Khairy's native PR dropped setOverlayMaskShapeParams; the Kotlin PR kept declaring it and
+    nothing said so. Declarations the sprint copy of the same file already has are old, not this pair's."""
+    names = {n for n, _ in th} | {n for n, _ in (tb or [])}
+    out = []
+    for name, decls in kt.items():
+        if name in names:
+            continue
+        for _sig, _n, where in decls:
+            m = re.match(r'([^/@]+)@pr\d+/(.+):\d+$', where)
+            if not m:
+                continue
+            repo, rel = m.group(1), m.group(2)
+            old = False
+            for d in (os.listdir(ROOT) if os.path.isdir(ROOT) else []):
+                if (d == repo or d.startswith(repo + '@')) and '@pr' not in d:
+                    f = os.path.join(ROOT, d, rel)
+                    if os.path.exists(f) and re.search(r'external\s+fun\s+' + re.escape(name) + r'\b', _read(f)):
+                        old = True
+                        break
+            if not old:
+                out.append((name, where))
+                break
+    return out
+

@@ -806,7 +806,14 @@ def reach(view, votes, judge_names, wt, diff, findings=None):
             s['repro']['needs'] = needs[0][:300]
             if needs[0][:60] not in str(s['repro'].get('setup') or ''):
                 s['repro']['setup'] = (str(s['repro'].get('setup') or '') + ' Needs: ' + needs[0][:300]).strip()
-        if gate:
+        pend = [v for v in rs if v.get('reach') == 'pending']
+        if pend:
+            # 4 Nov (PR #3222): the PR's own feature, its app caller not written yet. Users get it the day the
+            # Kotlin side lands: not latent, not downgraded, not 'unproven'.
+            s['reach'] = {'state': 'pending', 'needs': str(pend[0].get('needs') or '')[:300]}
+            proof['note'] = (str(proof.get('note') or '') + ' Reached as soon as the app side of this feature calls it '
+                             '(not written yet); rated by what users get then.').strip()
+        elif gate:
             g = gate[0]
             s['reach'] = {'state': 'latent', 'gate': g.get('reach'), 'evidence': [e for e in g['reach_evidence'] if ok(e)][:3]}
             if s.get('severity') in ('blocker', 'major'):
@@ -971,6 +978,27 @@ def log_actions(lines):
     return out
 
 
+def _qual(fn, file=''):
+    """13 Nov (#3226): (class, function) of a frame or a cited function. Matching used the bare name, so any crash
+    whose top frame was called 'run' or 'init' (EmojiCompat's LoadEmojiCompatRunnable.run, a third-party
+    DataParse.init) was 'seen in the field' for Object FX. A name with no class takes the file's name as its class
+    (Kotlin/Java files are named after their class; C++ members defined in the class body)."""
+    f = re.sub(r'^\s*\[[^\]]*\]\s*', '', str(fn or ''))          # '[libart.so] ...'
+    f = re.sub(r'\(.*$', '', f).strip()
+    f = re.sub(r'<[^<>]*>', '', f)                                   # template arguments
+    if '::' in f:
+        parts = [x for x in f.split('::') if x]
+        cls, name = (parts[-2] if len(parts) > 1 else ''), parts[-1]
+    elif '.' in f:
+        parts = f.split('.')
+        cls, name = parts[-2].split('$')[0], parts[-1]
+    else:
+        cls, name = '', f
+    if not cls and file:
+        cls = os.path.splitext(os.path.basename(file))[0]
+    return (cls.split('$')[0], name)
+
+
 def field_match_src(view, src, field):
     """A scenario is 'seen in the field' when the top frame of a crash users ALREADY had is a function its walk goes
     through. 1 Nov, two strengths instead of one:
@@ -989,28 +1017,29 @@ def field_match_src(view, src, field):
             if ':' in r and r.rsplit(':', 1)[1].isdigit():
                 refs.append(r)
         refs += [x.get('line') for x in ((s.get('proof') or {}).get('sim') or {}).get('steps') or [] if x.get('line')]
-        fns = []
+        fns = []                                   # (class, function): never a bare name (see _qual)
         for r in refs:
             try:
                 f = enclosing_function(src, r.rsplit(':', 1)[0], int(r.rsplit(':', 1)[1]))
             except Exception:
                 f = None
-            if f and _short(f) not in fns:
-                fns.append(_short(f))
+            q = _qual(f, r.rsplit(':', 1)[0]) if f else None
+            if q and q[0] and q not in fns:
+                fns.append(q)
         if not fns:
             continue
         acts = scenario_actions(s)
         hits = []
         for c in field or []:
-            top = [_short(x) for x in (c.get('frames') or [])[:3] if x]
-            if not top or top[0] not in fns:
+            top = [_qual(x) for x in (c.get('frames') or [])[:3] if x]
+            if not top or not top[0][0] or top[0] not in fns:   # same class AND function as the walk, or nothing
                 continue
             chain = sum(1 for x in top if x in fns)
             la = log_actions(c.get('logs'))[-12:]
             # only the LAST user action before the crash counts (an older delete does not make an 'undo' path)
             seen = [(a, l) for a, l in la[-1:] if a in acts or any(a.startswith(x[:8]) or x.startswith(a[:8]) for x in acts)]
             other = [a for a, _ in la if a not in {x for x, _ in seen}]
-            h = {'card': c.get('card'), 'title': str(c.get('title') or '')[:120], 'events': c.get('events'), 'frame': top[0],
+            h = {'card': c.get('card'), 'title': str(c.get('title') or '')[:120], 'events': c.get('events'), 'frame': '::'.join(top[0]),
                  'chain': chain, 'strength': 'path' if seen else 'function'}
             if seen:
                 h['log'] = seen[-1][1]

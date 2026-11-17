@@ -450,6 +450,12 @@ def run(db, cfg, log=print, sources=('crashlytics', 'play'), analyse=True, stop=
         integration.recheck(db, cfg, log=log)
     except BaseException as e:
         log(f'integration re-check skipped ({str(e)[:200]})')
+    try:                                             # 12 Nov: each open Kotlin PR -> the native PR/branch it needs
+        from . import integration as _igl
+        importlib.reload(_igl)
+        _igl.link_kotlin_prs(db, cfg, log=log)
+    except BaseException as e:
+        log(f'Kotlin PR linking skipped ({str(e)[:200]})')
     try:                                             # new clusters of a known problem (often an old, fixed bug): link them
         from . import analyse as _an
         importlib.reload(_an)

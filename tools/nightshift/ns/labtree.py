@@ -169,7 +169,55 @@ def _lab_ui(wt, ui, log=print):
         elif os.path.exists(p):
             os.remove(p)
         _sh(['git', '-C', wt, '-c', 'core.autocrlf=false', 'checkout', '-q', ui, '--', rel], check=False)
-    log(f'lab build: the lab app\'s own screens (app/src/main java/res/manifest) from {ui[:10]}; engine C++ unchanged')
+    # 3 Nov: after the screens (res/) change, Gradle's incremental resource merge kept resource ids whose files were no
+    # longer packaged: the release lab app crashed on My Projects (Resources$NotFoundException ic_wizard_draft.xml) and
+    # every repro that left the editor stopped there. A swap = a clean app-module resource/package build.
+    keep = ('cxx', 'cmake', 'merged_native_libs', 'stripped_native_libs', 'merged_jni_libs', 'library_jni')  # C++: keep
+    inter = os.path.join(wt, 'app/build/intermediates')
+    for name in (os.listdir(inter) if os.path.isdir(inter) else []):
+        if name not in keep:
+            shutil.rmtree(os.path.join(inter, name), ignore_errors=True)
+    for sub in ('app/build/outputs', 'app/build/generated', 'app/build/tmp/kotlin-classes', 'app/build/kotlin'):
+        shutil.rmtree(os.path.join(wt, sub), ignore_errors=True)
+    log(f'lab build: the lab app\'s own screens (app/src/main java/res/manifest) from {ui[:10]}; engine C++ unchanged; '
+        f'app module resources rebuilt from clean')
+
+
+def _app_res_overrides(wt, app, log=print):
+    """3 Nov: the release android-video-editor-module ships PLACEHOLDER drawables (ic_wizard_draft.xml: a <vector> with
+    no <path>, "Actual vector content should be copied from the original file"); the real app (myzesty_mobile
+    android/app/src/main/res) overrides them with the real files. The lab app did not, so every My Projects row with a
+    wizard draft crashed ('XmlPullParserException: no path defined') and the release lab app could not leave the editor.
+    Any module drawable that is a vector without a path gets the shipped app's same-named file in the lab app's res/."""
+    repo, commit = app
+    names = subprocess.run(['git', '-C', repo, 'ls-tree', '-r', '--name-only', commit, 'android/app/src/main/res/'],
+                           capture_output=True, text=True).stdout.split()
+    app_res = {}
+    for n in names:
+        if '/drawable' in n and n.endswith('.xml'):
+            app_res.setdefault(os.path.basename(n), n)
+    done = []
+    for mod in sorted(os.listdir(wt)):
+        res = os.path.join(wt, mod, 'src', 'main', 'res')
+        if mod == 'app' or not os.path.isdir(res):
+            continue
+        for d in os.listdir(res):
+            if not d.startswith('drawable'):
+                continue
+            for f in os.listdir(os.path.join(res, d)):
+                if not f.endswith('.xml') or f not in app_res:
+                    continue
+                t = open(os.path.join(res, d, f), errors='replace').read()
+                if '<vector' in t and '<path' not in t:
+                    body = subprocess.run(['git', '-C', repo, 'show', f'{commit}:{app_res[f]}'], capture_output=True).stdout
+                    if b'<path' in body:
+                        dst = os.path.join(wt, 'app', 'src', 'main', 'res', os.path.basename(os.path.dirname(app_res[f])), f)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        if not os.path.exists(dst) or open(dst, 'rb').read() != body:
+                            open(dst, 'wb').write(body)
+                        done.append(f'{mod}/{d}/{f}')
+    if done:
+        log(f'lab build: placeholder drawables replaced by the shipped app\'s own files: {", ".join(sorted(set(done)))[:300]}')
 
 
 def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None, ui=None):
@@ -269,7 +317,12 @@ def ensure(cfg, branch=None, log=print, sha=None, pins=None, name=None, app=None
         if os.path.isdir(dd):
             shutil.rmtree(dd)
         shutil.copytree(dbg, dd)
-    if os.path.basename(wt).startswith('rel_'):         # 3 Nov: build repairs Night Shift made for this folder
+    if app:
+        try:
+            _app_res_overrides(wt, app, log)
+        except Exception as e:
+            log(f'lab build: shipped app resource overrides skipped ({str(e)[:120]})')
+    if True:                                            # 3 Nov: build repairs Night Shift made for this folder (10 Nov: every folder, not only rel_)
         try:
             from . import buildfix
             buildfix.reapply(wt, log)

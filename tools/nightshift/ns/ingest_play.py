@@ -47,9 +47,23 @@ def search_issues(package: str, days: int = 7, page_size: int = 50):
 
 def upsert_play(db, issues, package):
     from firebase_admin import firestore
+    import hashlib, os
+    # 9 Nov (free Firestore quota): only issues whose numbers changed are written again (a local note of what was
+    # written last; no Firestore read). Each write was also a read for every open board tab.
+    memo_p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'out', 'play_written.json')
+    try:
+        memo = json.load(open(memo_p))
+    except Exception:
+        memo = {}
     n = 0
     for it in issues:
         iid = it.get('name', '').split('/')[-1]
+        h = hashlib.sha1(json.dumps([it.get(k) for k in ('type', 'cause', 'location', 'errorReportCount', 'distinctUsers',
+                                     'firstOsVersion', 'lastOsVersion', 'firstAppVersion', 'lastAppVersion', 'issueUri')],
+                                    sort_keys=True, default=str).encode()).hexdigest()[:16]
+        if memo.get(iid) == h:
+            continue
+        memo[iid] = h
         db.collection('play_issues').document(iid).set({
             'id': iid, 'type': it.get('type'), 'cause': it.get('cause'), 'location': it.get('location'),
             'errorReportCount': it.get('errorReportCount'), 'distinctUsers': it.get('distinctUsers'),
@@ -57,5 +71,10 @@ def upsert_play(db, issues, package):
             'firstAppVersion': it.get('firstAppVersion'), 'lastAppVersion': it.get('lastAppVersion'),
             'issueUri': it.get('issueUri'), 'package': package, 'updatedAt': firestore.SERVER_TIMESTAMP}, merge=True)
         n += 1
+    try:
+        os.makedirs(os.path.dirname(memo_p), exist_ok=True)
+        json.dump(memo, open(memo_p, 'w'))
+    except Exception:
+        pass
     db.collection('config').document('board').set({'playAsOf': firestore.SERVER_TIMESTAMP}, merge=True)
     return n

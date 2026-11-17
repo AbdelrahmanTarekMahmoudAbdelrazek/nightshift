@@ -88,8 +88,12 @@ def pr_comments(key, cfg, dry=False, max_inline=6, payload=None):
     rec = json.load(open(p))
     repo, num = bitbucket.parse_key(key)
     live = bitbucket.get_pr(num, repo)
-    if live.get('state') not in ('OPEN', ''):
+    # 16 Nov (#3226): a MERGED PR still takes comments on Bitbucket, and its open bugs are now in the target branch:
+    # post them as follow-ups. A DECLINED / superseded PR still gets nothing.
+    if live.get('state') not in ('OPEN', 'MERGED', ''):
         fail(f'PR {key} is {live.get("state")}: nothing posted')
+    if live.get('state') == 'MERGED':
+        say(f'PR {key} is already merged into {live.get("dest") or "its target"}: posting the comments as follow-ups')
     link = f"{board_url(cfg)}/pr.html?id={key}"
     reviewed, now = str(rec.get('head') or '')[:12], str(live.get('head') or '')[:12]
     stale = bool(reviewed and now and not now.startswith(reviewed[:7]) and not reviewed.startswith(now[:7]))
@@ -120,7 +124,36 @@ def pr_comments(key, cfg, dry=False, max_inline=6, payload=None):
                 f"**{f.get('title', '').strip()}**\n\n{str(f.get('problem') or '').strip()}\n\n"
                 + (f"**Suggested fix:** {str(f.get('fix')).strip()}\n\n" if f.get('fix') else '')
                 + f"[Proof, replay and the judges' votes on Night Shift →]({link})")
+        if path and path not in lines:                # 4 Nov: a short name ('FloatingWindow.cpp') -> its path in the diff
+            cand = [x for x in lines if x.endswith('/' + path.lstrip('/')) or x.endswith('/' + path.split('/')[-1])]
+            if len(cand) == 1:
+                path = cand[0]
         on_diff = path in lines and isinstance(ln, int) and ln in lines[path]
+        if not on_diff and path in lines and lines[path] and isinstance(ln, int) and not stale and len(inline_done) < max_inline:
+            # 4 Nov (PR #3222): the bug sat at an UNCHANGED line (copy_state_from :696, the code the PR forgot to touch).
+            # Bitbucket only takes inline comments on the diff, so the whole comment (evidence + fix) was cut to one line
+            # in the summary. Anchor it on the nearest changed line of the same file and say where the bug really is.
+            # 4 Nov: Bitbucket shows a comment on ANY line of a changed file (the reader expands the unchanged lines
+            # around it), so first try the real line; only if Bitbucket refuses, use the nearest changed line + a note
+            try:
+                act, cid = bbwrite.upsert_comment(repo, num, tag, body, inline=(path, ln), existing=existing, dry=dry)
+                inline_done.add(tag)
+                results.append({'tag': tag, 'action': act, 'id': cid, 'file': path, 'line': ln})
+                say(f'{act}: inline comment on {path}:{ln} (an unchanged line, shown when expanded) ({f.get("severity")})')
+                continue
+            except Exception as e_:
+                say(f'Bitbucket refused a comment on unchanged line {path}:{ln} ({str(e_)[:100]}); using the nearest changed line')
+            near = min(lines[path], key=lambda x: abs(x - ln))
+            body = (f"> About `{path.rsplit('/', 1)[-1]}:{ln}` (outside the changed lines, so this comment sits on the "
+                    f"nearest changed line {near}).\n\n") + body
+            ln, on_diff = near, True
+        if not on_diff and not stale and len(inline_done) < max_inline:
+            # a file the PR does not change at all: the full comment goes on the PR itself, never cut to a summary line
+            act, cid = bbwrite.upsert_comment(repo, num, tag, body, existing=existing, dry=dry)
+            inline_done.add(tag)
+            results.append({'tag': tag, 'action': act, 'id': cid, 'file': path, 'line': f.get('line')})
+            say(f'{act}: PR comment for {path}:{f.get("line")} (file not in the PR diff) ({f.get("severity")})')
+            continue
         if on_diff and len(inline_done) < max_inline:
             act, cid = bbwrite.upsert_comment(repo, num, tag, body, inline=(path, ln), existing=existing, dry=dry)
             inline_done.add(tag)
@@ -294,7 +327,7 @@ def _ship_repo(rdir, text, base, branch, msg, dry):
         pf = os.path.join(wt, '.ns_fix.patch')
         open(pf, 'w').write(text if text.endswith('\n') else text + '\n')
         applied = False
-        for extra in ([], ['--ignore-whitespace'], ['--3way']):
+        for extra in ([], ['--ignore-whitespace'], ['--recount'], ['--recount', '--ignore-whitespace'], ['--3way']):
             if subprocess.run(['git', 'apply', '--check'] + extra + [pf], cwd=wt, capture_output=True).returncode == 0:
                 _git(['apply'] + extra + [pf], wt)
                 applied = True

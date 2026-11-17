@@ -51,6 +51,8 @@ def _now():
 #                  worker.serve_others: true      -> also the jobs of people whose own worker is not online (the lab host)
 # No owner set = the old behaviour: this worker runs every job.
 SHARED_ACTIONS = ('sync', 'sync-full', 'audio-branches')       # board-wide work: whichever worker is online first
+# crashes of the lab build itself, never of the code under test (3 Nov: avem's placeholder ic_wizard_draft.xml)
+LAB_ONLY_CRASH = re.compile(r'XmlPullParserException: no path defined|Resources\$NotFoundException: File res/drawable/[\w.]+ from drawable')
 SHIP_ACTIONS = ('bb-comments', 'crash-pr', 'jira-create', 'bb-review')       # post to Bitbucket / Jira: the board host only
 PHONE_ACTIONS = ('reproduce', 'draft-fix', 'audio-check')
 WORKER_ALIVE_S = 180
@@ -760,6 +762,8 @@ class Worker:
         self.do_pull(ref, case)
         if getattr(self, 'cancelled', False):
             raise RuntimeError('cancelled')
+        if self._bot_gate(ref, case):                 # 12 Nov: reports from Google's automated testing, or a screen no user can open
+            return
         try:                                          # a cluster of a bigger problem: the work belongs to that problem
             from . import analyse as _an
             _an.link_families(self.db, log=lambda t: None)
@@ -811,6 +815,40 @@ class Worker:
                                              'status': 'queued', 'queuedAt': _fs.SERVER_TIMESTAMP, 'chainedFrom': ref.id})
         self.log(ref, f'Start 3/3: queued Reproduce on the lab phone (job {nj[1].id[:8]}); it continues to the fix, '
                       'the phone check, the review and the hand-over drafts by itself')
+
+    def _bot_gate(self, ref, case):
+        """12 Nov (Crashlytics ff832bfc, UCropActivity): 50 reports, all from spoofed phones (a "OnePlus8Pro" with the
+        Pixel 4a board, a Dalvik frame on Android 11), crashing in a screen the shipped app never opens. Night Shift
+        forced the screen open with a hook, called it reproduced and went on to fix code no user runs. Now Start
+        checks first (ns/botcheck.py) and stops with the reasons; a job with force=true skips the check."""
+        import json as _json
+        import importlib
+        try:
+            if (ref.get().to_dict() or {}).get('force'):
+                self.log(ref, 'real-user check skipped (force)')
+                return False
+            from . import botcheck
+            importlib.reload(botcheck)
+            p = os.path.join(config.REPO, 'tools/nightshift/out/raw', case['id'], 'events.json')
+            evs = _json.load(open(p)) if os.path.exists(p) else []
+            evs = evs if isinstance(evs, list) else (evs.get('events') or [])
+            res = botcheck.judge(evs, log=lambda t: self.log(ref, t))
+        except Exception as e:
+            self.log(ref, f'real-user check failed ({str(e)[:150]}); going on')
+            return False
+        fb, ar = res['bot'], res['reach']
+        self.log(ref, f"real-user check: field = {fb['verdict']} ({fb['why'][:300]})")
+        self.log(ref, f"real-user check: crashing screen = {ar['verdict']} ({ar['why'][:300]})")
+        rec = {'verdict': fb['verdict'], 'why': fb['why'][:600], 'models': fb.get('models'), 'share': fb.get('share'),
+               'reach': {k: ar.get(k) for k in ('verdict', 'why', 'activity', 'apk', 'exported', 'starts', 'refs')},
+               'at': dt.datetime.now().isoformat(timespec='seconds')}
+        if not res['stop']:
+            self.db.collection('cases').document(case['id']).set({'botcheck': rec}, merge=True)
+            return False
+        self.db.collection('cases').document(case['id']).set({'botcheck': rec, 'status': 'bot-suspect', 'verdict': 'bot'}, merge=True)
+        self.log(ref, 'STOPPED: these crashes come from automated test devices (most likely Google testing the Play release), not from '
+                      'people using the app, so there is no user flow to reproduce. The board card says why. If you still want the lab run, queue Start with force=true.')
+        return True
 
     def do_triage(self, ref, case):
         csv = case.get('csv')
@@ -1017,7 +1055,9 @@ class Worker:
             import json
             from google.cloud import firestore as gcf
             old = ['authorAttempts', 'reproAttempts', 'labRuns', 'labFailures', 'reproLevel', 'reproNatural', 'reproRate',
-                   'repro_scenario', 'repro_step', 'repro_seed', 'repro_dir', 'repro_script', 'reproAuthor', 'labMatch', 'labCrash']
+                   'repro_scenario', 'repro_step', 'repro_seed', 'repro_dir', 'repro_script', 'reproAuthor', 'labMatch', 'labCrash',
+                   # 9 Nov: a fresh start forgets the earlier fix rounds too (their guards were the wrong kind of fix)
+                   'fixRounds', 'fixMinutes', 'fixAnswer', 'review', 'handover', 'patch', 'fixVerified', 'fixNote']
             json.dump(case, open(os.path.join(config.REPO, 'tools/nightshift/out', f'reset_backup_{case["id"]}_{int(time.time())}.json'), 'w'), indent=1, default=str)
             gone = [k for k in old if k in case]
             if gone:
@@ -1087,7 +1127,15 @@ class Worker:
                 self.log(ref, 'early fix kept; reinstalling the unfixed crash build for the real-tap repro')
                 self._install(ref, [])
         tapped = False
-        if not hit and not ladder_only and self._turbo().get('tapflow', True):
+        _sh = ''
+        try:                                              # 9 Nov: a codec/binder hang is not made by taps: skip to the hook
+            from . import author as _au_sh
+            _sh = _au_sh.system_hang(case)
+        except Exception:
+            _sh = ''
+        if _sh and not hit:
+            self.log(ref, f'real-tap repro skipped: {_sh}; taps on a healthy lab phone cannot make it, the ladder starts at the hook level')
+        if not hit and not ladder_only and not _sh and self._turbo().get('tapflow', True):
             # 28 Oct: the real-tap repro written FROM the engine repro + the full field log, a checkpoint after every tap,
             # FULL and HYBRID variants, time-boxed (turbo.tap_budget_min, default 30)
             from . import tapflow
@@ -1689,9 +1737,23 @@ class Worker:
     def _recipe_fall(self, ref, why):
         """2 Nov: the release recipe (whole engine at the shipped commit + shipped Kotlin pins) cannot be used here:
         once per job, fall back to the usual lab folder (base branch + the crash files at the field commit)."""
+        rc_ = getattr(self, '_recipe', None) or {}
+        if rc_.get('pins') and not getattr(self, '_fall_pinned', False):
+            # 3 Nov: first fallback = the usual folder (base branch + crash files at the field commit) but the Kotlin
+            # STILL at the release pins. Falling straight to the newest sprint hides crashes the sprint already fixed
+            # (append_remove_bg) and changes what happens before the engine (transcoding on import, 2fe03193).
+            self._fall_pinned = True
+            self.log(ref, f'release recipe: {why}; trying the usual lab folder with the Kotlin still at the release commits')
+            from . import labtree
+            lw, ls = labtree.activate(self.cfg, None, log=lambda l: self.log(ref, l), pins=rc_['pins'],
+                                      app=(rc_['app_repo'], rc_['app_commit']) if rc_.get('app_repo') else None)
+            self.log(ref, f'lab folder: {lw} = {self.cfg["lab"].get("base_branch")} @ {ls[:10]}, Kotlin at the release pins')
+            c_ = getattr(self, '_recipe_case', None)
+            if c_ is not None and (self.cfg.get('lab') or {}).get('build_as_shipped', True):
+                self._swaps = list(getattr(self, '_swaps', []) or []) + list(self._shipped_swap(ref, c_))
+            return
         self._recipe_fallback = True
         self.log(ref, f'release recipe: {why}; building the usual way (base branch + the crash files at the field commit) instead')
-        rc_ = getattr(self, '_recipe', None) or {}
         pins = ', '.join(f'{k} {v[:8]}' for k, v in sorted((rc_.get('pins') or {}).items()))
         self.log(ref, f'WARNING: this job\'s Kotlin is the NEWEST SPRINT, not the release ({pins}). What happens before the '
                       f'engine (import, transcoding, picker, tool screens) may differ from what the users had')
@@ -2197,6 +2259,13 @@ class Worker:
                 fails += 1
                 rd = r['dir'] if os.path.isabs(r['dir']) else os.path.join(config.REPO, r['dir'])
                 text, cframes, cfault, cthread = crash_evidence(rd)
+                lab_bug = next((m.group(0) for m in [re.search(LAB_ONLY_CRASH, text or '')] if m), '')
+                if lab_bug and not any(e.split('|')[0].replace('MAIN:', '') in (text or '') for e in expect):
+                    # 3 Nov: a crash of the LAB app itself (a release module's placeholder drawable the real app
+                    # overrides) is a setup failure, not 'another crash': 2bc43cd6's fix was rejected twice for it
+                    fails -= 1
+                    errors.append(f'lab app bug, not the app under test: {lab_bug[:120]}')
+                    continue
                 try:                                  # 2 Nov: app dies at start (JNI mismatch): stop the whole job now, say why
                     _broken_build_check(rd, text)
                 except BrokenLabBuild as e_:
@@ -2907,6 +2976,7 @@ class Worker:
                         self._recipe, self._recipe_case = rc_, case
                         self._recipe_ui_tried = False
                         self._buildfix_n, self._buildfix_pending = 0, None
+                        self._fall_pinned = False
                     else:
                         lw, ls = labtree.activate(self.cfg, base, log=lambda l: self.log(ref, l))
                     if ls:
@@ -3080,9 +3150,27 @@ class Worker:
         try:
             stale = list(self.db.collection('jobs').where('status', '==', 'running').stream()) + \
                     list(self.db.collection('jobs').where('status', '==', 'cancel').stream())
+            def _gone(w):
+                # 10 Nov: macOS changed this Mac's nodename between runs ('192.168.1.3' -> 'youssefs-Mac-mini.local'), so
+                # 'same host' missed the old process: its job stayed 'cancel' and its phone lock blocked every new lab
+                # job. A worker of THIS owner whose process no longer runs here is stale, whatever host name it used.
+                if not w or w == me:
+                    return False
+                if w.startswith(host + ':'):
+                    return True
+                try:
+                    pid = int(w.rsplit(':', 1)[1])
+                    os.kill(pid, 0)
+                    return False                    # that process still runs here
+                except ProcessLookupError:
+                    return True
+                except Exception:
+                    return False
+            mine = _owner(self.cfg)
             for d in stale:
-                w = (d.to_dict() or {}).get('worker', '')
-                if w.startswith(host + ':') and w != me:
+                x_ = d.to_dict() or {}
+                w = x_.get('worker', '')
+                if (w.startswith(host + ':') and w != me) or (mine and x_.get('workerOwner') == mine and _gone(w)):
                     was_cancel = (d.to_dict() or {}).get('status') == 'cancel'
                     d.reference.update({'status': 'cancelled' if was_cancel else 'failed', 'finishedAt': _now(),
                                         'error': 'cancelled from the board' if was_cancel else 'worker was restarted while this job ran'})
@@ -3094,7 +3182,7 @@ class Worker:
                     print(f'[worker] marked stale job {d.id} failed', flush=True)
             lab = self.db.collection('config').document(_lab_lock_id(self.cfg))
             h = (lab.get().to_dict() or {}).get('holder', '')
-            if h.startswith(host + ':') and h != me:
+            if (h.startswith(host + ':') and h != me) or (h and _gone(h)):     # the lock is per owner: ours to free
                 lab.delete()
                 print('[worker] freed a stale phone lock', flush=True)
         except Exception as e:

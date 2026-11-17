@@ -111,11 +111,22 @@ def key_of(frames, native_lib=NATIVE, depth=None):
     return ' | '.join(names) or None
 
 
+def event_key(e, frames_key='frames', native_lib=NATIVE):
+    """The card key of one event: an ANR's blocker key (ns/anrchain.py, 9 Nov) or the crashing function."""
+    a = e.get('anr') if isinstance(e, dict) else None
+    if a and a.get('key') and a.get('split', True):
+        return a['key']
+    return key_of(e.get(frames_key), native_lib)
+
+
 def fp8(key):
     return hashlib.sha1(key.encode()).hexdigest()[:8]
 
 
 def short_title(key):
+    if str(key or '').startswith('anr:'):
+        from . import anrchain
+        return anrchain.title_of(key)
     top = (key or '').split(' | ')[0]
     return top.split('::')[-1] or top
 
@@ -217,18 +228,69 @@ def _case_frames(issue):
     return []
 
 
+def _anr_rekey(issue, reg, keyed, log=print, db=None):
+    """9 Nov: ANR cards are keyed by the BLOCKER (ns/anrchain.py), no longer by the main thread's top frame. An ANR
+    registry from before keeps its plain id on the bug the existing case was built from: the blocker of the issue's
+    saved sample (out/raw/<issue>/events.json, the events the case and its analysis read). The plain-id lock moves
+    with it (the one place a lock is rewritten, logged)."""
+    from collections import Counter
+    from . import crashlytics as cl
+    seed = None
+    rp = os.path.join(OUT, 'raw', issue, 'events.json')
+    try:
+        ks = Counter(b['key'] for b in (cl._anr(e) for e in json.load(open(rp))) if b and b.get('key') and b.get('split', True))
+        seed = ks.most_common(1)[0][0] if ks else None
+    except Exception:
+        seed = None
+    if not seed:
+        ks = Counter(k for k, _ in keyed if k and k.startswith('anr:'))
+        seed = ks.most_common(1)[0][0] if ks else None
+    if not seed:
+        return
+    old = [g for g in reg.get('groups') or []]
+    plain = next((g for g in old if g.get('card') == issue), None)
+    keep = [g for g in old if str(g.get('key', '')).startswith('anr:') and g.get('card') != issue]
+    for g in old:
+        if g is not plain and not str(g.get('key', '')).startswith('anr:'):
+            log(f'stack groups: {issue[:8]} old ANR card {g.get("card")} ({g.get("key")}) dropped by the blocker re-key')
+    now = dt.datetime.now().isoformat(timespec='seconds')
+    newp = dict(plain or {}, key=seed, fp=fp8(seed), card=issue, title=short_title(seed), stack3=short_title(seed),
+                firstSeen=(plain or {}).get('firstSeen') or now, newStack=False,
+                origin=f"ANR re-keyed by blocker (was {(plain or {}).get('key') or 'none'})")
+    reg['groups'] = [newp] + [g for g in keep if g['key'] != seed]
+    LOCKS = _locks_path()
+    try:
+        locks = json.load(open(LOCKS)) if os.path.exists(LOCKS) else {}
+        prev = (locks.get(issue) or {}).get('key')
+        locks[issue] = {'key': seed, 'why': f'ANR re-keyed by blocker on {now[:10]} (was {prev})', 'at': now}
+        tmp = LOCKS + '.tmp'
+        json.dump(locks, open(tmp, 'w'), indent=1)
+        os.replace(tmp, LOCKS)
+        if db is not None:
+            db.collection('stackgroups').document('_plain_locks').set({issue: locks[issue]}, merge=True)
+    except Exception as e:
+        log(f'stack groups: {issue[:8]} lock not moved ({str(e)[:100]})')
+    log(f'stack groups: {issue[:8]} ANR re-keyed by blocker: plain id = {short_title(seed)} (was {(plain or {}).get("key")})')
+
+
 def assign(issue, events, db=None, native_lib=NATIVE, log=print, frames_key='frames'):
     """Register the stack groups of one issue from its sampled events. Returns (reg, by_card) where by_card maps
     every card id of the issue to its events. Events without a usable key go to no card unless the issue has one card."""
     reg = load(issue, db)
     reg['version'] = REG_VERSION
     groups = reg.setdefault('groups', [])
+    keyed = [(event_key(e, frames_key, native_lib), e) for e in events]
+    if any(k and k.startswith('anr:') for k, _ in keyed) and any(not str(g.get('key', '')).startswith('anr:') for g in groups):
+        _anr_rekey(issue, reg, keyed, log, db)
+        groups = reg['groups']
     known = {g['key']: g for g in groups}
-    keyed = [(key_of(e.get(frames_key), native_lib), e) for e in events]
     top3 = {}
     for k, e in keyed:
         if k and k not in top3:
-            top3[k] = key_of(e.get(frames_key), native_lib, depth=3) or k
+            a = e.get('anr') or {}
+            top3[k] = (f"{a.get('victim') or 'main'} -> {a.get('thread') or '?'}: {a.get('title')}"
+                       + (f" (during {a['during']})" if a.get('during') else '')) if k.startswith('anr:') else \
+                (key_of(e.get(frames_key), native_lib, depth=3) or k)
     cnt = {}
     for k, _ in keyed:
         if k:
@@ -310,7 +372,7 @@ def card_events(card, events, native_lib=NATIVE, frames_key='frames', db=None):
     g = next((g for g in gs if g['card'] == card), None)
     if g is None:
         return list(events), f'card {card} is not in the stack-group registry: all events used'
-    mine = [e for e in events if key_of(e.get(frames_key), native_lib) == g['key']]
+    mine = [e for e in events if event_key(e, frames_key, native_lib) == g['key']]
     return mine, f"card {g['title']}: {len(mine)} of {len(events)} sampled events (1 of {len(gs)} crashes in Crashlytics issue {split(card)[0][:8]})"
 
 

@@ -1018,33 +1018,33 @@ var FB = /*__NS_FIREBASE__*/null;
         try { db.enablePersistence({ synchronizeTabs: true }).catch(function(){}); } catch (e) {}
         // free plan: a hidden tab stops streaming after 2 min (no reads), and catches up when shown again; the local
         // cache (persistence) means a reload or return within 30 min reads only the records that changed
-        var __nsOff = null; document.addEventListener('visibilitychange', function(){ if (document.hidden) { __nsOff = setTimeout(function(){ db.disableNetwork().catch(function(){}); }, 120000); } else { clearTimeout(__nsOff); db.enableNetwork().catch(function(){}); } });
+        /* 17 Nov: all Night Shift tabs share one connection (synchronizeTabs), so a hidden tab switching it off emptied the visible ones. A tab now switches it off only when no Night Shift tab has been visible for 2 min. */ var __nsOff = null; function __nsSeen(){ try { localStorage.setItem('ns.visAt', String(Date.now())); } catch (e) {} } function __nsAnyVisible(){ try { return Date.now() - Number(localStorage.getItem('ns.visAt') || 0) < 60000; } catch (e) { return true; } } function __nsOffCheck(){ if (!document.hidden) return; if (__nsAnyVisible()) { __nsOff = setTimeout(__nsOffCheck, 60000); return; } db.disableNetwork().catch(function(){}); } setInterval(function(){ if (!document.hidden) __nsSeen(); }, 20000); if (!document.hidden) __nsSeen(); db.enableNetwork().catch(function(){}); document.addEventListener('visibilitychange', function(){ clearTimeout(__nsOff); if (document.hidden) { __nsOff = setTimeout(__nsOffCheck, 120000); } else { __nsSeen(); db.enableNetwork().catch(function(){}); } });
         auth.onAuthStateChanged(function(user){
           var dom = (FB.domain || 'msd-my.com').toLowerCase();
           if (!(user && user.emailVerified && (user.email || '').toLowerCase().endsWith('@' + dom))) {
             fail('Sign in on the board first, then open this PR again.'); var a = mk('a', null, ' Go to the board'); a.href = '/#prs'; $('loadmsg').appendChild(a); return;
           }
           live = { db: db, user: user };
-          db.collection('integrations').where('prKey', '==', String(PRID)).onSnapshot(function(q){   // waiting for integration
-            var box = document.getElementById('int-pr'); if (!box) { box = document.createElement('div'); box.id = 'int-pr';
-              box.style.cssText = 'margin:12px auto;max-width:1100px;padding:12px 14px;border:1px solid #f0b46a;background:#fff8ee;border-radius:10px;font:14px/1.45 system-ui';
+          // 13 Nov: "Waiting for integration" left the PR page (a PR review, not a merge review): one quiet line
+          // naming the Kotlin PRs this one ships with, found by code. The integrations page keeps the details.
+          window.__nsShips = function(rec){
+            var names = rec.shipsWith || [];
+            var box = document.getElementById('ships-pr');
+            if (!names.length) { if (box) box.style.display = 'none'; return; }
+            if (!box) { box = document.createElement('div'); box.id = 'ships-pr';
+              box.style.cssText = 'margin:12px auto;max-width:1100px;padding:8px 14px;border:1px solid #d0d7de;border-radius:10px;font:13px/1.45 system-ui;opacity:.85';
               var host = document.querySelector('main') || document.body; host.insertBefore(box, host.firstChild); }
-            var items = q.docs.map(function(d){ return d.data(); }).filter(function(x){ return x.status !== 'merged'; });
-            if (!items.length) { box.style.display = 'none'; return; } box.style.display = '';
-            var esc2 = function(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
-            box.innerHTML = '<b>Waiting for integration</b> <span style="opacity:.75">: the other repos must follow before this PR can merge alone</span>' +
-              items.map(function(x){ var rows = []; Object.keys(x.parts || {}).forEach(function(repo){ ['declaration','caller'].forEach(function(role){ var p = (x.parts[repo] || {})[role] || {};
-                if (p.status && p.status !== 'not-needed') rows.push('<li>' + esc2(repo) + ' · ' + role + ': <b>' + esc2(p.status) + '</b> ' + esc2(p.where || '') + (p.note ? ' <span style="opacity:.75">(' + esc2(p.note) + ')</span>' : '') + '</li>'); }); });
-                return '<div style="margin-top:8px"><span style="font-family:ui-monospace,monospace">' + esc2(x.id) + '</span> ' + esc2(x.what) + ' <b>' + esc2(x.status) + '</b><ul style="margin:4px 0 0 18px">' + rows.join('') + '</ul></div>'; }).join('');
-          }, function(){});
+            box.style.display = '';
+            box.textContent = 'Ships with: ' + names.join(' · ') + ' (reviewed against these Kotlin PRs)';
+          };
           db.collection('prs').doc(PRID).onSnapshot(function(d){
             if (!d.exists) { fail('PR #' + PRID + ' is not on the board yet.'); return; }
             var rec = d.data(); rec.id = d.id;
             Object.keys(rec).forEach(function(kj){ var k = kj.replace(/Json$/, ''); if (k !== kj && rec[kj] && rec[k] == null) { try { rec[k] = JSON.parse(rec[kj]); } catch(e) { rec[k] = null; } } });   // any field stored as JSON text
-            if (first === null) { first = rec.head + '|' + rec.reviewedAt; firstDraw = rec.redrawAt || ''; render(rec); return; }
+            if (first === null) { first = rec.head + '|' + rec.reviewedAt; firstDraw = rec.redrawAt || ''; render(rec); try { window.__nsShips(rec); } catch (e) {} return; }
             if (first !== null && rec.head + '|' + rec.reviewedAt === first && (rec.stillOpenAt || '') !== (window.__nsStillAt || '')) { window.__nsStillAt = rec.stillOpenAt || ''; if (window.__nsStill) window.__nsStill(rec); }
             if (rec.head + '|' + rec.reviewedAt === first && (rec.redrawAt || '') !== firstDraw) { firstDraw = rec.redrawAt || ''; if (window.__nsRedrawn) window.__nsRedrawn(rec); return; }
-            if (rec.head + '|' + rec.reviewedAt !== first) { $('h-status').innerHTML = ''; $('h-status').appendChild(document.createTextNode(rec.stage === 'reviewing' ? 'A new review is running… ' : 'A newer review is ready. ')); if (rec.stage !== 'reviewing') { var b = mk('button', 'btn soft', 'Reload'); b.type = 'button'; b.onclick = function(){ location.reload(); }; $('h-status').appendChild(b); } }
+            if (rec.head + '|' + rec.reviewedAt !== first) { $('h-status').innerHTML = ''; $('h-status').appendChild(document.createTextNode(rec.stage === 'reviewing' ? 'A new review is running… ' : 'A newer review is ready. ')); if (rec.stage !== 'reviewing') { $('h-status').appendChild(document.createTextNode('Loading it…')); setTimeout(function(){ location.reload(); }, 1500); } }   // 4 Nov: open the new review by itself, no manual refresh
           }, function(e){ fail('Could not read the review: ' + (e.message || e)); });
         });
       }).catch(function(e){ fail('Could not start: ' + (e.message || e)); });
@@ -1091,12 +1091,29 @@ var FB = /*__NS_FIREBASE__*/null;
   var TICKS = String.fromCharCode(96, 96, 96);
   function fence(lang, code){ return TICKS + lang + '\n' + String(code).split(TICKS).join("'''") + '\n' + TICKS; }
   function shipPlan(rec){
-    var link = location.origin + '/pr.html?id=' + encodeURIComponent(rec.id);
+    var link = location.origin + '/pr2.html?id=' + encodeURIComponent(rec.id);   // 4 Nov: the page people actually use
     var all = rec.findings || [], scs = ((rec.view || {}).scenarios || []);
     var idx = all.map(function(f, i){ return i; }).filter(function(i){ return all[i] && all[i].tier === 'verified'; });
     var ord = { blocker: 0, major: 1, minor: 2, suggestion: 3 };
     idx.sort(function(a, b){ return (ord[all[a].severity] ?? 9) - (ord[all[b].severity] ?? 9); });
-    var sus = all.filter(function(f){ return f && f.tier === 'suspected' && (f.severity === 'blocker' || f.severity === 'major'); });
+    // 4 Nov (PR #3222): "worth a look" listed only suspected FINDINGS rated major. A suspected major SCENARIO was left out
+    // when its finding was rated lower (s5) or when it had no finding at all (s6). Every suspected major/blocker counts now.
+    var big = function(v){ return v === 'blocker' || v === 'major'; };
+    var sus = [];
+    all.forEach(function(f, i){
+      if (!f || f.tier !== 'suspected') return;
+      var scSev = scs.filter(function(x){ return String(x.finding) === String(i) && x.verdict === 'suspected' && big(x.severity); })
+                     .map(function(x){ return x.severity; });
+      var sev = big(f.severity) ? f.severity : (scSev.indexOf('blocker') >= 0 ? 'blocker' : scSev[0]);
+      var sc0 = scs.filter(function(x){ return String(x.finding) === String(i) && x.verdict === 'suspected'; })[0] || null;
+      if (big(sev)) sus.push(Object.assign({}, f, { severity: sev, _sc: sc0 }));
+    });
+    scs.forEach(function(x){
+      if (x.verdict !== 'suspected' || !big(x.severity)) return;
+      if (x.finding != null && x.finding !== '' && all[+String(x.finding).replace(/^f/, '')]) return;   // already listed with its finding
+      var st0 = ((x.proof || {}).steps || [])[0] || [], at = String((x.fixCode || {}).file ? x.fixCode.file + ':' + (x.fixCode.line || '') : st0[0] || '');
+      sus.push({ severity: x.severity, title: String(x.title || x.q || '').replace(/^what if /i, 'What if '), file: at.split(':')[0], line: at.split(':')[1] || '', _sc: x });
+    });
     var comments = idx.slice(0, 20).map(function(i){
       var f = all[i], sc = scs.filter(function(s){ return String(s.finding) === String(i) && s.verdict === 'verified'; })[0] || {};
       var L = ['#### ' + (SEVN[f.severity] || f.severity || 'Issue') + ': ' + String(f.title || '').trim(),
@@ -1122,6 +1139,40 @@ var FB = /*__NS_FIREBASE__*/null;
       L.push('---', '[Full Night Shift review](' + link + '): replay, scenarios and the reviewers\' votes. Reply here if this is wrong.');
       return { file: f.file || '', line: f.line, title: f.title || '', severity: f.severity || '', body: L.join('\n') };
     });
+    (function(){ var seen = {}; sus = sus.filter(function(f){   // the same point twice (finding + "Needs a check" scenario): keep one
+      var k = String(f.file || '').split('/').pop() + ':' + (f.line || '') + ':' + String(f.title || '').replace(/^Needs a check:\s*/i, '').slice(0, 30).toLowerCase();
+      var k2 = String(f.file || '').split('/').pop() + ':' + (f.line || '');
+      if (f.file && f.line && (seen[k] || seen[k2])) return false; seen[k] = seen[k2] = 1; return true; }); })();
+    // 4 Nov: every major/blocker gets its OWN comment on its code line, the unproven ones clearly marked as such
+    sus.forEach(function(f){
+      var sc = f._sc || {}, fl = String(f.file || ''), ln = parseInt(f.line, 10);
+      if (!fl || !(ln > 0)) { var fc0 = sc.fixCode || {}; fl = fl || String(fc0.file || ''); ln = ln > 0 ? ln : parseInt(fc0.line, 10); }
+      if (!fl || !(ln > 0)) return;                     // nowhere to anchor it: it stays in the summary only
+      var why = (sc.why || []).filter(function(w){ return Array.isArray(w) && w[2]; }).map(function(w){ return '- ' + w[2]; });
+      var L = ['#### ' + (SEVN[f.severity] || f.severity || 'Issue') + ' (not proven): ' + String(f.title || '').trim(),
+        '`Worth a look` · Night Shift suspects this but did not prove it on this code. Please confirm or reply why it cannot happen.', ''];
+      if (String(f.problem || '').trim()) L.push('**What could happen**', String(f.problem).trim(), '');
+      else if (why.length) L.push('**What could happen**', why.join('\n'), '');
+      // 4 Nov: say WHY it is not proven (the reviewer who did not confirm, in their own words)
+      var jd = ((sc.proof || {}).judges || []).filter(function(j){ return Array.isArray(j) && j[1] && j[1] !== 'confirmed'; });
+      if (jd.length) { L.push('**Why not proven**'); jd.forEach(function(j){ L.push('- ' + j[0] + ' (' + j[1] + '): ' + String(j[2] || '').trim().slice(0, 500)); }); L.push(''); }
+      else if (!f._sc) { L.push('**Why not proven**', '- No scenario for this point was confirmed by both reviewers; it comes from one reviewer\'s reading of the code.', ''); }
+      var steps = ((sc.proof || {}).steps || []).filter(function(st){ return st && st[3]; }).slice(0, 3);
+      if (steps.length) { L.push('**Where**'); steps.forEach(function(st){ L.push('`' + st[0] + '`' + (st[1] ? ': ' + st[1] : ''), fence(langOf(st[0]), dedent(st[3]))); }); L.push(''); }
+      var fc = sc.fixCode;
+      if (fc && fc.diff) {
+        L.push('**Suggested fix**' + (fc.file ? ' in `' + shortPath(fc.file) + (fc.line ? ':' + fc.line : '') + '`' : ''),
+          fence('diff', dedent(String(fc.diff).split('\n').map(function(l){ return l.replace(/^([-+ ]) ?/, '$1'); }).join('\n'))));
+        if (fc.note) L.push(String(fc.note).trim());
+        L.push('');
+      } else if (f.fix) { L.push('**Suggested fix**', String(f.fix).trim(), ''); }
+      L.push('---', '[Full Night Shift review](' + link + '): replay, scenarios and the reviewers\' votes.');
+      // 4 Nov: one comment per code line: a point raised both as a finding and as a scenario ("Needs a check: ...")
+      // landed twice on HexagoneShape.h:49 (once with the full path, once with the short one)
+      var base = function(p){ return String(p || '').split('/').pop(); };
+      if (comments.some(function(c){ return base(c.file) === base(fl) && +c.line === +ln; })) return;
+      comments.push({ file: fl, line: ln, title: f.title || '', severity: f.severity || '', body: L.join('\n') });
+    });
     var head = { blocking: 'Blocking issue found', changes: 'Changes suggested', approve: 'Looks good' }[rec.verdict] || String(rec.verdict || '');
     var vs = idx.map(function(i){ return all[i]; });
     var cnt = function(list){ var c = {}; list.forEach(function(f){ c[f.severity] = (c[f.severity] || 0) + 1; });
@@ -1132,15 +1183,15 @@ var FB = /*__NS_FIREBASE__*/null;
       '| **Worth a look** | ' + (sus.length ? sus.length + ' (' + cnt(sus) + ', not proven)' : 'none') + ' |',
       '| **Reviewed commit** | `' + String(rec.head || '?').slice(0, 12) + '` |', ''];
     if (vs.length) { s.push('### Verified'); vs.forEach(function(f, k){ s.push((k + 1) + '. **' + (SEVN[f.severity] || '') + '**: ' + String(f.title || '').trim() + ' (`' + shortPath(f.file) + ':' + f.line + '`, see the inline comment)'); }); s.push(''); }
-    if (sus.length) { s.push('### Worth a look (not proven)'); sus.slice(0, 5).forEach(function(f){ s.push('- **' + (SEVN[f.severity] || '') + '**: ' + String(f.title || '').trim() + ' (`' + shortPath(f.file) + ':' + f.line + '`)'); }); s.push(''); }
+    if (sus.length) { s.push('### Worth a look (not proven)'); sus.slice(0, 8).forEach(function(f){ s.push('- **' + (SEVN[f.severity] || '') + '**: ' + String(f.title || '').trim() + (f.file ? ' (`' + shortPath(f.file) + (f.line ? ':' + f.line : '') + '`' + (f.file && f.line ? ', see its comment' : '') + ')' : '')); }); s.push(''); }
     s.push('---', '[Open the full Night Shift review](' + link + '): replay of each scenario, proof chains and the reviewers\' votes.');
     return { comments: comments, summary: s.join('\n') };
   }
   function openShip(rec){
     if (!live) { $('h-status').textContent = 'Open this page from the live board to post to Bitbucket.'; return; }
     var plan = shipPlan(rec), list = $('ship-list'); list.innerHTML = '';
-    $('ship-sub').textContent = plan.comments.length + ' comment(s) on the code lines + 1 summary. Edit anything you like; untick what should not be posted. '
-      + 'A comment whose line is not part of the PR changes is listed in the summary instead. Posting again later edits these same comments.';
+    $('ship-sub').textContent = plan.comments.length + ' comment(s) on the code lines (verified ones and the unproven majors, each on its own line) + 1 summary. Edit anything you like; untick what should not be posted. '
+      + 'A comment on an unchanged line goes on that exact line (Bitbucket shows it when the reader expands the code); only if Bitbucket refuses it goes on the nearest changed line, with a note. Posting again later edits these same comments.';
     plan.comments.forEach(function(c, i){
       var box = document.createElement('div'); box.style.cssText = 'border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px';
       var lab = document.createElement('label'); lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:700';
@@ -1183,7 +1234,7 @@ var FB = /*__NS_FIREBASE__*/null;
     var adds = 0, dels = 0; ((rec.code || {}).files || []).forEach(function(f){ adds += f.add || 0; dels += f.del || 0; });
     $('h-meta').textContent = [(rec.source || '') + (rec.dest ? ' → ' + rec.dest : ''), rec.author, (rec.nFiles || 0) + (rec.nFiles === 1 ? ' file' : ' files'), rec.code ? '+' + adds + ' −' + dels : '',
       (rec.commits || []).length ? rec.commits.length + ' commit' + (rec.commits.length > 1 ? 's' : '') : '', rec.reviewedAt ? 'reviewed ' + String(rec.reviewedAt).replace('T', ' ').slice(0, 16) + (rec.minutes ? ' in ' + rec.minutes + ' min' : '') : '',
-      'head ' + String(rec.head || '').slice(0, 8), rec.kotlin ? 'Kotlin side: ' + ((String(rec.kotlin).match(/sprint[-_]?\d+/i) || ['read'])[0]) : ''].filter(Boolean).join(' · ');
+      'head ' + String(rec.head || '').slice(0, 8), ((rec.shipsWith || []).length ? 'Kotlin side: ' + rec.shipsWith.map(function(x){ var m = String(x).match(/PR #\d+/); return m ? m[0] : x; }).join(', ') : (rec.kotlin ? 'Kotlin side: ' + ((String(rec.kotlin).match(/sprint[-_]?\d+/i) || ['read'])[0]) : ''))].filter(Boolean).join(' · ');
     if (rec.kotlin) $('h-meta').title = 'Kotlin repos read for this review: ' + rec.kotlin;
     if (rec.stages) {
       var hw = mk('details', 'how'), hs = mk('summary');
@@ -1442,6 +1493,7 @@ var FB = /*__NS_FIREBASE__*/null;
     (function(){   // 30 Oct: verdict and counts at the top of the inspector
       var side = document.querySelector('.side'); if (!side) return; var old = side.querySelector('.vcard'); if (old) old.parentNode.removeChild(old);
       var vc = mk('div', 'vcard'); vc.appendChild(mk('span', 'vk', 'Verdict')); vc.appendChild(mk('span', 'vt', VERD[rec.verdict] ? VERD[rec.verdict][0] : 'Review'));
+      if (rec.verdictWhy) { var vw = mk('span', 'vk', rec.verdictWhy); vw.style.display = 'block'; vw.style.textTransform = 'none'; vc.appendChild(vw); }   // 4 Nov: why not approve
       var g = mk('div', 'vgrid');
       [['verified', 'var(--bad)'], ['suspected', 'var(--risk)'], ['safe', 'var(--ok)']].forEach(function(x){ var d = mk('div'), b = mk('b', null, String(SC_ALL.filter(function(s){ return s.verdict === x[0]; }).length)); b.style.color = x[1]; d.appendChild(b); d.appendChild(mk('span', null, x[0])); g.appendChild(d); });
       var d4 = mk('div'), b4 = mk('b', null, String(SC.filter(function(s){ return (s.field || []).length; }).length)); b4.style.color = 'var(--accent)'; d4.appendChild(b4); d4.appendChild(mk('span', null, 'seen in the field')); g.appendChild(d4);

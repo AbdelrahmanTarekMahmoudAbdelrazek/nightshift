@@ -92,9 +92,32 @@ def checks(a, ev, file_index):
     return issues[:10], extra
 
 
+PRIORITY = ('problem', 'anr_blocker', 'wait_chains', 'all_threads', 'firebase', 'google_play', 'same_bug_family')
+LIMIT = 60000
+
+
+def _evidence_text(ev):
+    """The evidence the reviewer reads, cut to LIMIT chars. 9 Nov: the plain JSON put the thread dump, wait chains and
+    ANR blocker AFTER the long event timelines, so the cut removed them and the reviewer asked twice for evidence the
+    writer had ("no all_threads, no wait_chains"). The deciding parts go first; each big part gets a fair share."""
+    ev = ev or {}
+    keys = [k for k in PRIORITY if k in ev] + [k for k in ev if k not in PRIORITY]
+    parts, left = [], LIMIT
+    for i, k in enumerate(keys):
+        txt = json.dumps({k: ev[k]}, default=str)[1:-1]
+        share = max(2000, left // max(1, len(keys) - i)) if k not in PRIORITY[:4] else left
+        if len(txt) > share:
+            txt = txt[:share] + ' …[cut]'
+        parts.append(txt)
+        left -= len(txt)
+        if left <= 0:
+            break
+    return '{' + ', '.join(parts) + '}'
+
+
 def critic(a, ev, cfg, out_dir, tag):
     prompt = ('Review this analysis against its evidence. Answer with the JSON object from your instructions.\n\n'
-              'EVIDENCE:\n' + json.dumps(ev, default=str)[:60000] + '\n\nANALYSIS:\n' + json.dumps(a, indent=1, default=str))
+              'EVIDENCE:\n' + _evidence_text(ev) + '\n\nANALYSIS:\n' + json.dumps(a, indent=1, default=str))
     from . import analyse as _an                       # blind test: the reviewer gets the same read block as the analysis
     txt = llm.run('analysis-review', prompt, cfg, out_dir, tag, deny=getattr(_an, 'BLIND_DENY', None))
     from .analyse import _json

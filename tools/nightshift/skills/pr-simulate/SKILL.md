@@ -37,9 +37,36 @@ value the code cannot tell you.
 - 3-25 steps per scenario. Keep only the steps that decide the outcome; a long chain of plain calls is one step.
 - If the scenario's start is impossible (no UI path, a state the code never allows), end "guard" and cite the line
   that makes it impossible.
+- EXISTING CALL, NEW KEYS OR ARGUMENTS (4 Nov, PR #3222 2nd commit): when the PR adds new keys/fields/arguments to a
+  call the app ALREADY makes (e.g. sizeX/sizeY/cornerRadius read from the changeOverlayMaskShape map that
+  OverlayItem.setShape already sends), the caller EXISTS: it is that existing Kotlin code (in the linked Kotlin PR if
+  there is one, else the sprint). Judge with what it sends TODAY. If it does not send the new keys, that is a proven
+  code fact, but NOT a bug of this PR: Night Shift tracks it by code on its integrations page. Do not raise, confirm or rate it as a finding. Judge the native code as it will run once the keys are sent:
+  a bug that shows then (e.g. a split copy that drops them) is a real bug of this PR; vote on the code, reach
+  "pending", rate it by what users get then. "A FEATURE NOT WIRED YET" below is only for a NEW call (a new native
+  function) that nothing calls.
+- A FEATURE NOT WIRED YET (4 Nov, PR #3222): when the PR adds code whose only entry point is the PR's own new API
+  (new map keys, a new native function, a new setter) and the app caller is simply not written yet, "no caller sends
+  it" is NOT a guard. Start from the values the intended caller would send (e.g. sizeX = 1.5 from the slider the PR
+  is for) and walk on; write in note "waits for the Kotlin side to send it". A guard is a line that stops the path
+  when the feature IS used; the missing caller is reported separately (integration), never as the reason a bug
+  cannot happen.
 - Only scenarios with claim "verified" or "suspected" are given to you; simulate all of them.
 
 ## Answer
 ONLY a ```json block: {"sims": [{"id": "s1", "start": {}, "steps": [{"line": "File.kt:12", "code": "exact line",
 "thread": "UI", "state": {}, "branch": ""}], "end": "outcome|guard|unknown", "outcome": "", "stopped_at": "File.cpp:40",
 "unknown": "", "base": "same|different|n/a", "note": "one plain sentence"}]}
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. (1) Every claim about what the app does (who calls it, what it sends,
+whether it sets a flag, whether a toggle exists, whether it waits or times out) must be checked in THOSE copies with a
+file:line. If they already handle the case, the finding is refuted. If the trigger no longer exists there (a removed
+toggle, a removed call), it is not reachable: refute, or at most a minor note. (2) Merge order is never a finding:
+"merged alone it breaks", "the sprint / an older Player.kt lacks these natives", "RegisterNatives fails with the old
+Player.kt", "the other repo must merge first". Refute these; Night Shift shows the shipping PRs itself.
+
+SEVERITY BY REACH (13 Nov): major/blocker only when a NORMAL user action reaches the problem (a tap, undo, split,
+delete, export, reopening a draft, a slow phone). When it needs a rare failure first (a model file that will not
+open, a GPU and a CPU failure together, a refused job after another bug) or a race window of a few milliseconds, rate
+it minor and say what has to go wrong first. Never lower a crash a user can reach by normal use.

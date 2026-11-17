@@ -30,6 +30,13 @@ Rules:
 - Output a short **Cause** paragraph, then exactly one ```diff block in `git diff` format with paths relative to the repo root and correct line context so `git apply --check` passes.
 - Then a **Test** paragraph: which stress scenario/seed to replay and what log line proves the fix (e.g. the message now fails with `ERROR | VisualTimeLine` and the app keeps running).
 - If the right fix is not local (needs a design change), say so and propose the minimal crash guard plus a follow-up note, clearly labelled.
+  EXCEPTION (9 Nov): when the task says DESIGN FIX (an ANR whose blocker is stuck inside a system call, or a review asked
+  for a design change), write the design change itself: the 2-files limit does not apply, several files and a few hundred
+  lines are fine. A guard, a retry window or a timeout can never free a thread stuck inside MediaCodec/binder; meet every
+  requirement in the task (no blocking system call on a thread others wait on, deadlines with a fallback, dead codec
+  replaced, healthy behaviour unchanged).
+- Revisions build on the previous round (9 Nov): keep its approach and add what the review says is missing; a new theory
+  needs a field fact or lab result that disproves the old one.
 
 ## Which screen's code sent the call (28 Oct)
 The activity in the field events can host several screens or modes. Grep the code for the exact event names in the

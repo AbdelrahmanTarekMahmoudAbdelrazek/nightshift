@@ -291,6 +291,29 @@ def _near_miss(run_dirs, sigs):
     return ''
 
 
+SYS_CALL = r'(?:AMediaCodec_\w+|MediaCodec::\w+|dequeue(?:Input|Output)Buffer|ALooper::awaitResponse|postAndAwaitResponse|binder|IPCThreadState|AMediaExtractor_\w+|eglSwapBuffers)'
+SYS_HANG = re.compile(SYS_CALL + r'[^.\n]{0,120}?(?:never (?:returns?|returned|answers?|answered|replies|replied)|stops? answering|stopped answering|'
+                      r'hangs?|hung|stuck|does not return|did not return)|'
+                      r'(?:never returns?|stuck|hangs?|hung|blocked forever)[^.\n]{0,60}?(?:inside|in) ' + SYS_CALL, re.I)
+
+
+def system_hang(case, analysis=None):
+    """9 Nov (501bb526~00fe1e6d, 3.5 h): an ANR whose blocker is stuck INSIDE a system call (MediaCodec never answering,
+    a binder call) cannot be made by taps, device settings or timing on a healthy lab phone: the field device's codec/
+    service hung. Real-tap and levels 2-4 spent ~75 min not reaching it. Such a case starts at the hook level (a hook
+    makes that call never return) and skips the real-tap step. -> reason or ''."""
+    a = (case or {}).get('anr') or {}
+    if a.get('mode') == 'waiting' and re.search(r'> (?:AMediaCodec_\w+|AMediaExtractor_\w+|binder|ANativeWindow_\w+|egl\w+)', a.get('key') or ''):
+        return f"the ANR blocker is stuck inside a system call ({a.get('title')})"
+    txt = json.dumps(analysis if analysis is not None else (case or {}).get('analysis') or (case or {}).get('narrative') or '',
+                     default=str)[:60000]
+    if re.search(r'\bANR\b|not responding|main thread', txt, re.I):
+        m = SYS_HANG.search(txt)
+        if m:
+            return f'the root cause says a system call never returns ("{m.group(0)[:90]}")'
+    return ''
+
+
 def start_level(ctx):
     """Where to start the ladder, from the field reports themselves. When the reports show the screen was torn down or
     recreated, or something was downloading/transcoding at the crash, the plain user flow on a lab phone with warm
@@ -320,6 +343,10 @@ def start_level(ctx):
     if m:
         return (5, f'the root cause depends on an uninitialised value ("{m.group(0)}"): leftover memory decides it, '
                    f'which a lab phone cannot be made to have naturally; a hook forces it (hook-assisted)')
+    sh = system_hang({'anr': ctx.get('anr')} if ctx.get('anr') else {}, a) or system_hang({}, a)
+    if sh:
+        return (5, f'{sh}: a healthy lab codec/service does not hang on its own; a hook makes that call never return '
+                   f'(hook-assisted), the field condition itself')
     return (3, '; '.join(why)) if why else (2, '')
 
 
@@ -634,6 +661,12 @@ def _check_hook(diff):
     added = re.sub(r'//[^\n]*|/\*.*?\*/', '', added, flags=re.S)        # comments may name these words
     selfcrash = re.findall(r'\b(FatalError|abort\s*\(|raise\s*\(|kill\s*\(|__builtin_trap|LOG\s*\(\s*FATAL|std::terminate|'
                            r'_?exit\s*\(|killProcess|throw\b|SIGSEGV|SIGABRT)', added)
+    swap = re.findall(r'\b(newActivity|mInstrumentation|setClassName|setComponent|ComponentName\s*\(|'
+                      r'Class\.forName\([^)]*Activity)', added)
+    if swap:                                     # 12 Nov, ff832bfc: a hook made MainActivity load as UCropActivity
+        return (f'a hook may not change WHICH screen or class Android opens ({", ".join(sorted(set(swap)))}): forcing a '
+                f'screen open that no app code opens makes a crash no user can hit. Reproduce it through a path the app '
+                f'really has (a button, a deep link, an exported screen), or report that no such path exists')
     if selfcrash:
         return (f'a hook may only change timing or state (delay, hold, force a lifecycle step); it must never crash the app '
                 f'itself ({", ".join(sorted(set(selfcrash)))}): a crash the hook makes proves nothing about the field crash')
@@ -721,7 +754,10 @@ def drop_gone(text, log=print):
     2fe03193 kept opening 6e2486dd's project 24f6f788 (gone since 28 Oct): 9 scripts in a row stopped in 8 s.
     -> the keys that were set aside."""
     ids = set(re.findall(r'no draft with id=([0-9a-f-]{8,})', text or ''))
-    if not ids:
+    # 10 Nov: a fixture whose draft exists but whose CLIP is gone (the lab cleanup deleted ns_fresh_* copies) never
+    # opens either: 'project 339a8d3e did not open in 60 s' on every run. Same treatment; ids are matched by prefix.
+    short = set(re.findall(r'project ([0-9a-f]{8})[0-9a-f-]* did not open', text or ''))
+    if not ids and not short:
         return []
     try:
         allfx = json.load(open(FIXTURES))
@@ -732,7 +768,7 @@ def drop_gone(text, log=print):
         v = allfx[k]
         if '_old_' in k or k.startswith('_') or not isinstance(v, dict):
             continue
-        if any(isinstance(d, dict) and str(d.get('id')) in ids for d in v.values()):
+        if any(isinstance(d, dict) and (str(d.get('id')) in ids or str(d.get('id'))[:8] in short) for d in v.values()):
             allfx[f'{k}_old_gone_{dt.datetime.now():%Y%m%d%H%M}'] = allfx.pop(k)
             out.append(k)
     if out:

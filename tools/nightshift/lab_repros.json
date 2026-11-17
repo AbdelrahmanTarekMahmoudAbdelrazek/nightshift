@@ -75,8 +75,9 @@
     "natural": false,
     "author": true,
     "hook_patch": "tools/nightshift/out/hooks/ff832bfc_l5_2.diff",
-    "stat_runs": 1,
-    "stat_hits": 1
+    "stat_runs": 3,
+    "stat_hits": 3,
+    "stat_secs": 57
    }
   ]
  },
@@ -285,6 +286,66 @@
     "author": true,
     "stat_runs": 2,
     "stat_hits": 1
+   }
+  ]
+ },
+ "2bc43cd6d24a25e5305f8167703618a8~e6a57918": {
+  "expect": [
+   "VisualMedia::append_remove_bg_track_mask",
+   "RemoveBgMaskTrackBuilder::run"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "hybrid: tf_ge6a5791_1_b: HYBRID: Crashlytics ge6a5791: the build is started by engine call; the trigger is the real row drag of the overlay being built.",
+    "scenario": "tf_ge6a5791_1_b_r1103213835",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 2,
+    "stat_hits": 1
+   }
+  ]
+ },
+ "501bb52658b63a6c0a32a5b8bbd06b8b~00fe1e6d": {
+  "expect": [
+   "MAIN:JNI_getMediaDuration|com.common.myzesty.videoPlayer.Player.getMediaDuration",
+   "MAIN:com.common.myzesty.videoPlayer.Player.getMediaDuration"
+  ],
+  "ladder": [
+   {
+    "level": 4,
+    "name": "ns_g00fe1e6_l4_1_c: Play sample 1.25.1 (onMediaTrackStartTouch): bursts of handle presses (trimVideo + sync getMediaDuration each) into running trim renders, slow CPU.",
+    "scenario": "ns_g00fe1e6_l4_1_c_r1109164951",
+    "repeat": 2,
+    "natural": true,
+    "author": true,
+    "stat_runs": 6,
+    "stat_hits": 1,
+    "stat_secs": 2276
+   },
+   {
+    "level": 5,
+    "name": "ns_g00fe1e6_l5_1_b: Firebase 2026-11-09 (1.26.0, end handle, release path): dequeueInputBuffer hangs (hook=hang) on a trim redraw, the release's sync getMediaDuration waits.",
+    "scenario": "ns_g00fe1e6_l5_1_b_r1109203616",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 4,
+    "stat_hits": 2,
+    "hook_patch": "tools/nightshift/out/hooks/g00fe1e6_l5_1.diff",
+    "stat_secs": 81
+   },
+   {
+    "level": 5,
+    "name": "ns_g00fe1e6_l5_1_a: Firebase 2026-10-22 + 2026-10-23 (1.25.1) + Play samples: start-handle trims on a stalled codec, then a handle PRESS (onMediaTrackStartTouch -> getMediaDuration) while dequeueInput",
+    "scenario": "ns_g00fe1e6_l5_1_a_r1110142804",
+    "repeat": 2,
+    "natural": false,
+    "author": true,
+    "stat_runs": 1,
+    "stat_hits": 1,
+    "hook_patch": "tools/nightshift/out/hooks/g00fe1e6_l5_1.diff"
    }
   ]
  }

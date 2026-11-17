@@ -1,52 +1,41 @@
-# Night Shift lab fixture builder for ge6a5791 (try 2)
-
-_FX_GE6A5791_ADD = r'MsgAddVideo: media_layer ([1-9]\d*) path: \S+'
-
-
-def _fx_ge6a5791_layer(line):
-    import re
-    m = re.search(_FX_GE6A5791_ADD, line or '')
-    return int(m.group(1)) if m else None
-
+# Night Shift lab fixture builder for ge6a5791 (try 3)
 
 @scenario('nightshift', 'auto', 'nodraft')
 def ns_ge6a5791_fx(ed, r):
-    """Fixture for Crashlytics [libMYJNILIB26.so] VisualMedia::append_remove_bg_track_mask: two stacked ~20 s video overlays."""
+    """Fixture for Crashlytics [libMYJNILIB26.so] VisualMedia::append_remove_bg_track_mask: overlay on L1 + long video overlay on L2."""
     ed.fixture_begin()
-    ed.step('open a project without the wizard (new_project hangs on Full Editor)')
-    if not ed.drafts():
-        ed.remake_test_draft()
-    if not ed.drafts():
-        raise RuntimeError('no project in My Projects even after remake_test_draft; cannot build without the wizard')
+    # Clean project (the shared test draft holds leftover overlays from earlier builders).
+    ed.new_project(tag='ge6a_base', duration_s=20)
     mark = ed.log_mark()
-    ed.open_draft()
-    ed.require_log(r've_draft_project_complete|MsgAddVideo: media_layer 0 ', 30, since=mark,
-                   why='editor opened the project and loaded its base clip')
-    ed.wait_log(r've_draft_project_complete', 10, since=mark)
-    ed.idle(2)
+    ed.require_log(r'MsgAddVideo: media_layer 0 path: \S+|ve_draft_media_applied_complete|PlayerActivity', 30,
+                   since=mark - 60 if isinstance(mark, (int, float)) else mark, why='base clip on layer 0')
+    ed.settle(2)
 
-    ed.step('overlay A: the lower overlay (field: layer 1 media 0, deleted later)')
-    mark = ed.log_mark()
-    la = ed.add_overlay_video(tag='ge6a5791_a', duration_s=20)
-    line_a = ed.require_log(_FX_GE6A5791_ADD, 40, since=mark,
-                            why='first video overlay reached the engine (MsgAddVideo on an overlay layer)')
-    la = la if la is not None else _fx_ge6a5791_layer(line_a)
-    ed.idle(2)
+    # Overlay A: the layer-1 overlay the field user deleted later (short clip is fine).
+    ed.step('overlay A (layer 1, short video)')
+    la = ed.add_overlay_video(tag='ge6a_ovA', duration_s=8)
+    if la != 1:
+        raise UIError(f'overlay A landed on layer {la}, field needs layer 1')
+    ed.wait_loader(90)
     ed.main_nav()
+    ed.settle(3)
 
-    ed.step('overlay B: the overlay the remove-bg build will target (sits above A)')
+    # Overlay B: the long video overlay on layer 2 that Remove BG builds on (field: 497 frames, ~16 s).
+    ed.step('overlay B (layer 2, long video)')
+    lb = ed.add_overlay_video(tag='ge6a_ovB', duration_s=20)
+    if lb != 2:
+        raise UIError(f'overlay B landed on layer {lb}, field needs layer 2')
+    ed.wait_loader(120)
+
+    # Last run crashed on Back while overlay B was still loading inside the overlay panel:
+    # let the engine finish (render order logged after an overlay add), then leave the panel calmly.
     mark = ed.log_mark()
-    lb = ed.add_overlay_video(tag='ge6a5791_b', duration_s=20)
-    line_b = ed.require_log(_FX_GE6A5791_ADD, 40, since=mark,
-                            why='second ~20 s video overlay reached the engine (several hundred masks later)')
-    lb = lb if lb is not None else _fx_ge6a5791_layer(line_b)
-    if la is None or lb is None or la == lb:
-        raise RuntimeError('overlays did not land on two distinct layers: A=%s B=%s' % (la, lb))
-    if lb < la:
-        raise RuntimeError('overlay B is not above A: A=%s B=%s' % (la, lb))
-    ed.dev.marker('ge6a5791 fixture: overlay A layer %s, overlay B layer %s' % (la, lb))
-    ed.idle(2)
+    ed.wait_log(r'MsgGetLayerRenderOrder|MsgSetLayerRenderOrder', 20, since=mark)
+    ed.set_playing(False)
+    ed.settle(4)
     ed.main_nav()
+    ed.settle(4)
+    ed.check()
 
-    ed.save_fixture('ge6a5791', 'Base clip on layer 0 plus two fresh ~20 s video overlays on separate layers, '
-                                'B above A (B = remove-bg build target, A = the overlay below it); no remove-bg applied')
+    ed.save_fixture('ge6a5791', 'new project: base clip L0, short video overlay on layer 1 (media 0), '
+                                '~20 s fresh video overlay on layer 2 (media 0) for a long Remove BG build; no remove-bg yet')

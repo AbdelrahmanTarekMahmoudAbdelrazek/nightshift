@@ -31,3 +31,8 @@ ONLY a ```json block:
 "evidence": "short code quote"}]}
 Severity: blocker = will crash/ANR/corrupt data/leak in normal use; major = likely bug or real cost; minor = small risk;
 suggestion = better way, optional. An empty findings list is a fine answer.
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. Check every claim about what the app does in THOSE copies (file:line);
+if they already handle it, or the trigger no longer exists there, do not report it. Merge order ("merged alone it
+breaks", "the sprint / an older Player.kt lacks these natives") is never a finding.

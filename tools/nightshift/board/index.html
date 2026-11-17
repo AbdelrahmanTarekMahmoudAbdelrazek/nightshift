@@ -78,6 +78,10 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 body.drawer-open #drawer{transform:none}.drawer-in{padding:18px 22px 40px}
 .d-top{display:flex;gap:8px;align-items:center}.d-top .x{margin-left:auto;border:0;background:none;color:var(--muted);font-size:18px;cursor:pointer}
 .d-title{font-size:15px;font-weight:650;margin:10px 0 2px;word-break:break-word}
+.anrmap{margin:10px 0 14px}.anrmap>details{border:1px solid var(--line);border-radius:10px;margin:6px 0;background:var(--card,#fff)}
+.anrmap summary{cursor:pointer;padding:9px 12px;font-size:13px}.anrmap .af-fix{margin:0 12px 8px;font-size:12px}
+.anrmap .ac{border-top:1px solid var(--line);padding:8px 12px 9px 26px;font-size:13px}.anrmap .ac .muted{font-size:12px}
+.anrmap .ac .xa-chip{margin:3px 4px 0 0}.anrbox{border:1px solid var(--line);border-left:3px solid #d97706;border-radius:10px;padding:10px 14px;margin:12px 0;font-size:13px}
 .proofbox{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:14px 0;font-size:13px}.proofbox ul{margin:6px 0 0;padding-left:18px}
 .sides{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:720px){.sides{grid-template-columns:1fr 1fr}}
 .side{border:1px solid var(--line);border-radius:10px;padding:12px 14px}.side.play{border-top:3px solid #7c5cff}.side.fb{border-top:3px solid #f08c2e}
@@ -552,19 +556,28 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
       '<br><span style="opacity:.8">Browser: ' + String(navigator.userAgent).replace(/[<>&]/g, '') + '</span>' +
       '<br>Send a screenshot of this box to the Night Shift owner.';
     (document.body || document.documentElement).appendChild(d);
+    var t = setInterval(function () { if (window.__nsBooted) { clearInterval(t); if (d.parentNode) d.parentNode.removeChild(d); } }, 1000);
   }
   window.__nsWatchErr = function (m) { errs.push(m); };
   window.addEventListener('error', function (e) {
     errs.push((e && e.message ? e.message : 'error') + (e && e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : '') +
               (e && e.target && e.target.src ? ' loading ' + e.target.src : ''));
   }, true);
-  setTimeout(function () {
+  /* 17 Nov: the box used to fire at 15 s even when every file had loaded and the board was just slow (a tab opened in
+     the background, or several Night Shift tabs sharing the offline cache), and it said "( missing)" with nothing
+     missing. Now: files all there and no error -> wait up to 60 s more; the box also removes itself once the board is up. */
+  var waited = 0;
+  function check() {
     if (window.__nsBooted) return;
+    var fb = window.firebase, gone = fb ? ['auth', 'firestore'].filter(function (m) { return !fb[m]; }) : [];
+    if (!errs.length && fb && !gone.length && waited < 60000) { waited += 5000; setTimeout(check, 5000); return; }
     var why = errs.length ? 'Error: ' + errs.slice(0, 3).join(' | ') :
-      (window.firebase ? 'The Google sign-in files loaded only in part (' + ['auth', 'firestore'].filter(function (m) { return !window.firebase[m]; }).join(', ') + ' missing).' :
-       'The Google sign-in files (www.gstatic.com) did not load. A network filter, VPN or ad/privacy blocker may stop them: try another network or allow the site.');
+      !fb ? 'The Google sign-in files (www.gstatic.com) did not load. A network filter, VPN or ad/privacy blocker may stop them: try another network or allow the site.' :
+      gone.length ? 'The Google sign-in files loaded only in part (' + gone.join(', ') + ' missing).' :
+      'The sign-in files loaded, but the board did not finish starting in 75 s. Close other Night Shift tabs and reload this one.';
     show(why);
-  }, 15000);
+  }
+  setTimeout(check, 15000);
 })();
 </script>
 <aside class="side">
@@ -659,6 +672,7 @@ pre.nx-code .nx-a{background:color-mix(in srgb,var(--good) 18%,transparent);colo
       <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="p-group" checked> one row per Firebase issue</label>
       <span id="p-chip"></span>
     </div>
+    <div id="p-anrmap"></div>
     <div class="xa-plist" id="problems"></div>
     <div class="empty hidden" id="problems-empty">Nothing here yet. Press Sync now (takes about 2 minutes).</div>
   </section>
@@ -915,7 +929,8 @@ function prSevBar(c) {
 const INT_ST = { missing: ['missing', 'fx-bad'], wrong: ['wrong', 'fx-bad'], branch: ['in a branch', 'fx-warn'], pr: ['in a PR', 'fx-warn'],
                  merged: ['merged', 'fx-good'], 'not-needed': ['not needed', ''] };
 function renderIntegrations() {
-  const el = $('#int-box'); if (!el) return;
+  // 13 Nov: hidden from the PRs tab (a PR review, not a merge review); Night Shift still tracks it in the background
+  const el = $('#int-box'); if (el) el.innerHTML = ''; return;
   const items = (DATA.integrations || []).filter(x => x.status !== 'merged').sort((a, b) => String(b.pr).localeCompare(String(a.pr)));
   if (!items.length) { el.innerHTML = ''; return; }
   const chip = (st, title) => { const [l, c] = INT_ST[st] || [st, '']; return `<span class="tbadge ${c}" title="${esc(title || '')}">${esc(l)}</span>`; };
@@ -1315,6 +1330,7 @@ let FAM_ROWS = new Map();                         // member card id -> the one f
 // reports with the same one are folded into one card (shown as "same crash point", not as a confirmed same bug)
 const GENERIC_FN = /^(abort|raise|__|std::|android\.os\.|java\.|kotlin\.|libc|art::|Native method|android\.app\.)/;
 function crashPoint(r) {
+  if (r.anr && r.anr.key) return 'ANR|' + (r.anr.title || r.anr.key);   // 9 Nov: ANRs: same blocker, not same main-thread frame
   const t = String(r.title || '');
   if (!/libMYJNILIB26|myzesty/i.test(t)) return '';
   const fn = t.replace(/^\S+\.so\s+/, '').replace(/\(.*$/, '').trim();
@@ -1374,7 +1390,39 @@ const liveBadge = m => (m.onLive || 0) > 0 ? '' : (m.fixState ? '' : `<span clas
 const famBadge = m => !m._family ? '' : m._family.auto
   ? `<span class="tbadge var" title="${esc('Same crash point (found automatically). Reports in this card:\n' + m._family.members.map(x => x.name + ' · ' + x.events + ' events').join('\n'))}">same crash point · ${m._family.members.length} reports</span>`
   : `<span class="tbadge var" title="${esc('Confirmed same bug (' + (m._family.by || '').split(' ')[0] + '). Crash stacks in this card:\n' + m._family.members.map(x => x.name + ' · ' + x.events + ' events').join('\n'))}">1 bug · ${m._family.members.length} crash stacks</span>`;
+// 9 Nov: ANRs grouped by their BLOCKER (where the waited-on thread is stuck), across Crashlytics issues
+const ANR_ENGINE = ['engine-queue', 'join', 'future', 'native-lock', 'codec', 'java-lock'];
+function anrMemberChip(x) {
+  const m = (DATA.merged || []).find(r => r.fb?.id === x.card);
+  return `<a class="xa-chip" href="#problems/m-${esc(x.card)}" title="${esc((x.versions || []).join(', '))}">#${esc(String(x.issue || '').slice(0, 8))}${x.card.includes('~') ? '~' + esc(x.card.split('~')[1].slice(0, 4)) : ''} · ${x.events} ev${x.new ? ' · <b>NEW</b>' : ''}${m?.analysis ? '' : ' · not analysed'}</a>`;
+}
+function renderAnrMap() {
+  const el = document.getElementById('p-anrmap');
+  if (!el) return;
+  el.innerHTML = ''; return;                      // 9 Nov: panel not wanted on the list; the ANR page keeps its blocker box
+  const fams = (DATA.anrmap && DATA.anrmap.families) || [];
+  const k = document.getElementById('p-kind')?.value || '';
+  if (!fams.length || k === 'CRASH') { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="anrmap"><div class="muted small" style="margin-bottom:4px"><b>ANRs by blocker</b> · grouped by where the thread the main thread waits on is stuck (the fix lives there), across Crashlytics issues. The main-thread call is only how it surfaced.</div>`
+    + fams.map(f => `<details${ANR_ENGINE.includes(f.id) ? ' open' : ''}><summary><b>${esc(f.title)}</b> <span class="muted">· ${f.events} events · ${f.issues} Crashlytics issue(s) · ${f.cards.length} bug(s)</span></summary>
+      ${f.fix ? `<div class="af-fix muted">Family fix: ${esc(f.fix)}</div>` : ''}
+      ${f.cards.map(c => `<div class="ac"><b>${esc(c.title)}</b>${c.new ? ' <span class="tbadge" style="background:#fde68a;color:#7c2d12">NEW</span>' : ''}${(c.issues || []).length > 1 ? ` <span class="tbadge var">one bug in ${c.issues.length} Crashlytics issues</span>` : ''}
+        <span class="muted"> · ${c.mode === 'running' ? 'busy (running long)' : c.mode === 'unknown' ? 'blocker not in the dump' : 'stuck waiting'} · ${c.events} event(s)${c.inferred ? ' · blocker inferred' : ''}</span>
+        <div class="muted">${(c.victims || []).length ? 'main thread was calling ' + c.victims.map(esc).join(', ') : ''}${(c.during || []).length ? ` · during ${c.during.map(esc).join(', ')}` : ''}</div>
+        <div>${(c.members || []).map(anrMemberChip).join('')}</div></div>`).join('')}</details>`).join('') + `</div>`;
+}
+function anrBox(m) {
+  const a = m.anr;
+  if (!a) return '';
+  const sib = (a.siblings || []).map(c => `<a class="xa-chip" href="#problems/m-${esc(c)}">#${esc(c.slice(0, 8))}${c.includes('~') ? '~' + esc(c.split('~')[1].slice(0, 4)) : ''}</a>`).join(' ');
+  return `<div class="anrbox"><b>ANR blocker:</b> ${esc(a.title)} <span class="muted">(${a.mode === 'running' ? 'busy, running long' : a.mode === 'unknown' ? 'not found in the dump' : 'stuck waiting'})</span>
+    <div class="muted small">${esc(a.familyTitle || '')}${(a.victims || []).length ? ' · main thread was calling ' + a.victims.map(esc).join(', ') : ''}${(a.during || []).length ? ' · during ' + a.during.map(esc).join(', ') : ''}</div>
+    ${sib ? `<div style="margin-top:6px">Same bug in: ${sib}</div>` : ''}
+    ${a.familyFix ? `<div class="muted small" style="margin-top:6px">Family fix (stops every ANR in this family): ${esc(a.familyFix)}</div>` : ''}</div>`;
+}
+
 function renderProblems() {
+  try { renderAnrMap(); } catch (e) {}
   const all = groupFamilies((DATA.merged || []).filter(m => !m.stale).sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999)));
   const s = DATA.sync;
   $('#p-scope').innerHTML = s ? `Builds <b>${esc((s.releases || []).map(x => x.replace(/^\S+ \((\d+)\)$/, '$1')).join(' · '))}</b> of ${esc(((s.releases || [])[0] || '').split(' ')[0])}
@@ -1452,6 +1500,8 @@ function openProblem(id, keepScroll) {
       <button class="x" onclick="closeProblem()" title="Close">✕</button></div>
     <div class="d-title mono">${esc(m.title)}</div>${m.subtitle ? `<div class="muted">${esc(m.subtitle)}</div>` : ''}
     ${(m.fb?.cards || 0) > 1 ? `<div class="muted small"><b>${esc(m.fb.cardTitle || '')}</b> · from Crashlytics issue ${m.fb.url ? `<a href="${esc(m.fb.url)}" target="_blank">${esc(String(m.fb.issue || '').slice(0, 8))}</a>` : esc(String(m.fb.issue || '').slice(0, 8))} (${m.fb.cards} bugs)${m.fb.newStack ? ' · <b>NEW STACK</b>' : ''}</div>` : ''}
+    ${anrBox(m)}
+    ${botBox(caseDoc)}
     ${(m.proof || []).length ? `<div class="proofbox"><b>Why we think it is the same problem</b><ul>${m.proof.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`
       : m.match === 'play' || m.match === 'firebase' ? `<div class="proofbox muted">Seen by ${m.match === 'play' ? 'Google Play' : 'Firebase'} only for these builds (no shared frames or device with the other console).</div>` : ''}
     ${analysisHtml(m)}
@@ -1488,6 +1538,13 @@ function analysisHtml(m) {
     ${(a.open_questions || []).length ? `<h4>Open questions</h4><ul>${li(a.open_questions)}</ul>` : ''}
   </div>`;
 }
+function botBox(c) {   // 12 Nov: Start's real-user check (ns/botcheck.py)
+  const b = c && c.botcheck; if (!b || (b.verdict !== 'bot' && !/unreachable/.test((b.reach || {}).verdict || ''))) return '';
+  const r = b.reach || {};
+  return `<div class="proofbox" style="border-left:3px solid var(--warn)"><b>Probably Google's automated testing, not real users</b>
+    <ul>${b.verdict === 'bot' ? `<li>${esc(b.why || '')}</li>` : ''}${/unreachable/.test(r.verdict || '') ? `<li>${esc(r.why || '')}</li>` : ''}</ul>
+    <div class="muted small">Night Shift stopped before the lab run. Fix the cause instead (e.g. remove an unused screen from the manifest), or queue Start with force=true to run the lab anyway.</div></div>`;
+}
 function progressBar(c) {
   const p = c?.progress; if (!p) return '';
   const age = (Date.now() - new Date(p.at).getTime()) / 60000;
@@ -1502,6 +1559,7 @@ function nxStatus(c) {
   if (!c) return ['pending', ''];
   const blocking = ((c.review || {}).issues || []).filter(i => /blocking|major|high/i.test(i.severity || '')).length;
   if (c.fixVerified && (/review/.test(c.status || '') || (c.review || {}).verdict === 'changes')) return [`Fix verified · ${blocking || 'some'} review change${blocking === 1 ? '' : 's'}`, 'warn'];
+  if (c.status === 'bot-suspect') return ['Not real users (Google test devices)', 'warn'];
   if (c.fixVerified) return ['Fix verified on the phone', 'good'];
   if (c.status === 'reproduced' || c.reproLevel) return [`Reproduced · ${c.reproRate || ''}`, 'good'];
   if (c.status === 'not-reproduced') return ['Not reproduced yet', 'warn'];
@@ -2189,6 +2247,7 @@ function route() {
   if (t === 'problems' && a && a !== selProblem) { if (dTab !== 'lab') dTab = 'auto'; selProblem = a; lastDrawerSig = ''; setTimeout(() => openProblem(a), 0); }
   document.querySelectorAll('.side a[data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === t));
   ['dashboard', 'problems', 'releases', 'issues', 'findings', 'runlog', 'jobs', 'prs', 'audio', 'card'].forEach(k => $('#tab-' + k)?.classList.toggle('hidden', k !== t));
+  try { window.nsLazy && window.nsLazy(t); } catch (e) {}   // 9 Nov: start this tab's own listeners the first time
   if (!DATA) return;                                 // signed in but no data yet: renderAll draws the tab when it arrives
   if (t === 'prs') { if (a) selPR = a; renderPRs(); if (a) setTimeout(() => $('#pr-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); }
   if (t === 'audio') renderAudio();
@@ -3102,10 +3161,10 @@ async function bootLive() {
   // 26 Oct: some networks/extensions/VPNs block Firestore's streaming channel; the board then stayed at 0 for one
   // person while working for others. Long polling is picked automatically when streaming does not get through.
   try { db.settings({ experimentalAutoDetectLongPolling: true, merge: true }); } catch (e) {}
-  try { await db.enablePersistence({ synchronizeTabs: true }); } catch (e) {}
+  try { db.enablePersistence({ synchronizeTabs: true }).catch(function () {}); } catch (e) {}   // not awaited: with other Night Shift tabs open it can take many seconds; reads wait for it anyway
   // free plan: a hidden tab stops streaming after 2 min (no reads), and catches up when shown again; the local
   // cache (persistence) means a reload or return within 30 min reads only the records that changed
-  var __nsOff = null; document.addEventListener('visibilitychange', function(){ if (document.hidden) { __nsOff = setTimeout(function(){ db.disableNetwork().catch(function(){}); }, 120000); } else { clearTimeout(__nsOff); db.enableNetwork().catch(function(){}); } });
+  /* 17 Nov: all Night Shift tabs share one connection (synchronizeTabs), so a hidden tab switching it off emptied the visible ones. A tab now switches it off only when no Night Shift tab has been visible for 2 min. */ var __nsOff = null; function __nsSeen(){ try { localStorage.setItem('ns.visAt', String(Date.now())); } catch (e) {} } function __nsAnyVisible(){ try { return Date.now() - Number(localStorage.getItem('ns.visAt') || 0) < 60000; } catch (e) { return true; } } function __nsOffCheck(){ if (!document.hidden) return; if (__nsAnyVisible()) { __nsOff = setTimeout(__nsOffCheck, 60000); return; } db.disableNetwork().catch(function(){}); } setInterval(function(){ if (!document.hidden) __nsSeen(); }, 20000); if (!document.hidden) __nsSeen(); db.enableNetwork().catch(function(){}); document.addEventListener('visibilitychange', function(){ clearTimeout(__nsOff); if (document.hidden) { __nsOff = setTimeout(__nsOffCheck, 120000); } else { __nsSeen(); db.enableNetwork().catch(function(){}); } });
   const domain = (FB.domain || 'msd-my.com').toLowerCase();
   $('#gate-domain').textContent = '@' + domain;
   document.querySelector('main').classList.add('hidden'); document.querySelector('.side').classList.add('hidden'); document.body.classList.add('gated');
@@ -3162,8 +3221,11 @@ async function bootLive() {
     db.collection('families').onSnapshot(q => { DATA.families = q.docs.map(d => ({ id: d.id, ...d.data() })); renderProblems(); }, () => {});
     db.collection('cases').onSnapshot(q => { DATA.issues = q.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.events || 0) - (a.events || 0)); renderAll();
       if (typeof selProblem !== 'undefined' && selProblem && document.body.classList.contains('drawer-open')) openProblem(selProblem, true); });
-    db.collection('findings').onSnapshot(q => { const all = q.docs.map(d => d.data()); const run = DATA.sources.lab_run || (all[0] || {}).run;
-      DATA.findings = all.filter(f => !run || f.run === run).sort((a, b) => a.id.localeCompare(b.id)); renderFindings(); });
+    // 9 Nov (free Firestore quota): collections only one tab shows are read the first time that tab opens
+    const LAZY = {}, lazy = (tab, fn) => { LAZY[tab] = (LAZY[tab] || []).concat(fn); };
+    window.nsLazy = t => { (LAZY[t] || []).forEach(f => { try { f(); } catch (e) { console.warn(e); } }); LAZY[t] = []; };
+    lazy('findings', () => db.collection('findings').onSnapshot(q => { const all = q.docs.map(d => d.data()); const run = DATA.sources.lab_run || (all[0] || {}).run;
+      DATA.findings = all.filter(f => !run || f.run === run).sort((a, b) => a.id.localeCompare(b.id)); renderFindings(); }));
     db.collection('runlog').onSnapshot(q => { DATA.runlog.rows = q.docs.map(d => d.data()).sort((a, b) => (b.date || '').localeCompare(a.date || '')); renderRunlog(); });
     db.collection('prs').onSnapshot(q => { DATA.prs = q.docs.map(d => ({ id: d.id, ...d.data() })); renderPRs(); });
     db.collection('integrations').onSnapshot(q => { DATA.integrations = q.docs.map(d => ({ docId: d.id, ...d.data() })); renderIntegrations(); }, () => {});
@@ -3174,12 +3236,30 @@ async function bootLive() {
       const repo = lm ? lm[1] : NS_MAIN_REPO, num = lm ? lm[2] : nm[1];
       const key = repo === NS_MAIN_REPO ? num : `${repo}-${num}`;      // other repos: '<repo>-<number>' (the worker's key)
       $('#pr-add-url').value = ''; queuePR(key); $('#pr-status').textContent = `PR #${num}${repo !== NS_MAIN_REPO ? ' in ' + repo : ''} added: the Mac reads it from Bitbucket and reviews it (about 15-25 min). It opens in its own page when done.`; };
-    db.collection('config').doc('audiobranches').onSnapshot(d => { DATA.audiobranches = d.exists ? d.data() : null; renderAudio(); });
-    db.collection('audiochecks').onSnapshot(q => { DATA.audiochecks = q.docs.map(d => ({ id: d.id, ...d.data() })); renderAudio(); }, () => {});
+    lazy('audio', () => db.collection('config').doc('audiobranches').onSnapshot(d => { DATA.audiobranches = d.exists ? d.data() : null; renderAudio(); }));
+    lazy('audio', () => db.collection('audiochecks').onSnapshot(q => { DATA.audiochecks = q.docs.map(d => ({ id: d.id, ...d.data() })); renderAudio(); }, () => {}));
     initAudio();
-    db.collection('cards').onSnapshot(q => { DATA.cards = q.docs.map(d => ({ id: d.id, ...d.data() })); renderCard(); }, () => {});
+    lazy('card', () => db.collection('cards').onSnapshot(q => { DATA.cards = q.docs.map(d => ({ id: d.id, ...d.data() })); renderCard(); }, () => {}));
     initCard();
-    db.collection('jobs').orderBy('queuedAt', 'desc').limit(50).onSnapshot(q => { jobs = q.docs.map(d => { const j = d.data(); return { ...j, id: d.id, at: ts(j.queuedAt) }; }); renderJobs(); });
+    const cur = (location.hash.replace(/^#/, '') || 'dashboard').split('/')[0]; window.nsLazy(cur);   // the tab open right now
+    // 4 Nov: the live list could go stale ('running' after the job was done, until a page refresh): a listener
+    // that errors is restarted, and every 30 s the jobs still shown as queued/running are re-read directly
+    const jobsMap = q => { jobs = q.docs.map(d => { const j = d.data(); return { ...j, id: d.id, at: ts(j.queuedAt) }; }); renderJobs(); };
+    let jobsUnsub = null;
+    const jobsListen = () => { try { jobsUnsub && jobsUnsub(); } catch (e) {}
+      jobsUnsub = db.collection('jobs').orderBy('queuedAt', 'desc').limit(50).onSnapshot(jobsMap, e => { console.warn('jobs listener', e); setTimeout(jobsListen, 5000); }); };
+    jobsListen();
+    setInterval(async () => {
+      const open = jobs.filter(j => /queued|running|cancel$/.test(j.status));
+      if (!open.length) return;
+      let changed = false;
+      for (const j of open) {
+        try { const d = await db.collection('jobs').doc(j.id).get({ source: 'server' });
+          if (d.exists && d.data().status !== j.status) { Object.assign(j, d.data(), { id: d.id, at: ts(d.data().queuedAt) }); changed = true; } } catch (e) {}
+      }
+      if (changed) { renderJobs(); jobsListen(); }     // the listener had missed it: start a fresh one
+    }, 30000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) jobsListen(); });   // tab back in view: fresh listener
     db.collection('play_issues').onSnapshot(q => { DATA.play = q.docs.map(d => d.data()); renderPlay(); }, () => {});
     db.collection('workers').onSnapshot(q => { WORKERS = Object.fromEntries(q.docs.map(d => [d.id, d.data()])); renderJobs(); renderPhoneBtn(); if ($('#phonedlg')?.open) renderPhones(); }, () => {});   // shared board: who is online + their phones
     db.collection('devicechoice').doc(user.email.toLowerCase()).onSnapshot(d => { PHONE_PICK = (d.exists && d.data().serial) || ''; renderPhoneBtn(); if ($('#phonedlg')?.open) renderPhones(); }, () => {});

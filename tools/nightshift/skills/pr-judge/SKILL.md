@@ -93,12 +93,34 @@ Code that is wrong is not yet a problem users have. For every problem scenario a
   default, a call with no UI caller at all.
   - "release" + reach_path: the user steps, screen > button > ... (cite the listener line in reach_evidence).
   - "debug-only" / "no-ui" / "flag-off" + reach_evidence: the gate line(s) you opened. The page keeps it as latent.
+  - "pending": the PR's own new feature: its app caller is not written yet, or the existing caller does not send the new keys yet (see EXISTING CALL, NEW KEYS and A FEATURE NOT WIRED YET below).
   - "unknown": you searched and could not find the UI entry; say what you searched.
 - needs: every state the outcome needs at the moment of the user action, in plain words: a job still running, an
   empty cache, a first run on that input, a second item already added. Check what skips the path: a cache, a memo, a
   "done" flag, a result saved from an earlier run. If the path only runs the first time on a given input (later runs
   read the cache), say so: "needs a clip never processed before (masks are cached by <file:line>)". A tester must be
   able to set that state from your words.
+BY DESIGN = A QUESTION, NEVER A MAJOR (4 Nov, PR #3222): when the linked Kotlin PR, the PR description or a code
+comment states the behaviour on purpose (e.g. java-common #643 Player.kt: "Size X/Y applies to circle, pentagon,
+hexagon; Corner Radius to rhombus, star"), a scenario that only restates that behaviour ("Corner does nothing on
+hexagon") is a PRODUCT question, not a bug: vote refuted with note "by design per <file:line>", or, if you think the
+product may want it differently, severity "suggestion" and a title that is a question ("Should Corner Radius also apply
+to hexagon/pentagon?"). Never minor/major. It is a bug only if the code contradicts the stated design.
+EXISTING CALL, NEW KEYS OR ARGUMENTS (4 Nov, PR #3222 2nd commit): when the PR adds new keys/fields/arguments to a
+call the app ALREADY makes (e.g. sizeX/sizeY/cornerRadius read from the changeOverlayMaskShape map that
+OverlayItem.setShape already sends), the caller EXISTS: it is that existing Kotlin code (in the linked Kotlin PR if
+there is one, else the sprint). Judge with what it sends TODAY. If it does not send the new keys, that is a proven
+code fact, but NOT a bug of this PR: Night Shift tracks it by code on its integrations page. Do not raise, confirm or rate it as a finding. Judge the native code as it will run once the keys are sent:
+a bug that shows then (e.g. a split copy that drops them) is a real bug of this PR; vote on the code, reach
+"pending", rate it by what users get then. "A FEATURE NOT WIRED YET" below is only for a NEW call (a new native
+function) that nothing calls.
+A FEATURE NOT WIRED YET (4 Nov, PR #3222): when the PR adds new code whose only entry point is the PR's own new API
+(new keys, a new native function, a new setter) and the app caller simply is not written yet, "no sender exists"
+or "trigger not found" is NOT a reason to vote unsure or to lower the severity. Judge the code fact as if the
+intended caller existed: if the code is wrong once the feature is used, vote confirmed, set reach "pending", say in
+"needs" that it waits for the Kotlin side, and rate the severity by what users get the day it is wired. Vote unsure
+only when you cannot tell whether the code itself is wrong. The missing caller ITSELF ("no Kotlin calls it, so the
+feature never turns on") is not a finding: Night Shift tracks it by code on its integrations page.
 A race is reachable only if the work it races with is still running when the user can act: say how long that work
 runs and what makes it run (and what makes it skip).
 
@@ -115,4 +137,17 @@ runs and what makes it run (and what makes it skip).
 
 ## Answer
 ONLY a ```json block: {"votes": [{"id": "s1", "vote": "confirmed|refuted|unsure", "kind": "always|timing|condition",
-"evidence": ["File.cpp:123"], "severity": "blocker|major|minor|suggestion", "note": "", "title"?: "", "q"?: "", "problem"?: "", "same_as"?: "", "reach": "release|debug-only|no-ui|flag-off|unknown", "reach_path": "", "reach_evidence": ["File.kt:12"], "needs": "", "ui_gate": "open|blocked|unknown", "ui_gate_evidence": ["Handler.kt:40"], "likelihood": "often|sometimes|rare"}]}
+"evidence": ["File.cpp:123"], "severity": "blocker|major|minor|suggestion", "note": "", "title"?: "", "q"?: "", "problem"?: "", "same_as"?: "", "reach": "release|debug-only|no-ui|flag-off|pending|unknown", "reach_path": "", "reach_evidence": ["File.kt:12"], "needs": "", "ui_gate": "open|blocked|unknown", "ui_gate_evidence": ["Handler.kt:40"], "likelihood": "often|sometimes|rare"}]}
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. (1) Every claim about what the app does (who calls it, what it sends,
+whether it sets a flag, whether a toggle exists, whether it waits or times out) must be checked in THOSE copies with a
+file:line. If they already handle the case, the finding is refuted. If the trigger no longer exists there (a removed
+toggle, a removed call), it is not reachable: refute, or at most a minor note. (2) Merge order is never a finding:
+"merged alone it breaks", "the sprint / an older Player.kt lacks these natives", "RegisterNatives fails with the old
+Player.kt", "the other repo must merge first". Refute these; Night Shift shows the shipping PRs itself.
+
+SEVERITY BY REACH (13 Nov): major/blocker only when a NORMAL user action reaches the problem (a tap, undo, split,
+delete, export, reopening a draft, a slow phone). When it needs a rare failure first (a model file that will not
+open, a GPU and a CPU failure together, a refused job after another bug) or a race window of a few milliseconds, rate
+it minor and say what has to go wrong first. Never lower a crash a user can reach by normal use.

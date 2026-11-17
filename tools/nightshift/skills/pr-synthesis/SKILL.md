@@ -31,3 +31,16 @@ ONLY a ```json block: {"verdict": "approve|changes|blocking", "headline": "", "s
 "from": ["lifetime / concurrency"], "pre_existing": false, "entry": "", "needs": "", "repro": {"setup": "", "steps": [""], "expected": "", "actual": ""}}],
 
 "good": []}
+
+SHIPS WITH (13 Nov, PR #3226): when the prompt has a "Ships with" section, the Kotlin copies you can Read ARE the Kotlin
+PRs this PR goes together with, not the sprint. (1) Every claim about what the app does (who calls it, what it sends,
+whether it sets a flag, whether a toggle exists, whether it waits or times out) must be checked in THOSE copies with a
+file:line. If they already handle the case, the finding is refuted. If the trigger no longer exists there (a removed
+toggle, a removed call), it is not reachable: refute, or at most a minor note. (2) Merge order is never a finding:
+"merged alone it breaks", "the sprint / an older Player.kt lacks these natives", "RegisterNatives fails with the old
+Player.kt", "the other repo must merge first". Refute these; Night Shift shows the shipping PRs itself.
+
+SEVERITY BY REACH (13 Nov): major/blocker only when a NORMAL user action reaches the problem (a tap, undo, split,
+delete, export, reopening a draft, a slow phone). When it needs a rare failure first (a model file that will not
+open, a GPU and a CPU failure together, a refused job after another bug) or a race window of a few milliseconds, rate
+it minor and say what has to go wrong first. Never lower a crash a user can reach by normal use.

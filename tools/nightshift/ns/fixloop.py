@@ -191,8 +191,15 @@ def _kneeds(case, merged, cfg):
         return False
 
 def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
-    prompt = ('# Task\nWrite the smallest safe fix for this crash. It was reproduced on the lab phone; the fix will be '
-              'verified by re-running that reproduction and then reviewed. Read the code with Read/Grep first: the '
+    dz = design_needed(case, history)
+    carry = ('# BUILD ON THE PREVIOUS ROUND (9 Nov rule)\nStart from the last round\'s diff below and keep its approach. Fix '
+             'exactly what its lab result and review say. Switch to a different theory ONLY when a field fact or a lab result '
+             'disproves the old one, and name that fact in Cause. Your answer is a complete diff against the CURRENT working '
+             'copy (the earlier diff is not applied), so include the parts of the earlier diff you keep.\n\n') if history else ''
+    prompt = ('# Task\n'
+              + (f'Write the REAL fix for this ANR ({dz}).\n{DESIGN_RULES}\nIt was reproduced on the lab phone; the fix will be '
+                 if dz else 'Write the smallest safe fix for this crash. It was reproduced on the lab phone; the fix will be ')
+              + 'verified by re-running that reproduction and then reviewed. Read the code with Read/Grep first: the '
               'crashing function, its callers and the threads in the wait chain. Fix the cause, not the symptom; keep '
               'behaviour the same otherwise. Do not touch tools/, tests or build files; do not remove debug hooks '
               '(debug.zesty.hook.*). Where the fix drops, skips or short-circuits a call (a guard that returns early), '
@@ -220,11 +227,14 @@ def propose(case, merged, cfg, history, n, tag='', angle='', lessons=''):
               'sees it ran.\n\n'
               f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:30000]}\n```\n{_lab_dump(case)}\n'
               + _kmap(case, merged, cfg)
-              + ('# Previous rounds (fix what they say)\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
+              + (carry + '# Previous rounds (fix what they say)\n' + '\n\n'.join(history[-2:]) + '\n\n' if history else '')
               + (lessons or '')
               + (f'# Your angle for this candidate\n{angle}\n\n' if angle else '')
-              + '# Answer\nA short "Cause:" paragraph, then ONE unified diff (git format, a/ b/ paths from the repo root) in a ```diff block.')
-    ans = llm.run('fix-proposal', prompt, cfg, OUT, f"{case['id']}.fix{n}{tag}", tools='Read,Grep,Glob', cwd=config.LAB, timeout=1500, deny=BLIND_DENY)
+              + '# Answer\nA short "Cause:" paragraph, then ONE unified diff (git format, a/ b/ paths from the repo root) in a ```diff block. '
+              'You cannot edit files in this session (that is expected): the diff in your answer is what gets applied and built.')
+    # 9 Nov: a design fix takes the model longer to read and write (2 of 3 candidates hit the 25 min limit with no answer)
+    ans = llm.run('fix-proposal', prompt, cfg, OUT, f"{case['id']}.fix{n}{tag}", tools='Read,Grep,Glob', cwd=config.LAB,
+                  timeout=3000 if dz else 1500, deny=BLIND_DENY)
     diff = fix.extract_diff(ans or '')
     if not diff:
         return None, ans, 'no diff in the answer'
@@ -340,9 +350,16 @@ def _insert_hook(path, hunks):
             if len(hits) > 1 and n == len(pre):
                 break
         if at is None and post:
-            n = len(post)
-            hits = [i for i in range(len(lines) - n + 1) if [l.rstrip() for l in lines[i:i + n]] == [c.rstrip() for c in post]]
-            at = hits[0] if len(hits) == 1 else None
+            # 9 Nov (design fix rewrote the lines above the hooked call): the longest unique run of the FOLLOWING context,
+            # down to the one hooked line itself (the hook belongs right before the call it stalls)
+            for n in range(len(post), 0, -1):
+                ctx = post[:n]
+                if n == 1 and len(ctx[0].strip()) < 12:
+                    break
+                hits = [i for i in range(len(lines) - n + 1) if [l.rstrip() for l in lines[i:i + n]] == [c.rstrip() for c in ctx]]
+                if len(hits) == 1:
+                    at = hits[0]
+                    break
         if at is None:
             return None
         lines[at:at] = add
@@ -418,6 +435,18 @@ def _crash_frames(dirs, per=12, most=2):
             if not os.path.isfile(lf):
                 continue
             fr = []
+            # 10 Nov: System.err lines of OTHER apps (an OPPO system app's SQLiteException) were reported as 'crash on
+            # the fixed build'. Only the app's own processes count for those.
+            pid_of = lambda ln: (re.match(r'^\S+ \S+\s+(\d+)\s+\d+ ', ln) or [None, None])[1]
+            app_pids = set()
+            for l in open(lf, errors='replace'):
+                m0 = re.search(r'Start proc (\d+):com\.myzesty\b', l)
+                if m0:
+                    app_pids.add(m0.group(1))
+                elif re.search(r' (MsgLooper|VisualTimeLine|ZestyLab|SentryJNI|VideoEngine)[\w.]*\s*:', l) or 'com.myzesty' in l.split(':', 3)[-1][:80]:
+                    pp = pid_of(l)
+                    if pp and re.search(r' (MsgLooper|VisualTimeLine|ZestyLab|SentryJNI|VideoEngine)', l):
+                        app_pids.add(pp)
             for l in open(lf, errors='replace'):
                 m = re.search(r' F DEBUG   : +#(\d+) pc \S+ +\S+ \((.+?)(\+\d+)?\)', l)
                 if m:
@@ -425,7 +454,8 @@ def _crash_frames(dirs, per=12, most=2):
                 elif re.search(r' E AndroidRuntime: (FATAL|\S+Exception|\s+at )', l):
                     fr.append(l.split('AndroidRuntime:', 1)[1].strip()[:140])
                 elif re.search(r' W System\.err: +([\w.$]+(Exception|Error)\b|\s*at com\.(video|myzesty|common|picker)\.)', l) \
-                        and not re.search(r'cronet|okhttp|ssl|socket|UnknownHost|Timeout|ttnet', l, re.I):
+                        and not re.search(r'cronet|okhttp|ssl|socket|UnknownHost|Timeout|ttnet', l, re.I) \
+                        and (not app_pids or pid_of(l) in app_pids):
                     fr.append(l.split('System.err:', 1)[1].strip()[:140])   # the app's CrashCatcher prints here
                 if len(fr) >= per:
                     break
@@ -441,6 +471,50 @@ def _crash_frames(dirs, per=12, most=2):
     return '\n\n'.join(stacks)
 
 
+DESIGN_RULES = (
+    'This is a DESIGN fix, not a guard. A thread that is stuck INSIDE a system call (MediaCodec never answering, a binder '
+    'call) can never be freed by a timeout, a flag, a retry window or a guard: once the call has started, the thread is '
+    'gone. The diff must meet ALL of these:\n'
+    '1) No call that can block inside MediaCodec/binder runs on a thread that someone else waits on synchronously: not the '
+    'engine message thread (MsgLooper::ProcessMessages handlers, e.g. quit_edit_state -> refreshPlayer -> render), not a '
+    'thread holding the GL ownership lease (glOwnershipMtx / lockContextForEdit, e.g. runGlTaskNow), not the main thread.\n'
+    '2) Those calls run on a thread nobody waits on without a deadline (the decoder\'s own worker, MCDecoder::worker_loop, '
+    'or a new one). Every waiter uses a deadline, has a fallback (the last good frame), and holds no lock others need '
+    'while it waits.\n'
+    '3) A codec/service that misses the deadline is treated as dead: stop using it, give the next request a fresh instance '
+    '(the existing deactivate()/activate() order), abandon the stuck thread (never join it).\n'
+    '4) Healthy codecs behave exactly as before (same preview frames; export and frame extraction still get exact frames).\n'
+    'Several files and a few hundred lines are fine. Reuse what exists (worker_loop, postGlTask, RenderStop, safeCodecFlush). '
+    'A timeout in JNI/MsgLooper alone is rejected.')
+
+
+def design_needed(case, history=()):
+    """9 Nov (501bb526~00fe1e6d): three rounds of 'smallest safe fix' produced guards that could not stop a codec hang,
+    while the critic and the review kept saying the real fix is a design change. Design mode when the blocker is stuck
+    inside a system call, or an earlier review said the fix needs a design change. -> reason or ''."""
+    try:
+        from . import author as _au
+        r = _au.system_hang(case)
+        if r:
+            return r
+    except Exception:
+        pass
+    for h in history or []:
+        if re.search(r'design change|redesign|not a local fix|needs? (?:a )?design|move[sd]? the hanging decode|keep (?:blocking )?codec calls? off',
+                     h, re.I):
+            return 'an earlier review said the fix needs a design change'
+    return ''
+
+
+DESIGN_ANGLES = [
+    ('A', 'Decoder ownership: every MediaCodec call happens only on the MCDecoder worker thread; get_frame/get_frame_at wait '
+          'for it with a deadline and return the last good frame; a missed deadline marks the codec dead and the next request '
+          'gets a fresh codec. Then the render path can stay where it is.'),
+    ('B', 'Async edit refresh: quit_edit_state/refreshPlayer stop rendering on the message thread (post the render), and the '
+          'GL thread never waits on a codec while it holds the lease: it presents frames the decoder worker already produced; '
+          'plus dead-codec recovery so the preview comes back.'),
+    ('C', 'Both layers, the smallest version of each that meets all four design requirements together.')]
+
 ANGLES = [('A', 'Defend at the crash site: the smallest check where the bad value or state is used, logging the skipped call.'),
           ('B', 'Remove the cause: fix the lifetime, ownership or state change that lets the bad value exist (who clears, frees '
                 'or desyncs it, and when), so no caller can hit it.'),
@@ -453,8 +527,12 @@ def tournament(worker, ref, case, merged, cfg, history, n, lessons=''):
     runs BEFORE the lab (one revision if it blocks), so the slow phone time goes to the best candidate only."""
     import shutil
     from concurrent.futures import ThreadPoolExecutor
+    dz = design_needed(case, history)
+    angles = DESIGN_ANGLES if dz else ANGLES
+    if dz:
+        worker.log(ref, f'  design fix mode: {dz}; candidates must take blocking system calls off every thread others wait on')
     with ThreadPoolExecutor(3) as ex:
-        futs = {k: ex.submit(propose, case, merged, cfg, history, n, f'.{k}', a, lessons) for k, a in ANGLES}
+        futs = {k: ex.submit(propose, case, merged, cfg, history, n, f'.{k}', a, lessons) for k, a in angles}
     cands = {k: f.result() for k, f in futs.items()}
     ok = {k: c for k, c in cands.items() if c[0]}
     worker.log(ref, '  tournament: ' + '; '.join(f'{k} ' + ('applies' if c[0] else f'rejected ({c[2][:60]})') for k, c in cands.items()))
@@ -462,10 +540,15 @@ def tournament(worker, ref, case, merged, cfg, history, n, lessons=''):
         return None, (cands['A'][1] or ''), 'no candidate applies: ' + ' | '.join(c[2][:120] for c in cands.values())
     pick, why = next(iter(ok)), 'only candidate that applies'
     if len(ok) > 1:
-        diffs = '\n\n'.join(f'## Candidate {k}\n```diff\n{open(c[0], errors="replace").read()[:9000]}\n```' for k, c in ok.items())
+        # 9 Nov: design diffs run to ~600 lines; at 9000 chars the critic saw only the header changes ('judged from the
+        # diff excerpts'). Design mode shows each candidate whole (up to 40000 chars) and tells it to Read the files.
+        diffs = '\n\n'.join(f'## Candidate {k}\n```diff\n{open(c[0], errors="replace").read()[:(40000 if dz else 9000)]}\n```' for k, c in ok.items())
         prompt = ('# Pick the best crash fix. Read the code (Read/Grep) where needed. Judge: fixes the root cause below (not '
                   'only the symptom), no new crash path, thread safety, behaviour for users, smallest blast radius, and that '
                   'it logs when it skips work.\n\n'
+                  + (f'DESIGN FIX ({dz}). Judge each candidate against these requirements first; size is not a reason to '
+                     f'prefer one, and a candidate that leaves any blocking system call on a thread others wait on loses:\n'
+                     f'{DESIGN_RULES}\n\n' if dz else '')
                   + ('When the root cause owner is app-java, the candidate that fixes the Kotlin caller (with the engine guard '
                      'as a safety net) beats an engine-only guard.\n' if _kneeds(case, merged, cfg) else '')
                   + f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:15000]}\n```\n{diffs}\n'
@@ -503,12 +586,15 @@ def tournament(worker, ref, case, merged, cfg, history, n, lessons=''):
     rev = review(case, merged, cfg, chosen[0], f'{n}.pre')
     if rev.get('blocking'):
         worker.log(ref, f"  pre-lab review: {len(rev['blocking'])} blocking -> one revision before the lab")
-        h2 = history + [f'## round {n} candidate {pick} (not tested yet)\n```diff\n{open(chosen[0], errors="replace").read()[:6000]}'
+        h2 = history + [f'## round {n} candidate {pick} (not tested yet)\n```diff\n{open(chosen[0], errors="replace").read()[:(20000 if dz else 6000)]}'
                         f'\n```\nCode review asked for changes before testing:\n' + json.dumps(rev['blocking'], indent=1)[:4000]]
         if getattr(worker, '_spec_th', None) is not None:   # the speculative build has the old pick applied: let it finish
             worker._spec_th.join(2400)
             worker._spec_th = None
-        r2 = propose(case, merged, cfg, h2, n, f'.{pick}r', dict(ANGLES)[pick], lessons)
+        keep = (f'{dict(angles)[pick]}\nREVISION (9 Nov rule): keep candidate {pick}\'s approach and fix exactly the blocking '
+                f'issues above. Do not replace it with a different, smaller fix: if the review says a part is missing, ADD that '
+                f'part to this diff.')
+        r2 = propose(case, merged, cfg, h2, n, f'.{pick}r', keep, lessons)
         if r2[0]:
             chosen = r2
             worker.log(ref, '  revision applies: it goes to the lab')
@@ -569,6 +655,13 @@ def verify(worker, ref, case, patch):
             errs = [l.strip() for l in (getattr(worker, '_last_errors', None) or getattr(worker, '_last_tail', []))
                     if _re.search(r'\berror:|^e: |unresolved reference', l)]
             errs = list(dict.fromkeys(errs))[:12]      # the proposer must SEE the compiler errors (2026-10-21: the
+            fixed_files = {os.path.basename(f) for f in re.findall(r'^\+\+\+ b/(\S+)', open(patch, errors='replace').read(), re.M)}
+            err_files = {os.path.basename(m) for m in (re.findall(r'([\w.-]+\.(?:kt|java|cpp|cc|h|hpp)):\d+', '\n'.join(errs)))}
+            if errs and err_files and not (err_files & fixed_files):
+                # 9 Nov: every error is in a file the fix does not touch: the lab tree is broken, not the fix
+                return False, ('LAB BUILD PROBLEM, not this fix: the build fails only in files the fix does not touch ('
+                               + ', '.join(sorted(err_files))[:300] + '). Keep the fix as it is; these errors are not yours to fix:\n'
+                               + '\n'.join(errs)), {}
             return False, ('the app does not build with this fix. Compiler errors:\n' + '\n'.join(errs)   # same error twice)
                            if errs else 'the app does not build with this fix (see the build errors in the job log)'), {}
         total = {'runs': 0, 'hits': 0, 'fails': 0, 'errors': 0, 'why': '', 'known_other': 0, 'others': [], 'truncated': 0,
@@ -679,7 +772,13 @@ def verify(worker, ref, case, patch):
                         + (f"; known other bug(s): {'; '.join(kn)}" if kn else '')
                         + (f"; {total['trunc_excused']} cut-short dump(s), clean on the re-run" if total.get('trunc_excused') else '')
                         + "; the field crash never appeared, so they do not reject this fix")
-    rescued = _guard_runs_without_crash(patch, new_dirs) if total['errors'] else 0
+    # 9 Nov (501bb526~00fe1e6d): for an ANR a run that ended in an automation error proves nothing: the guard line only
+    # says the fix's code ran, not that the main thread stayed responsive for the rest of the run (8/8 'clean' runs of a
+    # fix the review then showed could not stop the field hang). Such runs stay UNKNOWN for ANRs.
+    is_anr = 'ANR' in str(case.get('kind') or '').upper() or str(case.get('id', '')).startswith('anr')
+    rescued = _guard_runs_without_crash(patch, new_dirs) if total['errors'] and not is_anr else 0
+    if total['errors'] and is_anr:
+        worker.log(ref, f"verify: {total['errors']} run(s) ended in an automation error; for an ANR they count as unknown, not clean")
     if rescued:                                      # automation tripped AFTER the trigger: the guard ran and nothing crashed
         worker.log(ref, f'verify: {rescued} run(s) ended in an automation error after the fix\'s guard ran with no crash; counted as clean')
         total['errors'] = max(0, total['errors'] - rescued)
@@ -784,7 +883,7 @@ def _guard_runs_without_crash(patch, dirs):
                     for ln in fh:
                         if ' adbd ' in ln or 'ZSTRESS' in ln:
                             continue
-                        if 'Fatal signal' in ln or 'FATAL EXCEPTION' in ln:
+                        if 'Fatal signal' in ln or 'FATAL EXCEPTION' in ln or ' am_anr ' in ln or 'ANR in com.' in ln:
                             crash = True
                         elif pats and any(p.search(ln) for p in pats):
                             g = True
@@ -834,8 +933,14 @@ def _trigger_reached(worker, ref, case, dirs, res):
 
 
 def review(case, merged, cfg, patch, n):
-    diff = open(patch, errors='replace').read()[:30000]
-    prompt = ('# Review this crash fix like a senior reviewer of this codebase. Read the changed files and their callers '
+    # 11 Nov: design patches are ~1000 lines (~70k chars); at 30000 the reviewer saw the diff 'cut off at initialize()'
+    # in all 3 rounds and judged half of it blind. Design mode: the whole diff, plus its path to Read.
+    diff = open(patch, errors='replace').read()
+    diff = diff[:(150000 if design_needed(case) else 30000)]
+    dz = design_needed(case)
+    prompt = ((f'# DESIGN FIX ({dz})\nThis fix is meant to be a design change; its size is expected. Check it against these '
+               f'requirements (a requirement it misses is a blocker; size alone is not):\n{DESIGN_RULES}\n\n' if dz else '')
+              + '# Review this crash fix like a senior reviewer of this codebase. Read the changed files and their callers '
               '(Read/Grep). Check: does it fix the root cause below; thread safety and lock order; leaks/double frees; '
               'behaviour changes for users; error paths; style of the surrounding code.\n'
               'Also (28 Oct, blocking when they fail): (a) FIELD FACTS: go through field_facts one by one: does the fix\'s '
@@ -844,7 +949,7 @@ def review(case, merged, cfg, patch, n):
               '(b) REUSE: Grep for an existing helper the diff duplicates (refresh/resync, bounds check, cached count): '
               'duplicated logic is major. (c) STYLE: naming, log tag/macro, error pattern and formatting of the file.\n\n'
               f'# Case\n```json\n{json.dumps(_ctx(case, merged), indent=1, default=str)[:20000]}\n```\n'
-              f'# Diff\n```diff\n{diff}\n```\n'
+              f'# Diff (full file: {patch}; Read it if anything below looks cut)\n```diff\n{diff}\n```\n'
               '# Answer: ONLY a ```json block: {"verdict": "approve" | "changes", "summary": "...", '
               '"issues": [{"severity": "blocker|major|minor", "file": "...", "line": 0, "problem": "...", "fix": "..."}]}')
     ans = llm.run('fix-review', prompt, cfg, OUT, f"{case['id']}.review{n}", tools='Read,Grep,Glob', cwd=config.LAB, timeout=1200, deny=BLIND_DENY)
@@ -916,7 +1021,53 @@ def run(worker, ref, case, merged, first_patch=None):
     if not _llm.claude_ok():
         worker.log(ref, 'fix stage skipped: the Claude CLI on the lab Mac cannot run (login expired?). Run `claude` then /login.')
         return None
+    # 9 Nov (buiJmCly): the release-recipe lab tree did not compile at all (Kotlin release tip vs module pins), and the
+    # first round's C++-only design fix was rejected as 'the app does not build with this fix'. Reproduce falls back
+    # to a tree that builds; the fix rounds must too, BEFORE any fix is written, so a lab problem is never blamed on a fix.
+    try:
+        if not first_patch and getattr(worker, '_recipe', None) and not getattr(worker, '_fall_pinned', False) \
+                and hasattr(worker, '_recipe_fall'):
+            worker.log(ref, 'fix: checking that the lab tree builds without any fix first')
+            if worker.install_app(ref):
+                # 10 Nov (o9bzwTiC): falling back alone was not enough: the fallback folder (CPP-1.25.2) needs the build
+                # repair Night Shift kept for it (out/labcompat/CPP-1.25.2.diff, java-common), which labtree only
+                # re-applies to rel_ folders. Same ladder as Reproduce: fall back, re-apply kept repairs, then the
+                # worker's own install (UI retry, build self-repair) before any fix is written.
+                worker._recipe_fall(ref, 'the lab tree does not compile even without a fix')
+                try:
+                    from . import buildfix as _bf
+                    _bf.reapply(config.LAB, lambda l: worker.log(ref, l))
+                except Exception as e:
+                    worker.log(ref, f'fix: kept build repairs not re-applied ({str(e)[:120]})')
+                ok_ = not worker.install_app(ref)
+                if not ok_ and hasattr(worker, '_install'):
+                    try:
+                        worker._install(ref, [])          # the full ladder: lab-UI retry, build self-repair, fallback
+                        ok_ = not worker.install_app(ref)
+                    except Exception as e:
+                        worker.log(ref, f'fix: lab build ladder failed ({str(e)[:160]})')
+                worker.log(ref, 'fix: the fallback lab tree builds; the fix rounds use it' if ok_ else
+                                'fix: the lab tree still does not build; build errors outside the fix\'s files will be '
+                                'reported as lab problems, not fix failures')
+            else:
+                worker.log(ref, 'fix: the lab tree builds without a fix')
+    except Exception as e:
+        worker.log(ref, f'fix: lab tree pre-check skipped ({str(e)[:150]})')
     history, rounds = [], []
+    # 10 Nov: a fix run that was stopped (paused) continues from its best lab-verified round: out/fix/<id>.seed.patch
+    # (+ .seed_review.md) is given to round 1 as the previous round, so it builds on it instead of starting over.
+    try:
+        sp = os.path.join(OUT, 'fix', f"{case['id']}.seed.patch")
+        if os.path.exists(sp):
+            sr = os.path.join(OUT, 'fix', f"{case['id']}.seed_review.md")
+            rv = open(sr, errors='replace').read()[:6000] if os.path.exists(sr) else ''
+            history.append(f"## earlier run, best round (VERIFIED on the lab phone with the hang hook: 4/4 runs clean)\n"
+                           f"```diff\n{open(sp, errors='replace').read()[:20000]}\n```\n"
+                           f"Code review asked for changes (fix exactly these, keep the design):\n{rv}")
+            os.rename(sp, sp + '.used')
+            worker.log(ref, 'fix: continuing from the earlier run\'s verified patch (seed): round 1 builds on it')
+    except Exception as e:
+        worker.log(ref, f'fix: seed not used ({str(e)[:120]})')
     used_lessons = set()
     tested, best = 0, None                          # best = a lab-verified patch the review still wanted changed
     for n in range(1, ROUNDS + 4):                  # format slips (no diff / corrupt patch) do not use up a lab round
@@ -959,7 +1110,7 @@ def run(worker, ref, case, merged, first_patch=None):
             frames = _crash_frames((res or {}).get('dirs') or [])
             if frames:
                 worker.log(ref, f'  crash on the fixed build: {frames.splitlines()[0][:160]}')
-            history.append(f'## round {n}\n```diff\n{diff[:6000]}\n```\nLab result: {note}'
+            history.append(f'## round {n}\n```diff\n{diff[:(20000 if design_needed(case, history) else 6000)]}\n```\nLab result: {note}'
                            + (f'\nWhere the FIXED build crashed (top frames of its dumps; fix this path too):\n```\n{frames}\n```' if frames else ''))
             rounds.append({'round': n, 'result': 'failed', 'note': note})
             continue
@@ -969,7 +1120,7 @@ def run(worker, ref, case, merged, first_patch=None):
         rounds.append({'round': n, 'result': 'verified', 'note': note, 'review': rev.get('verdict')})
         if rev.get('blocking'):
             best = {'diff': diff, 'note': note, 'review': rev, 'answer': ans}
-            history.append(f'## round {n}\n```diff\n{diff[:6000]}\n```\nLab: verified. Review asked for changes:\n'
+            history.append(f'## round {n}\n```diff\n{diff[:(20000 if design_needed(case, history) else 6000)]}\n```\nLab: verified. Review asked for changes:\n'
                            + json.dumps(rev['blocking'], indent=1)[:4000])
             continue
         worker.log(ref, 'step 10 hand-over: PR / Jira / Slack drafts')
@@ -1032,7 +1183,7 @@ def draft_unverified(worker, ref, case, merged):
         worker.log(ref, f"  review: {rev.get('verdict')}; {len(rev.get('blocking') or [])} blocking; {rev.get('summary', '')[:200]}")
         diff = open(patch, errors='replace').read()
         if rev.get('blocking') and n < 3:
-            history.append(f'## round {n}\n```diff\n{diff[:6000]}\n```\nReview asked for changes:\n' + json.dumps(rev['blocking'], indent=1)[:4000])
+            history.append(f'## round {n}\n```diff\n{diff[:(20000 if design_needed(case, history) else 6000)]}\n```\nReview asked for changes:\n' + json.dumps(rev['blocking'], indent=1)[:4000])
             continue
         ho = handover(case, merged, worker.cfg, patch, note, rev)
         _save(case['id'], {'status': 'fix-drafted', 'patch': diff, 'note': note, 'review': rev, 'handover': ho})

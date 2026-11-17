@@ -18,6 +18,7 @@ A hit is registered like any repro (FULL = natural, HYBRID = not natural, named 
 import datetime as dt
 import glob
 import json
+import importlib
 import os
 import re
 
@@ -128,6 +129,14 @@ def _prompt(case, merged, rp, ctx, api, examples, smap, kmap, facts, history, k8
 def run(worker, ref, case, merged, rp=None):
     """-> hit dict (author format) or None."""
     from . import author
+    try:                                             # 9 Nov: also here, so a worker that was not restarted skips it too
+        importlib.reload(author)
+        _sh = author.system_hang(case)
+    except Exception:
+        _sh = ''
+    if _sh:
+        worker.log(ref, f'tap repro: skipped ({_sh}); taps on a healthy lab phone cannot make it, the ladder starts at the hook level')
+        return None
     tb = worker._turbo() or {}
     budget = float(tb.get('tap_budget_min') or 30)
     tries = int(tb.get('tap_tries') or 3)

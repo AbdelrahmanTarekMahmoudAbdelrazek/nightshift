@@ -62,7 +62,8 @@ def fb_samples(cfg, issue_id, names, n=20):
                     'stack': [(f"{f['lib']} {f['func']}" + (' [Play symbols]' if f.get('named_by') == 'google-play' else '')) if f.get('func')
                               else f"{f.get('lib', '')} {_hex(f.get('address'))}  (no symbol)" for f in fr][:12],
                     'signal': s['signal'], 'subtitle': s['subtitle'], 'sig': timeline.signature(fr),
-                    'frames': [{'lib': f.get('lib'), 'func': f.get('func')} for f in fr]})
+                    'frames': [{'lib': f.get('lib'), 'func': f.get('func')} for f in fr],
+                    'anr': s.get('anr')})
     return out
 
 
@@ -451,9 +452,9 @@ def build(db, cfg, log=print):
         log(f'stack groups: plain-id locks not synced ({str(e)[:120]})')
     for f in fb_issues:
         smp = fbs.get(f['id'], [])
-        if 'ANR' in str(f.get('kind', '')).upper():
-            reg, by_card = {'groups': []}, {f['id']: smp}
-        else:
+        if 'ANR' in str(f.get('kind', '')).upper() and not any(x.get('anr') for x in smp):
+            reg, by_card = {'groups': []}, {f['id']: smp}     # no thread dump in the sample: one card, as before
+        else:                                        # 9 Nov: ANRs split by their blocker (ns/anrchain.py)
             reg, by_card = sgroups.assign(f['id'], smp, db=db, log=log)
         gl = reg.get('groups') or []
         allg = {g['fp']: g.get('sampled', 0) for g in gl}          # Firestore map keys: short fingerprints, not frame text
@@ -489,6 +490,22 @@ def build(db, cfg, log=print):
     rows += [('firebase', None, uid, [], 0) for uid in units if uid not in used_f]
 
     from firebase_admin import firestore
+    anr_rows = {}
+    try:                                             # 9 Nov: ANR families -> blocker cards, across Crashlytics issues
+        from . import anrchain
+        anr_units = {u: smp for u, smp in units.items() if kind(cases.get(real[u]) or {}) == 'ANR'}
+        amap, anr_rows = anrchain.build_map(anr_units, real, {u for u in anr_units if cardinfo.get(u, {}).get('newStack')})
+        import os as _os
+        ap = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'out', 'anrmap.json')
+        prev_map = json.load(open(ap)) if _os.path.exists(ap) else None
+        if prev_map != amap:
+            json.dump(amap, open(ap, 'w'), indent=1)
+            db.collection('config').document('anrmap').set(dict(amap, updatedAt=firestore.SERVER_TIMESTAMP))
+        multi = [c for f in amap['families'] for c in f['cards'] if len(c['issues']) > 1]
+        log(f"ANR map: {sum(len(f['cards']) for f in amap['families'])} blocker card(s) in {len(amap['families'])} famil(ies)"
+            + (f"; {len(multi)} span several Crashlytics issues ({'; '.join(c['title'] + ': ' + ', '.join(i[:8] for i in c['issues']) for c in multi[:3])})" if multi else ''))
+    except Exception as e:
+        log(f'ANR map: skipped ({str(e)[:200]})')
     old = {d.id: (d.to_dict() or {}) for d in db.collection('merged').stream()}
     # rows of the earlier split ('<issue>~<hash of the first engine frame>', fb.id = the issue): their Play pairing, PR and
     # note go to the card whose key is the SAME crashing function (checked frame by frame), never by id alone
@@ -540,6 +557,10 @@ def build(db, cfg, log=print):
             'instances': inst_rows[:80], 'instanceSummary': inst_sum,
             'pr': prev.get('pr', ''), 'note': prev.get('note', ''), 'updatedAt': firestore.SERVER_TIMESTAMP,
         }
+        if uid in anr_rows:                          # 9 Nov: where this ANR's blocker is stuck, and its sibling cards
+            doc['anr'] = anr_rows[uid]
+        elif prev.get('anr'):                        # no longer a linked chain: clear it (an absent key would not be
+            doc['anr'] = None                        # seen by _same, which compares only the keys written here)
         if not play_ok and doc['play'] is None and prev.get('play'):   # Play unreadable today: keep the last pairing
             doc.update({k: prev[k] for k in ('play', 'match', 'proof', 'score') if k in prev})
         if uid in heir and heir[uid][0] != mid:
@@ -554,6 +575,10 @@ def build(db, cfg, log=print):
         for k in ('analysis', 'analysis_key', 'analysis_basis', 'analysedAt', 'noteBy', 'noteAt'):   # a re-sync never throws away analysis
             if k in prev:
                 doc[k] = prev[k]
+        # 9 Nov (free Firestore quota): an unchanged row is not written again. Every write here was also a read for
+        # every open board tab (and threw the tab's cache away), ~370 rows x every tab x every sync.
+        if prev and not prev.get('stale') and _same(doc, prev):
+            continue
         batch.set(db.collection('merged').document(mid), doc)
         n += 1
         size += _bytes(doc)
@@ -570,3 +595,14 @@ def build(db, cfg, log=print):
     log(f'merged: {len(rows)} problems — {both} in both, {likely} likely both, '
         f'{sum(1 for r in rows if r[0] == "play")} Play only, {sum(1 for r in rows if r[0] == "firebase")} Firebase only')
     return {'problems': len(rows), 'both': both, 'likely': likely}
+
+def _same(doc, prev):
+    """doc (about to be written) equals what Firestore already holds, ignoring the write timestamp."""
+    import json as _j
+    norm = lambda d: _j.dumps({k: v for k, v in (d or {}).items() if k not in ('updatedAt', 'stale')},
+                              sort_keys=True, default=str)
+    try:                                             # only the fields this sync writes (analyse adds its own, e.g. familyOf)
+        return norm(doc) == norm({k: prev.get(k) for k in doc})
+    except Exception:
+        return False
+

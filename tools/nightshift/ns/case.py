@@ -69,7 +69,9 @@ def build(issue_ref, cfg, use_llm=False):
     if not groups.load(iid).get('groups'):          # never synced since stack groups exist: register now (local copy)
         groups.assign(iid, all_events, native_lib=native_lib)
     events, scope = groups.card_events(card, all_events, native_lib)
-    if card_fp and not events:
+    if (card_fp or len(groups.load(iid).get('groups') or []) > 1) and not events:
+        # 9 Nov: the plain id of a split issue too (an ANR re-keyed by blocker keeps its October bug on the plain id
+        # while the newest events are another blocker's)
         # 1 Nov: this card's events are not among the newest ones the pull read: page through the issue (all builds)
         try:
             extra = crashlytics.more_events(app_id, iid, days, 300, raw)
@@ -148,10 +150,10 @@ def build(issue_ref, cfg, use_llm=False):
         'verdict': verdict, 'confidence': confidence, 'reasons': reasons,
         'field_fingerprint': '\n'.join(f['func'].split(' + ')[0] for f in frames if f.get('lib') == native_lib and f.get('func'))[:2000],
         'sessions_hashed': len(events), 'csv': '', 'generated': dt.date.today().isoformat(), 'source': 'crashlytics-api (read-only, Firebase CLI login)',
-        'frames': frames, 'breadcrumbs': sample.get('logs', [])[:400], 'sample_event': {k: sample.get(k) for k in ('time', 'version', 'device', 'os', 'process_state', 'signal', 'subtitle')},
+        'frames': frames, 'anr': sample.get('anr'), 'breadcrumbs': sample.get('logs', [])[:400], 'sample_event': {k: sample.get(k) for k in ('time', 'version', 'device', 'os', 'process_state', 'signal', 'subtitle')},
         'stack_groups': [{'signature': g.get('stack3') or g['key'], 'key': g['key'], 'card': g['card'], 'mine': g['card'] == card, 'newStack': g.get('newStack', False),
                           'events': len(v), 'versions': sorted({x.get('version') or '?' for x in v}), 'devices': sorted({x.get('device') or '?' for x in v})}
-                         for g in (groups.load(iid).get('groups') or []) for v in [[e for e in all_events if groups.key_of(e['frames'], native_lib) == g['key']]]]
+                         for g in (groups.load(iid).get('groups') or []) for v in [[e for e in all_events if groups.event_key(e, 'frames', native_lib) == g['key']]]]
                         or [{'signature': k, 'events': len(v), 'versions': sorted({x.get('version') for x in v}), 'devices': sorted({x.get('device') for x in v})} for k, v in sgroups],
         'code': code, 'scenarios': [{'score': sc, 'name': nm, 'tags': tg} for sc, nm, tg in ranked], 'status': 'triaged',
     }

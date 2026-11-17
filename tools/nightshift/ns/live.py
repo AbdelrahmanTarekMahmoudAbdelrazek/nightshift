@@ -100,6 +100,15 @@ def _recipe(k8, n, acts, why, pin='', snap=''):
 def run(worker, ref, case, merged, rp=None):
     """-> hit dict (like the repro author's) or None."""
     from . import author
+    try:                                             # 9 Nov: a codec/binder hang is not made by taps: hook level instead
+        import importlib as _il
+        _il.reload(author)
+        _sh = author.system_hang(case)
+    except Exception:
+        _sh = ''
+    if _sh:
+        worker.log(ref, f'live agent: skipped ({_sh}); the repro author starts at the hook level')
+        return None
     os.makedirs(OUT, exist_ok=True)
     key = case['id']
     from . import groups as _g

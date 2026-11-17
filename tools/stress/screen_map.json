@@ -195,6 +195,7 @@
   "wizard_control_area": ""
  },
  "Camera": {},
+ "CameraActivity": {},
  "ChromeTabbedActivity": {},
  "CineMagicActivity": {
   "action_bar_root": "",
@@ -239,7 +240,8 @@
   "action_bar_root": "",
   "add_video": "",
   "album_name": "Albums",
-  "back": "",
+  "back": "ve_btn_back",
+  "back_icon": "",
   "bottom_bar": "",
   "btn_full_screen": "",
   "cancel": "",
@@ -265,6 +267,7 @@
   "icon_area": "ve_tab_edit",
   "image": "",
   "items_container": "",
+  "keyframe": "",
   "layout_fe_guidelines": "",
   "ll_player_controls": "",
   "mediaList": "",
@@ -276,6 +279,7 @@
   "play_controller": "",
   "player_area": "",
   "premiumIcon": "",
+  "preview_shade": "Set Cover",
   "previous_button": "",
   "previous_parent": "",
   "progress_loader": "",
@@ -377,6 +381,7 @@
   "video_tab": "",
   "view_pager_base_view": ""
  },
+ "InstalledRecommendActivity": {},
  "LauncherActivity": {},
  "MainActivity": {
   "action_bar_root": "",

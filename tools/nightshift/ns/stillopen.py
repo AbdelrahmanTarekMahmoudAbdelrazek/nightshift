@@ -156,7 +156,8 @@ def _has_pr_code(gd, head, base, tsrc, tcommit, refs):
         tp = tsrc.path(path)
         if tp and t in {x.strip() for x in tsrc.lines(tp)}:
             found += 1
-    return (total == 0 or found * 2 >= total), found, total
+    # 13 Nov (#3226 "fixed on CPP-1.26.0" for code that branch never had): no comparable line = NOT shown to be there
+    return (total > 0 and found * 2 >= total), found, total
 
 
 def _ref(r):
@@ -289,7 +290,25 @@ def targets_live(rec, days, log, extra=()):
         out.append({'kind': 'pr', 'label': f"#{p['num']}", 'num': p['num'], 'title': p.get('title', ''), 'state': p.get('state', ''),
                     'branch': p.get('dest', ''), 'commit': p.get('head', ''), 'url': p.get('url', ''), 'author': p.get('author', ''),
                     'files': None, '_diff': lambda n=p['num']: bitbucket.pr_diff(n)})
-    return gd, out
+    # 13 Nov: "Since the review" is about THIS PR. Its own newer commits are the main target; a release branch or
+    # another PR counts only when it CONTAINS this PR's reviewed head (it was merged there). Unrelated PRs (the speed
+    # PR on #3222) and release branches without this code said "fixed on ..." for bugs they never had.
+    src = rec.get('source') or ''
+    if src:
+        h = _fetch(gd, src, f"refs/nightshift/so/self-{rec.get('num') or rec.get('id')}", log)
+        if h and h != rec.get('head'):
+            out.insert(0, {'kind': 'branch', 'label': 'this PR (newer commits)', 'branch': src, 'commit': h})
+    head = rec.get('head') or ''
+
+    def _contains(t):
+        try:
+            return bool(head) and _git(['merge-base', '--is-ancestor', head, t['commit']], gd).returncode == 0
+        except Exception:
+            return False
+    kept = [t for t in out if t.get('commit') and _contains(t)]
+    if len(kept) != len(out):
+        log(f"still-open: {len(out) - len(kept)} branch(es)/PR(s) without this PR's code skipped")
+    return gd, kept
 
 
 # ---------------------------------------------------------------- the check

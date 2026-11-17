@@ -211,7 +211,21 @@ def summarise_event(e):
         'process_state': e.get('processState'), 'signal': (t.get('title') or t.get('exceptionType') or t.get('signal') or ''),
         'subtitle': t.get('subtitle') or t.get('exceptionMessage') or t.get('reason') or '',
         'frames': frames_of(t), 'logs': logs_of(e), 'keys': {k.get('key'): k.get('value') for k in (e.get('customKeys') or []) if isinstance(k, dict)},
+        'anr': _anr(e),
     }
+
+
+def _anr(e):
+    """9 Nov: an ANR is grouped by its BLOCKER (ns/anrchain.py), not by the main thread's top frames."""
+    if str((e.get('issue') or {}).get('errorType') or '').upper() != 'ANR':
+        return None
+    try:
+        from . import anrchain
+        # Crashlytics' own frame names only: a grouping key must be cheap and the same everywhere it is computed
+        # (merge, case, analysis); naming the unnamed frames with addr2line cost ~12 s per event
+        return anrchain.blocker(e, symbolize=False)
+    except Exception:
+        return None
 
 
 def pull(app_id, issue, releases, days=30, n_events=20, raw_dir=None):
